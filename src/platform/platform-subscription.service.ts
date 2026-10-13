@@ -86,7 +86,8 @@ export class PlatformSubscriptionService {
         throw new ConflictException({
           statusCode: 409,
           code: 'PLAN_BELOW_USAGE',
-          message: 'El consultorio usa más cupos de psicólogos de los que permite el nuevo plan.',
+          message:
+            'El consultorio usa más cupos de profesionales de los que permite el nuevo plan.',
           details: {
             seatsPsychologistsUsed: subscription.seatsPsychologistsUsed,
             seatsPsychologistsMax: seats,

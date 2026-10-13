@@ -3,7 +3,8 @@ import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as fs from 'fs';
 import { ClinicalCipher, parseClinicalKeys } from '../src/clinical-access/clinical-cipher';
-import { FileStorage, LocalFileStorage } from '../src/patient-files/file-storage';
+import { FileStorage } from '../src/patient-files/file-storage';
+import { createFileStorage } from '../src/patient-files/file-storage.factory';
 import { createPlatformAdmin } from './create-platform-admin';
 import { encryptClinicalData } from './encrypt-clinical-data';
 import {
@@ -258,8 +259,8 @@ async function main() {
     console.log('🌱 Starting deterministic demo seed...');
     const result = await seedDatabase(prisma, {
       cipher: new ClinicalCipher(parseClinicalKeys(process.env.CLINICAL_ENCRYPTION_KEYS)),
-      // The same folder the API reads the clinical files from.
-      storage: new LocalFileStorage({
+      // The same place the API reads the clinical files from.
+      storage: createFileStorage({
         get: (key: string) => process.env[key],
       } as unknown as ConfigService),
     });

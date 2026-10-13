@@ -14,8 +14,10 @@ import { PermissionChecker } from './common/permissions/permission-checker.servi
 import { PermissionsModule } from './common/permissions/permissions.module';
 import { EncountersController } from './encounters/encounters.controller';
 import { EncountersModule } from './encounters/encounters.module';
+import { FILE_STORAGE } from './patient-files/file-storage';
 import { PatientFilesController } from './patient-files/patient-files.controller';
 import { PatientFilesModule } from './patient-files/patient-files.module';
+import { SupabaseFileStorage } from './patient-files/supabase-file-storage';
 import { ReportsModule } from './reports/reports.module';
 import { RecordDocumentsModule } from './record-documents/record-documents.module';
 import { DocumentTemplatesModule } from './document-templates/document-templates.module';
@@ -67,5 +69,47 @@ describe('module wiring', () => {
     }
     expect(moduleRef.get(PermissionChecker, { strict: false })).toBeInstanceOf(PermissionChecker);
     expect(moduleRef.get(PermissionGuard)).toBeInstanceOf(PermissionGuard);
+  });
+});
+
+describe('clinical file storage wiring', () => {
+  const supabase = {
+    STORAGE_DRIVER: 'supabase',
+    SUPABASE_URL: 'https://project.supabase.co',
+    SUPABASE_SECRET_KEY: 'sb_secret_test-key',
+    SUPABASE_STORAGE_BUCKET: 'clinical-files',
+  };
+  const previous = Object.keys(supabase).map((name) => [name, process.env[name]] as const);
+  const compile = () =>
+    Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
+        PrismaModule,
+        PatientFilesModule,
+      ],
+    })
+      .overrideProvider(PrismaService)
+      .useValue({})
+      .compile();
+
+  afterEach(() => {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  it('keeps the files of the API in the Supabase bucket when STORAGE_DRIVER selects it', async () => {
+    Object.assign(process.env, supabase);
+
+    const moduleRef = await compile();
+
+    expect(moduleRef.get(FILE_STORAGE, { strict: false })).toBeInstanceOf(SupabaseFileStorage);
+  });
+
+  it('does not start with a Supabase driver that is missing its configuration', async () => {
+    Object.assign(process.env, { ...supabase, SUPABASE_SECRET_KEY: '' });
+
+    await expect(compile()).rejects.toThrow('SUPABASE_SECRET_KEY');
   });
 });
