@@ -1,6 +1,6 @@
-# Psychology Clinic SaaS API
+# HCX Care API
 
-Backend API for a multi-tenant psychology clinic platform built with NestJS + Prisma + PostgreSQL.
+Backend API for a multi-tenant platform for health clinics and practitioners built with NestJS + Prisma + PostgreSQL.
 
 ## Requirements
 
@@ -52,6 +52,9 @@ npm run start:dev
   the mail provider (the same one configured in Supabase Auth):
   - `SMTP_HOST`, `SMTP_PORT` (587 by default), `SMTP_USER`, `SMTP_PASS`
   - or, when `SMTP_HOST` is not set, an HTTP mail API: `EMAIL_API_URL`, `EMAIL_API_KEY`
+- Clinical files are kept encrypted where `STORAGE_DRIVER` says: `local` (default, under
+  `STORAGE_LOCAL_PATH`) or `supabase`, a private bucket of Supabase Storage (`SUPABASE_URL`,
+  `SUPABASE_SECRET_KEY`, `SUPABASE_STORAGE_BUCKET`).
 - Electronic invoicing uses Faktur. The URL, path and environment are the same for every
   clinic and are read only from these variables; each clinic stores its own API key,
   establishment, emission point and numbering in its settings:

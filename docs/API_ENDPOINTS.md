@@ -322,7 +322,7 @@ GET /tenants/{tenantId}/storage/files
 PUT /tenants/{tenantId}/branches/{branchId}/professionals   { "userIds": ["..."] }   # MASTER
 ```
 
-Files live on the disk of the API server under `STORAGE_LOCAL_PATH`, which must be a persistent volume included in the backups. Their bytes keep the encryption key they were written with, so a retired key stays in `CLINICAL_ENCRYPTION_KEYS` while files use it. Clinical notes also accept `encounterId`, and the clinical timeline returns `ENCOUNTER` entries.
+Files live where `STORAGE_DRIVER` says: a private bucket of Supabase Storage (`supabase`: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_STORAGE_BUCKET`), or the disk of the API server under `STORAGE_LOCAL_PATH` (`local`, the default), which must be a persistent volume included in the backups. Downloads always go through the API, because the stored bytes are encrypted. Their bytes keep the encryption key they were written with, so a retired key stays in `CLINICAL_ENCRYPTION_KEYS` while files use it. Clinical notes also accept `encounterId`, and the clinical timeline returns `ENCOUNTER` entries.
 
 The role still decides who may call a route. A permission can only be **withdrawn** from one user (`403 PERMISSION_DENIED` afterwards), never granted beyond the role, and the account holder cannot be restricted. The catalog is in `src/common/permissions/permission-catalog.ts`.
 

@@ -72,6 +72,16 @@ FRONTEND_URL=https://app.yourdomain.com
 # See CLINICAL_DATA_PROTECTION.md for generation, storage and rotation.
 CLINICAL_ENCRYPTION_KEYS=<key-id>:<base64 of 32 random bytes>
 
+# Required: where the clinical files are kept (already encrypted by the API).
+# Create one private bucket in Supabase Storage, without policies. The secret key is in
+# Project Settings > API Keys; it skips every policy, so it never leaves the server.
+# The API does not start when a value is missing. Without STORAGE_DRIVER the files go to
+# the disk of the server (STORAGE_LOCAL_PATH), which then needs a persistent, backed-up volume.
+STORAGE_DRIVER=supabase
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SECRET_KEY=<secret-key>
+SUPABASE_STORAGE_BUCKET=<private-bucket>
+
 # CORS
 CORS_ORIGINS=https://app.yourdomain.com,https://www.yourdomain.com
 ```
