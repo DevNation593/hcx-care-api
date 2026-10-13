@@ -1,7 +1,7 @@
 {
-  "name": "psychology-clinic-saas-api",
+  "name": "hcx-care-api",
   "version": "1.0.0",
-  "description": "Multi-tenant Psychology Clinic SaaS Backend",
+  "description": "HCX Care - Backend API",
   "author": "",
   "private": true,
   "license": "UNLICENSED",

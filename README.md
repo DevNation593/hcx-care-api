@@ -1,6 +1,6 @@
-# Psychology Clinic SaaS API
+# HCX Care API
 
-Backend API for a multi-tenant psychology clinic platform built with NestJS + Prisma + PostgreSQL.
+Backend API for a multi-tenant platform for health clinics and practitioners built with NestJS + Prisma + PostgreSQL.
 
 ## Requirements
 

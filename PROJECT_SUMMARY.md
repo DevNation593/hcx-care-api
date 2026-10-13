@@ -1,4 +1,4 @@
-# 🎉 PROJECT COMPLETED - Psychology Clinic SaaS Backend
+# 🎉 PROJECT COMPLETED - HCX Care Backend
 
 ## ✅ Deliverables Summary
 
@@ -456,7 +456,7 @@ docker-compose up -d --build
 
 ## 🙏 Thank You!
 
-The Psychology Clinic SaaS backend is now **100% complete** with all requested features implemented, tested, and documented.
+The HCX Care backend is now **100% complete** with all requested features implemented, tested, and documented.
 
 **Happy Coding! 🚀**
 
