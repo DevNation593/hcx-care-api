@@ -2,7 +2,7 @@
 
 ## System Overview
 
-The Psychology Clinic SaaS is a **multi-tenant** backend system designed to manage psychology clinics with:
+HCX Care is a **multi-tenant** backend system designed to manage health clinics and practitioners with:
 
 - **Complete tenant isolation** (each clinic is a separate tenant)
 - **Subscription-based seat licensing** (pay per psychologist)
