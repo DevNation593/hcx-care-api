@@ -7,6 +7,7 @@ import { SpecialtyRecordsModule } from '../specialty-records/specialty-records.m
 import { TreatmentsModule } from '../treatments/treatments.module';
 import { ConsentDocumentsController } from './consent-documents.controller';
 import { ConsentDocumentsService } from './consent-documents.service';
+import { SessionMediaService } from './session-media.service';
 import { TreatmentSessionsController } from './treatment-sessions.controller';
 import { TreatmentSessionsService } from './treatment-sessions.service';
 
@@ -20,7 +21,7 @@ import { TreatmentSessionsService } from './treatment-sessions.service';
     PatientFilesModule,
   ],
   controllers: [TreatmentSessionsController, ConsentDocumentsController],
-  providers: [TreatmentSessionsService, ConsentDocumentsService],
+  providers: [TreatmentSessionsService, ConsentDocumentsService, SessionMediaService],
   exports: [TreatmentSessionsService],
 })
 export class TreatmentSessionsModule {}

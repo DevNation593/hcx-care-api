@@ -65,6 +65,7 @@ describe('SpecialtyRecordsService', () => {
     formDefinition: { findFirst: jest.fn() },
     encounter: { findFirst: jest.fn() },
     formDefinitionVersion: { findFirst: jest.fn(), findMany: jest.fn() },
+    treatmentSession: { findFirst: jest.fn() },
     specialtyRecord: {
       findMany: jest.fn(),
       findFirst: jest.fn(),
@@ -769,6 +770,40 @@ describe('SpecialtyRecordsService', () => {
       expect(db.auditLog.createMany).not.toHaveBeenCalled();
     });
 
+    it.each(['IN_PROGRESS', 'CLINICAL_COMPLETE', 'CANCELLED'])(
+      'refuses to change the form of a treatment session that is %s',
+      async (status) => {
+        db.treatmentSession.findFirst.mockResolvedValue({ id: 'session-1', status });
+
+        await expect(
+          service.update('tenant-1', 'patient-1', 'record-1', nutritionist, {
+            notes: 'x',
+            changeReason: 'x',
+          }),
+        ).rejects.toMatchObject({
+          status: 409,
+          response: { code: 'TREATMENT_SESSION_INVALID_TRANSITION', status },
+        });
+        expect(db.treatmentSession.findFirst.mock.calls[0][0].where).toEqual({
+          tenantId: 'tenant-1',
+          formRecordId: 'record-1',
+        });
+        expect(db.specialtyRecord.update).not.toHaveBeenCalled();
+        expect(db.auditLog.createMany).not.toHaveBeenCalled();
+      },
+    );
+
+    it('still corrects the form of a treatment session that has not started', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue({ id: 'session-1', status: 'CONSENTED' });
+
+      await service.update('tenant-1', 'patient-1', 'record-1', nutritionist, {
+        notes: 'x',
+        changeReason: 'x',
+      });
+
+      expect(db.specialtyRecord.update).toHaveBeenCalled();
+    });
+
     it('does not find a removed record or one of another patient', async () => {
       db.specialtyRecord.findFirst.mockResolvedValue(null);
 
@@ -805,6 +840,20 @@ describe('SpecialtyRecordsService', () => {
           changes: { before: expect.objectContaining({ data: dto.data }), after: null },
         }),
       ]);
+    });
+
+    it('refuses to remove the form of a treatment session that has started', async () => {
+      db.specialtyRecord.findFirst.mockResolvedValue(record());
+      db.treatmentSession.findFirst.mockResolvedValue({ id: 'session-1', status: 'IN_PROGRESS' });
+
+      await expect(
+        service.delete('tenant-1', 'patient-1', 'record-1', nutritionist, { reason: 'x' }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'TREATMENT_SESSION_INVALID_TRANSITION', status: 'IN_PROGRESS' },
+      });
+      expect(db.specialtyRecord.update).not.toHaveBeenCalled();
+      expect(db.auditLog.createMany).not.toHaveBeenCalled();
     });
 
     it('lets only the author remove a record', async () => {

@@ -1,12 +1,31 @@
-import { Body, Controller, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ClinicalActor, CurrentClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalProfileGuard } from '../clinical-access/clinical-profile.guard';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
+import { MAX_PATIENT_FILE_BYTES, UploadedFilePart } from '../patient-files/patient-files.service';
 import { ConsentDocumentsService } from './consent-documents.service';
-import { CreateTreatmentSessionDto, SaveSessionFormDto } from './dto/treatment-session.dto';
+import {
+  CancelTreatmentSessionDto,
+  CompleteTreatmentSessionDto,
+  CreateTreatmentSessionDto,
+  SaveSessionFormDto,
+  UploadSessionMediaDto,
+} from './dto/treatment-session.dto';
+import { SessionMediaService } from './session-media.service';
 import { TreatmentSessionsService } from './treatment-sessions.service';
 
 @ApiTags('treatment-sessions')
@@ -17,6 +36,7 @@ export class TreatmentSessionsController {
   constructor(
     private readonly sessionsService: TreatmentSessionsService,
     private readonly consentsService: ConsentDocumentsService,
+    private readonly mediaService: SessionMediaService,
   ) {}
 
   @Get('patients/:patientId/treatment-sessions')
@@ -103,6 +123,97 @@ export class TreatmentSessionsController {
     @CurrentClinicalActor() actor: ClinicalActor,
   ) {
     return this.consentsService.present(tenantId, id, actor);
+  }
+
+  @Post('treatment-sessions/:id/media')
+  @UseGuards(ClinicalProfileGuard)
+  @Roles('MASTER', 'PROFESIONAL')
+  @RequirePermission('clinical_records.create')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_PATIENT_FILE_BYTES } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Add a photo or file to the session - Its professional only',
+    description:
+      'BEFORE once the consent is satisfied and before the start, AFTER while in progress, OTHER until the session ends (409 SESSION_PHOTO_PHASE_NOT_ALLOWED). BEFORE and AFTER take JPG or PNG only; JPGs lose their EXIF/XMP segments (400 PATIENT_FILE_INVALID). Stored encrypted as a clinical file of the patient.',
+  })
+  uploadMedia(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+    @UploadedFile() file: UploadedFilePart | undefined,
+    @Body() dto: UploadSessionMediaDto,
+  ) {
+    return this.mediaService.upload(tenantId, id, actor, file, dto);
+  }
+
+  @Post('treatment-sessions/:id/start')
+  @UseGuards(ClinicalProfileGuard)
+  @Roles('MASTER', 'PROFESIONAL')
+  @RequirePermission('clinical_records.create')
+  @ApiOperation({
+    summary: 'Start the procedure - Its professional only',
+    description:
+      'The start time is the server time. 422 TREATMENT_REQUIREMENTS_MISSING with missing when the form, consent or before photos are not there; 409 TREATMENT_SESSION_INVALID_TRANSITION from any other state than CONSENTED (or READY_FOR_CONSENT without consent).',
+  })
+  start(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+  ) {
+    return this.sessionsService.start(tenantId, id, actor);
+  }
+
+  @Post('treatment-sessions/:id/complete')
+  @UseGuards(ClinicalProfileGuard)
+  @Roles('MASTER', 'PROFESIONAL')
+  @RequirePermission('clinical_records.create')
+  @ApiOperation({
+    summary: 'Complete the procedure - Its professional only',
+    description:
+      'Stores the procedure notes encrypted and closes the encounter with them as summary. 422 TREATMENT_REQUIREMENTS_MISSING with missing when the notes or after photos are not there; 409 TREATMENT_SESSION_INVALID_TRANSITION unless IN_PROGRESS.',
+  })
+  complete(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+    @Body() dto: CompleteTreatmentSessionDto,
+  ) {
+    return this.sessionsService.complete(tenantId, id, actor, dto);
+  }
+
+  @Post('treatment-sessions/:id/cancel')
+  @UseGuards(ClinicalProfileGuard)
+  @Roles('MASTER', 'PROFESIONAL')
+  @RequirePermission('clinical_records.update')
+  @ApiOperation({
+    summary: 'Cancel the session - Its professional only',
+    description:
+      'Requires a reason, stored encrypted; closes the encounter. 409 TREATMENT_SESSION_INVALID_TRANSITION once the session has ended.',
+  })
+  cancel(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+    @Body() dto: CancelTreatmentSessionDto,
+  ) {
+    return this.sessionsService.cancel(tenantId, id, actor, dto);
+  }
+
+  @Post('treatment-sessions/:id/no-show')
+  @UseGuards(ClinicalProfileGuard)
+  @Roles('MASTER', 'PROFESIONAL')
+  @RequirePermission('clinical_records.update')
+  @ApiOperation({
+    summary: 'Record that the patient did not come - Its professional only',
+    description:
+      'The session and its appointment end as NO_SHOW and the encounter closes. 409 TREATMENT_SESSION_INVALID_TRANSITION once the procedure has started or the session has ended.',
+  })
+  noShow(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+  ) {
+    return this.sessionsService.noShow(tenantId, id, actor);
   }
 
   @Get('treatment-sessions/:id/compliance')

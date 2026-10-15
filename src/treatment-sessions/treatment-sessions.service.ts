@@ -26,9 +26,14 @@ import {
   TreatmentRequirements,
 } from '../treatments/treatment-requirements';
 import { TreatmentsService } from '../treatments/treatments.service';
-import { CreateTreatmentSessionDto, SaveSessionFormDto } from './dto/treatment-session.dto';
+import {
+  CancelTreatmentSessionDto,
+  CompleteTreatmentSessionDto,
+  CreateTreatmentSessionDto,
+  SaveSessionFormDto,
+} from './dto/treatment-session.dto';
 import { loadSessionFacts } from './session-facts';
-import { evaluateSession, MissingRequirement } from './session-requirements';
+import { evaluateSession, MissingRequirement, requirementsMissing } from './session-requirements';
 import {
   allowedCommands,
   assertCommandAllowed,
@@ -156,6 +161,9 @@ const invalidTransition = (status: TreatmentSessionStatus, message: string, extr
   });
 
 const STARTED_STATUSES: readonly TreatmentSessionStatus[] = ['IN_PROGRESS', 'CLINICAL_COMPLETE'];
+
+/** Appointments a no-show can still be recorded on. */
+const NO_SHOW_APPOINTMENT_STATUSES = ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] as const;
 
 @Injectable()
 export class TreatmentSessionsService {
@@ -426,6 +434,151 @@ export class TreatmentSessionsService {
     });
   }
 
+  /**
+   * Starts the procedure when the facts read now meet the start requirements (422 with what is
+   * missing otherwise). The start time is the server's, and the consent that applies is pinned.
+   */
+  async start(tenantId: string, sessionId: string, actor: ClinicalActor): Promise<SessionDetail> {
+    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
+      const { session, version, policy } = await this.loadForCommand(
+        tx,
+        tenantId,
+        sessionId,
+        actor,
+        'START',
+      );
+      const facts = await loadSessionFacts(
+        tx,
+        session,
+        policy,
+        version.consentTemplateVersionId,
+        new Date(),
+      );
+      const { start } = evaluateSession(policy, facts);
+      if (start.length > 0) throw requirementsMissing(start);
+
+      const started = await this.transition(tx, session, {
+        status: 'IN_PROGRESS',
+        startedAt: new Date(),
+        ...(policy.informedConsent.required && facts.applicableConsentId
+          ? { consentDocument: { connect: { id: facts.applicableConsentId } } }
+          : {}),
+      });
+      await this.auditTransition(tx, actor, session, started);
+      return this.detail(tx, started, version, policy);
+    });
+  }
+
+  /**
+   * Completes the procedure when the complete requirements are met, with the notes of the
+   * request or, without them, the stored ones. The notes become the summary of the encounter,
+   * which closes.
+   */
+  async complete(
+    tenantId: string,
+    sessionId: string,
+    actor: ClinicalActor,
+    dto: CompleteTreatmentSessionDto,
+  ): Promise<SessionDetail> {
+    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
+      const { session, version, policy } = await this.loadForCommand(
+        tx,
+        tenantId,
+        sessionId,
+        actor,
+        'COMPLETE',
+      );
+      const notes = dto.procedureNotes?.trim() || session.procedureNotes;
+      const facts = await loadSessionFacts(
+        tx,
+        { ...session, procedureNotes: notes },
+        policy,
+        version.consentTemplateVersionId,
+        new Date(),
+      );
+      const { complete } = evaluateSession(policy, facts);
+      if (complete.length > 0) throw requirementsMissing(complete);
+
+      const completed = await this.transition(tx, session, {
+        status: 'CLINICAL_COMPLETE',
+        completedAt: new Date(),
+        ...(notes !== session.procedureNotes
+          ? { procedureNotes: notes ? this.crypto.encrypt(tenantId, notes) : null }
+          : {}),
+      });
+      await this.encounters.closeEncounter(
+        tx,
+        tenantId,
+        session.encounterId,
+        actor,
+        notes ?? undefined,
+      );
+      await this.auditTransition(tx, actor, session, completed);
+      return this.detail(tx, completed, version, policy);
+    });
+  }
+
+  /** Cancels the session with a reason, stored encrypted, and closes its encounter. */
+  async cancel(
+    tenantId: string,
+    sessionId: string,
+    actor: ClinicalActor,
+    dto: CancelTreatmentSessionDto,
+  ): Promise<SessionDetail> {
+    const reason = dto.reason.trim();
+    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
+      const { session, version, policy } = await this.loadForCommand(
+        tx,
+        tenantId,
+        sessionId,
+        actor,
+        'CANCEL',
+      );
+      const cancelled = await this.transition(tx, session, {
+        status: 'CANCELLED',
+        cancelledAt: new Date(),
+        cancellationReason: this.crypto.encrypt(tenantId, reason),
+      });
+      await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
+      await this.auditTransition(tx, actor, session, cancelled, reason);
+      return this.detail(tx, cancelled, version, policy);
+    });
+  }
+
+  /**
+   * Records that the patient did not come: the session ends as NO_SHOW, its appointment (if
+   * still unattended or in progress) too, and its encounter closes.
+   */
+  async noShow(tenantId: string, sessionId: string, actor: ClinicalActor): Promise<SessionDetail> {
+    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
+      const { session, version, policy } = await this.loadForCommand(
+        tx,
+        tenantId,
+        sessionId,
+        actor,
+        'NO_SHOW',
+      );
+      const missed = await this.transition(tx, session, {
+        status: 'NO_SHOW',
+        cancelledAt: new Date(),
+      });
+      // Before the encounter closes, which would otherwise complete the appointment.
+      if (session.appointmentId) {
+        await tx.appointment.updateMany({
+          where: {
+            id: session.appointmentId,
+            tenantId,
+            status: { in: [...NO_SHOW_APPOINTMENT_STATUSES] },
+          },
+          data: { status: 'NO_SHOW' },
+        });
+      }
+      await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
+      await this.auditTransition(tx, actor, session, missed);
+      return this.detail(tx, missed, version, policy);
+    });
+  }
+
   /** Loads the session for a command by its professional, checks the transition and returns it with its policy. */
   async loadForCommand(
     tx: Prisma.TransactionClient,
@@ -479,6 +632,31 @@ export class TreatmentSessionsService {
     if (!stored) throw sessionNotFound();
     const { treatmentVersion: version, ...session } = stored;
     return { session: this.decrypt(session), version };
+  }
+
+  private auditTransition(
+    tx: Prisma.TransactionClient,
+    actor: ClinicalActor,
+    before: TreatmentSession,
+    after: TreatmentSession,
+    reason?: string,
+  ): Promise<void> {
+    return this.audit.record(
+      before.tenantId,
+      actor,
+      [
+        {
+          action: 'UPDATE',
+          entity: 'TREATMENT_SESSION',
+          entityId: before.id,
+          patientId: before.patientId,
+          before: snapshotTreatmentSession(before),
+          after: snapshotTreatmentSession(after),
+          ...(reason ? { reason } : {}),
+        },
+      ],
+      tx,
+    );
   }
 
   private async detail(

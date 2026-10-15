@@ -233,6 +233,30 @@ describe('PatientFilesService', () => {
       });
     });
 
+    it('links a photo to the treatment session and phase it was taken in', async () => {
+      await service.upload(
+        'tenant-1',
+        'patient-1',
+        dentist,
+        part({ mimetype: 'image/png', buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]) }),
+        { category: 'IMAGEN' },
+        { treatmentSessionId: 'session-1', phase: 'BEFORE' },
+      );
+
+      expect(created()).toMatchObject({
+        category: 'IMAGEN',
+        treatmentSessionId: 'session-1',
+        phase: 'BEFORE',
+      });
+    });
+
+    it('leaves a file outside any treatment session without session or phase', async () => {
+      await upload();
+
+      expect(created().treatmentSessionId).toBeUndefined();
+      expect(created().phase).toBeUndefined();
+    });
+
     it('rejects a request without a file', async () => {
       await expect(
         service.upload('tenant-1', 'patient-1', dentist, undefined, { category: 'EXAMEN' }),

@@ -25,6 +25,7 @@ import {
   STANDING_ALERT_MODULES,
   validateModuleData,
 } from '../clinical-modules/clinical-module-registry';
+import { TERMINAL_SESSION_STATUSES } from '../treatment-sessions/session-state';
 import {
   CreateSpecialtyRecordDto,
   DeleteSpecialtyRecordDto,
@@ -332,6 +333,7 @@ export class SpecialtyRecordsService {
         actor,
         'corregir',
       );
+      await this.assertNotStartedSessionForm(tx, tenantId, recordId);
       const definition = (await this.definitionsOf(tenantId, [current], tx))(current);
 
       let data: Record<string, unknown> | undefined;
@@ -393,6 +395,7 @@ export class SpecialtyRecordsService {
         actor,
         'eliminar',
       );
+      await this.assertNotStartedSessionForm(tx, tenantId, recordId);
 
       // The row stays for audit; it only stops being listed.
       await tx.specialtyRecord.update({
@@ -657,6 +660,29 @@ export class SpecialtyRecordsService {
 
   private alertsOf(definition: RecordDefinition | undefined, data: unknown): FormAlert[] {
     return definition ? evaluateFormAlerts(definition.schema, data) : [];
+  }
+
+  /** RN-05: the form of a treatment session is fixed once the session has started or ended. */
+  private async assertNotStartedSessionForm(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    recordId: string,
+  ) {
+    const session = await tx.treatmentSession.findFirst({
+      where: { tenantId, formRecordId: recordId },
+      select: { status: true },
+    });
+    if (
+      session &&
+      (session.status === 'IN_PROGRESS' || TERMINAL_SESSION_STATUSES.includes(session.status))
+    ) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'TREATMENT_SESSION_INVALID_TRANSITION',
+        message: 'La ficha de una atención de tratamiento ya no puede cambiar.',
+        status: session.status,
+      });
+    }
   }
 
   private async findOwnRecord(
