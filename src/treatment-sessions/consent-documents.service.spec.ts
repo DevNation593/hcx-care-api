@@ -6,6 +6,7 @@ import { deflateSync } from 'zlib';
 import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCipher, parseClinicalKeys } from '../clinical-access/clinical-cipher';
+import * as consentPdf from '../consents/consent-pdf';
 import { consentChecksum } from '../consents/consent-text';
 import { ConsentTemplatesService } from '../consents/consent-templates.service';
 import { EncountersService } from '../encounters/encounters.service';
@@ -402,6 +403,30 @@ describe('ConsentDocumentsService', () => {
     beforeEach(() => {
       db.consentDocument.findFirst.mockResolvedValue(document());
       db.treatmentSession.findFirst.mockResolvedValue(loaded(consentPolicy));
+    });
+
+    it('prints the signing time in America/Guayaquil when the tenant has no settings', async () => {
+      const render = jest.spyOn(consentPdf, 'renderConsentPdf');
+      db.tenant.findUnique.mockResolvedValue({
+        name: 'Clínica Bella',
+        address: null,
+        settings: null,
+      });
+      db.consentDocument.findFirst.mockResolvedValueOnce(document()).mockResolvedValueOnce(
+        document({
+          status: 'SIGNED',
+          signedAt: new Date(),
+          pdfChecksum: 'x',
+          pdfStorageKey: 'k',
+        }),
+      );
+
+      try {
+        await sign();
+        expect(render.mock.calls[0][0].timezone).toBe('America/Guayaquil');
+      } finally {
+        render.mockRestore();
+      }
     });
 
     it('stores the signature and an encrypted PDF whose checksum it keeps, and consents the session', async () => {

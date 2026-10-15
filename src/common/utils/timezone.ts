@@ -1,3 +1,6 @@
+/** The clinic's zone when its tenant has no settings row (the pilot country). */
+export const DEFAULT_CLINIC_TIMEZONE = 'America/Guayaquil';
+
 export interface ZonedDateParts {
   dayOfWeek: string; // e.g. "MONDAY"
   minutesOfDay: number; // minutes since local midnight

@@ -30,11 +30,46 @@ const segment = (marker: number, payload: Buffer) =>
     payload,
   ]);
 
-/** A JPEG whose APP1 segment carries an EXIF block that must not reach the storage. */
+/**
+ * Big-endian EXIF with a camera Make, the orientation 6 and a GPS IFD. Only the orientation may
+ * reach the storage.
+ */
+const EXIF_MAKE = 'SecretCam';
+const EXIF_GPS_REF = 'GPSREF';
+const EXIF_PAYLOAD = Buffer.concat([
+  Buffer.from('Exif\0\0', 'binary'),
+  // TIFF header: big-endian, IFD0 at offset 8.
+  Buffer.from([0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08]),
+  // IFD0, three entries: Make (ASCII, 10 bytes at 50), Orientation 6, GPS IFD at 60.
+  Buffer.from([0x00, 0x03]),
+  Buffer.from([0x01, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x32]),
+  Buffer.from([0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00]),
+  Buffer.from([0x88, 0x25, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c]),
+  Buffer.alloc(4),
+  Buffer.from(`${EXIF_MAKE}\0`, 'binary'),
+  // GPS IFD: one ASCII entry whose 7 bytes sit at 78.
+  Buffer.from([0x00, 0x01]),
+  Buffer.from([0x00, 0x1d, 0x00, 0x02, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x4e]),
+  Buffer.alloc(4),
+  Buffer.from(`${EXIF_GPS_REF}\0`, 'binary'),
+]);
+
+/** What the stored photo keeps of that EXIF: the orientation alone. */
+const ORIENTATION_ONLY_APP1 = segment(
+  0xe1,
+  Buffer.concat([
+    Buffer.from('Exif\0\0', 'binary'),
+    Buffer.from([0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08, 0x00, 0x01]),
+    Buffer.from([0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00]),
+    Buffer.alloc(4),
+  ]),
+);
+
+/** A JPEG whose APP1 segment carries an EXIF block that must not reach the storage whole. */
 const JPEG_WITH_EXIF = Buffer.concat([
   Buffer.from([0xff, 0xd8]),
   segment(0xe0, Buffer.from('JFIF\0\x01\x01\0\0\x01\0\x01\0\0', 'binary')),
-  segment(0xe1, Buffer.concat([Buffer.from('Exif\0\0'), Buffer.from('GPS -0.18,-78.46')])),
+  segment(0xe1, EXIF_PAYLOAD),
   segment(0xdb, Buffer.alloc(65, 0x10)),
   segment(0xda, Buffer.from([0x01, 0x01, 0x00, 0x00, 0x3f, 0x00])),
   Buffer.from([0x12, 0x34, 0x56]),
@@ -426,7 +461,7 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     });
     expect(encounter.status).toBe('CLOSED');
 
-    // Photos are stored encrypted and without the EXIF segment, which the download confirms.
+    // Photos are stored encrypted, keeping of the EXIF only the orientation, which the download confirms.
     const photos = await prisma.patientFile.findMany({
       where: { treatmentSessionId: session.id },
       orderBy: { createdAt: 'asc' },
@@ -435,12 +470,15 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     for (const photo of photos) {
       const stored = readFileSync(join(storageRoot, ...photo.storageKey.split('/')));
       expect(stored.subarray(0, 4).toString()).toBe('ENC1');
-      expect(stored.includes(Buffer.from('Exif'))).toBe(false);
+      expect(stored.includes(Buffer.from(EXIF_MAKE))).toBe(false);
       const returned = await download(
         `${base()}/patients/${patientId}/files/${photo.id}/download`,
       ).expect(200);
-      expect(returned.body.includes(Buffer.from('Exif'))).toBe(false);
       expect(returned.body.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
+      expect(returned.body.includes(ORIENTATION_ONLY_APP1)).toBe(true);
+      expect(returned.body.includes(Buffer.from(EXIF_MAKE))).toBe(false);
+      expect(returned.body.includes(Buffer.from(EXIF_GPS_REF))).toBe(false);
+      expect(returned.body.includes(Buffer.from([0x88, 0x25]))).toBe(false);
     }
   });
 
@@ -773,6 +811,41 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     const row = await prisma.treatmentSession.findUniqueOrThrow({ where: { id: session.id } });
     expect(row.status).toBe('CANCELLED');
     expect(row.cancellationReason).not.toContain('vasovagal');
+  });
+
+  it('marks the appointment of a session cancelled after its start as COMPLETED', async () => {
+    const patientId = await newPatient();
+    const appointment = await request(server())
+      .post(`${base()}/appointments`)
+      .set(as('master'))
+      .send({
+        patientId,
+        professionalId,
+        specialtyId,
+        startTime: nextWeekday(18),
+        duration: 60,
+        title: 'Toxina botulínica',
+      })
+      .expect(201);
+    const { treatmentId } = await newTreatment(
+      { photos: { minimumBefore: 0, minimumAfter: 0 } },
+      { withConsent: false, withForm: false },
+    );
+    const session = await openSession(patientId, treatmentId, appointment.body.id);
+    await request(server()).post(sessionUrl(session.id, '/start')).set(as('pro')).expect(201);
+
+    await request(server())
+      .post(sessionUrl(session.id, '/cancel'))
+      .set(as('pro'))
+      .send({ reason: 'La paciente pidió suspender el procedimiento.' })
+      .expect(201);
+
+    // The patient attended: the appointment is completed, not cancelled.
+    expect(
+      (await prisma.appointment.findUniqueOrThrow({ where: { id: appointment.body.id } })).status,
+    ).toBe('COMPLETED');
+    const row = await prisma.treatmentSession.findUniqueOrThrow({ where: { id: session.id } });
+    expect(row.status).toBe('CANCELLED');
   });
 
   it('compliance: only status and missing, for an assistant once billing.view is granted', async () => {

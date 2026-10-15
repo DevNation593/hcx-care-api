@@ -25,6 +25,7 @@ describe('TreatmentSessionsService', () => {
     specialtyId: 'aesthetics',
   };
   const other: ClinicalActor = { ...professional, userId: 'other' };
+  const master: ClinicalActor = { ...professional, userId: 'owner', role: 'MASTER' };
   const DAY_MS = 24 * 60 * 60 * 1000;
 
   const fullPolicy: TreatmentRequirements = {
@@ -125,6 +126,7 @@ describe('TreatmentSessionsService', () => {
 
   const db = {
     patient: { findFirst: jest.fn() },
+    user: { findFirst: jest.fn() },
     branch: { findFirst: jest.fn() },
     appointment: { findFirst: jest.fn(), updateMany: jest.fn() },
     encounter: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
@@ -173,6 +175,7 @@ describe('TreatmentSessionsService', () => {
     jest.resetAllMocks();
     prisma.$transaction.mockImplementation((callback: (tx: unknown) => unknown) => callback(db));
     db.patient.findFirst.mockResolvedValue(patient);
+    db.user.findFirst.mockResolvedValue({ id: 'pro', firstName: 'Laura', lastName: 'Mora' });
     db.encounter.findFirst.mockResolvedValue(null);
     db.encounter.create.mockImplementation(({ data }) =>
       Promise.resolve({ id: 'encounter-1', status: 'OPEN', summary: null, ...data }),
@@ -495,6 +498,45 @@ describe('TreatmentSessionsService', () => {
       expect(db.tenant.findUnique.mock.calls[0][0]).toMatchObject({ where: { id: 'tenant-1' } });
     });
 
+    it('includes the professional who owns the session', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy));
+
+      const found = await service.get('tenant-1', 'session-1', other);
+
+      expect(found.professional).toEqual({ id: 'pro', firstName: 'Laura', lastName: 'Mora' });
+      expect(db.user.findFirst.mock.calls[0][0]).toEqual({
+        where: { id: 'pro', tenantId: 'tenant-1' },
+        select: { id: true, firstName: true, lastName: true },
+      });
+    });
+
+    it('offers the commands of the status only to the professional of the session', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy, { status: 'CONSENTED' }));
+
+      expect((await service.get('tenant-1', 'session-1', professional)).allowedCommands).toEqual([
+        'SAVE_FORM',
+        'REVOKE_CONSENT',
+        'UPLOAD_BEFORE',
+        'UPLOAD_OTHER',
+        'START',
+        'CANCEL',
+        'NO_SHOW',
+      ]);
+      expect((await service.get('tenant-1', 'session-1', other)).allowedCommands).toEqual([]);
+    });
+
+    it('leaves a MASTER who does not own the session only the consent revocation', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy, { status: 'CONSENTED' }));
+      expect((await service.get('tenant-1', 'session-1', master)).allowedCommands).toEqual([
+        'REVOKE_CONSENT',
+      ]);
+
+      db.treatmentSession.findFirst.mockResolvedValue(
+        loaded(fullPolicy, { status: 'READY_FOR_CONSENT' }),
+      );
+      expect((await service.get('tenant-1', 'session-1', master)).allowedCommands).toEqual([]);
+    });
+
     it('falls back to America/Guayaquil when the tenant has no settings', async () => {
       db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy));
       db.tenant.findUnique.mockResolvedValue({ settings: null });
@@ -532,6 +574,25 @@ describe('TreatmentSessionsService', () => {
         missing: ['CLINICAL_NOTES', 'AFTER_PHOTOS'],
       });
       expect(db.auditLog.createMany).not.toHaveBeenCalled();
+    });
+
+    it('answers nothing missing once the session is clinically complete', async () => {
+      // The after photos were deleted after the close: billing must not regress.
+      db.treatmentSession.findFirst.mockResolvedValue(
+        loaded(fullPolicy, {
+          status: 'CLINICAL_COMPLETE',
+          formRecordId: 'record-1',
+          startedAt: new Date(),
+          completedAt: new Date(),
+        }),
+      );
+      db.specialtyRecord.count.mockResolvedValue(1);
+      db.patientFile.count.mockResolvedValue(0);
+
+      await expect(service.compliance('tenant-1', 'session-1')).resolves.toEqual({
+        status: 'CLINICAL_COMPLETE',
+        missing: [],
+      });
     });
   });
 
@@ -955,6 +1016,36 @@ describe('TreatmentSessionsService', () => {
           data: { status: 'COMPLETED' },
         });
         expect(db.encounter.update.mock.calls[0][0].data).toMatchObject({ status: 'CLOSED' });
+      });
+
+      it('completes the appointment of a session cancelled after its start: the patient attended', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(
+          loaded(fullPolicy, {
+            status: 'IN_PROGRESS',
+            startedAt: new Date(),
+            appointmentId: 'appointment-1',
+          }),
+        );
+        openEncounter({ appointmentId: 'appointment-1' });
+        writes({ status: 'IN_PROGRESS', appointmentId: 'appointment-1' });
+
+        await sessions.cancel('tenant-1', 'session-1', professional, {
+          reason: 'Reacción vasovagal',
+        });
+
+        expect(db.appointment.updateMany.mock.calls[0][0]).toEqual({
+          where: {
+            id: 'appointment-1',
+            tenantId: 'tenant-1',
+            status: { in: ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] },
+          },
+          data: { status: 'COMPLETED' },
+        });
+        const appointmentData = db.appointment.updateMany.mock.calls.map(([args]) => args.data);
+        expect(appointmentData).not.toContainEqual(
+          expect.objectContaining({ status: 'CANCELLED' }),
+        );
+        expect(updateData()).toMatchObject({ status: 'CANCELLED' });
       });
 
       it('touches no appointment when the session has none', async () => {

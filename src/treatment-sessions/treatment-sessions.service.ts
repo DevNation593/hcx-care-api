@@ -18,6 +18,7 @@ import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { clinicalRecordForbidden } from '../clinical-access/clinical-errors';
+import { DEFAULT_CLINIC_TIMEZONE } from '../common/utils/timezone';
 import { EncountersService } from '../encounters/encounters.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
@@ -95,7 +96,14 @@ const mediaSelect = {
   createdAt: true,
 } satisfies Prisma.PatientFileSelect;
 
+const professionalSelect = {
+  id: true,
+  firstName: true,
+  lastName: true,
+} satisfies Prisma.UserSelect;
+
 export type SessionPatient = Prisma.PatientGetPayload<{ select: typeof patientSelect }>;
+export type SessionProfessional = Prisma.UserGetPayload<{ select: typeof professionalSelect }>;
 
 /** The signer of a signed consent as the API returns it: decrypted, without identification. */
 export interface ConsentSignerView {
@@ -117,11 +125,13 @@ export interface SessionTreatment {
 
 export type SessionSummary = Omit<TreatmentSession, (typeof ENCRYPTED_SESSION_FIELDS)[number]> & {
   treatment: SessionTreatment;
-  professional: { id: string; firstName: string; lastName: string };
+  professional: SessionProfessional;
 };
 
 export type SessionDetail = TreatmentSession & {
   patient: SessionPatient;
+  /** The professional who owns the session; only they record in it. */
+  professional: SessionProfessional | null;
   treatment: SessionTreatment;
   policy: TreatmentRequirements;
   form: {
@@ -136,11 +146,20 @@ export type SessionDetail = TreatmentSession & {
   timezone: string;
   media: SessionMedia[];
   requirements: { start: MissingRequirement[]; complete: MissingRequirement[] };
+  /** What the reader may do now: empty for anyone but the owner, except a MASTER's revocation. */
   allowedCommands: SessionCommand[];
 };
 
-/** The clinic's zone when its tenant has no settings row (the pilot country). */
-const DEFAULT_TIMEZONE = 'America/Guayaquil';
+/** The commands of the status the actor may send: the owner all, a MASTER only the revocation. */
+function commandsForActor(
+  session: TreatmentSession,
+  policy: TreatmentRequirements,
+  actor: ClinicalActor,
+): SessionCommand[] {
+  const commands = allowedCommands(session.status, policy);
+  if (session.professionalId === actor.userId) return commands;
+  return actor.role === 'MASTER' ? commands.filter((command) => command === 'REVOKE_CONSENT') : [];
+}
 
 /** The signer fields of a stored signature, decrypted. */
 export function consentSignerView(
@@ -327,7 +346,7 @@ export class TreatmentSessionsService {
         tx,
       );
 
-      return this.detail(tx, session, version, policy);
+      return this.detail(tx, session, version, policy, actor);
     });
   }
 
@@ -340,6 +359,7 @@ export class TreatmentSessionsService {
         session,
         version,
         parseTreatmentRequirements(version.requirements),
+        actor,
       );
 
       await this.audit.record(
@@ -441,13 +461,15 @@ export class TreatmentSessionsService {
         );
       }
 
-      return this.detail(tx, current, version, policy);
+      return this.detail(tx, current, version, policy, actor);
     });
   }
 
   /**
    * Whether the session meets its treatment's requirements, without clinical content: what is
-   * missing to start it until it has started, and to complete it afterwards.
+   * missing to start it until it has started, and to complete it afterwards. A clinically
+   * complete session was checked when it closed, so later changes (a deleted photo) do not
+   * reopen what it misses.
    */
   async compliance(
     tenantId: string,
@@ -455,6 +477,7 @@ export class TreatmentSessionsService {
   ): Promise<{ status: TreatmentSessionStatus; missing: MissingRequirement[] }> {
     return this.transaction(async (tx) => {
       const { session, version } = await this.findSession(tx, tenantId, sessionId);
+      if (session.status === 'CLINICAL_COMPLETE') return { status: session.status, missing: [] };
       const policy = parseTreatmentRequirements(version.requirements);
       const facts = await loadSessionFacts(
         tx,
@@ -500,7 +523,7 @@ export class TreatmentSessionsService {
           : {}),
       });
       await this.auditTransition(tx, actor, session, started);
-      return this.detail(tx, started, version, policy);
+      return this.detail(tx, started, version, policy, actor);
     });
   }
 
@@ -549,13 +572,14 @@ export class TreatmentSessionsService {
         notes ?? undefined,
       );
       await this.auditTransition(tx, actor, session, completed);
-      return this.detail(tx, completed, version, policy);
+      return this.detail(tx, completed, version, policy, actor);
     });
   }
 
   /**
-   * Cancels the session with a reason, stored encrypted; its appointment (if still unattended
-   * or in progress) is cancelled too, and its encounter closes.
+   * Cancels the session with a reason, stored encrypted, and closes its encounter. Its
+   * appointment (if still unattended or in progress) is cancelled when the procedure had not
+   * started, and completed when it had: the patient attended.
    */
   async cancel(
     tenantId: string,
@@ -585,17 +609,20 @@ export class TreatmentSessionsService {
             tenantId,
             status: { in: [...OPEN_APPOINTMENT_STATUSES] },
           },
-          data: {
-            status: 'CANCELLED',
-            cancelledAt: new Date(),
-            cancelledBy: actor.userId,
-            cancellationReason: APPOINTMENT_CANCELLATION_NOTE,
-          },
+          data:
+            session.status === 'IN_PROGRESS'
+              ? { status: 'COMPLETED' }
+              : {
+                  status: 'CANCELLED',
+                  cancelledAt: new Date(),
+                  cancelledBy: actor.userId,
+                  cancellationReason: APPOINTMENT_CANCELLATION_NOTE,
+                },
         });
       }
       await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
       await this.auditTransition(tx, actor, session, cancelled, reason);
-      return this.detail(tx, cancelled, version, policy);
+      return this.detail(tx, cancelled, version, policy, actor);
     });
   }
 
@@ -629,7 +656,7 @@ export class TreatmentSessionsService {
       }
       await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
       await this.auditTransition(tx, actor, session, missed);
-      return this.detail(tx, missed, version, policy);
+      return this.detail(tx, missed, version, policy, actor);
     });
   }
 
@@ -718,6 +745,7 @@ export class TreatmentSessionsService {
     session: TreatmentSession,
     version: VersionWithTreatment,
     policy: TreatmentRequirements,
+    actor: ClinicalActor,
   ): Promise<SessionDetail> {
     const { tenantId } = session;
     const patient = await tx.patient.findFirst({
@@ -725,6 +753,10 @@ export class TreatmentSessionsService {
       select: patientSelect,
     });
     if (!patient) throw new NotFoundException('Paciente no encontrado');
+    const professional = await tx.user.findFirst({
+      where: { id: session.professionalId, tenantId },
+      select: professionalSelect,
+    });
 
     const form = policy.medicalForm.required ? await this.pinnedForm(tx, session, version) : null;
 
@@ -761,6 +793,7 @@ export class TreatmentSessionsService {
     return {
       ...session,
       patient,
+      professional,
       treatment: {
         id: version.treatment.id,
         name: version.treatment.name,
@@ -773,10 +806,10 @@ export class TreatmentSessionsService {
         title: this.crypto.decrypt(tenantId, document.title),
         signature: signature ? consentSignerView(this.crypto, tenantId, signature) : null,
       })),
-      timezone: tenant?.settings?.timezone ?? DEFAULT_TIMEZONE,
+      timezone: tenant?.settings?.timezone ?? DEFAULT_CLINIC_TIMEZONE,
       media: media.map((file) => this.crypto.decryptFields(tenantId, file, ENCRYPTED_FILE_FIELDS)),
       requirements: evaluateSession(policy, facts),
-      allowedCommands: allowedCommands(session.status, policy),
+      allowedCommands: commandsForActor(session, policy, actor),
     };
   }
 

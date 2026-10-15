@@ -18,7 +18,7 @@ import {
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { clinicalRecordForbidden } from '../clinical-access/clinical-errors';
 import { MAX_SIGNATURE_CHARS, PNG_MAGIC, SIGNATURE_PREFIX } from '../clinical-forms/form-schema';
-import { formatLongDateInZone } from '../common/utils/timezone';
+import { DEFAULT_CLINIC_TIMEZONE, formatLongDateInZone } from '../common/utils/timezone';
 import { renderConsentPdf } from '../consents/consent-pdf';
 import { consentChecksum, renderConsentText } from '../consents/consent-text';
 import { EncountersService } from '../encounters/encounters.service';
@@ -196,7 +196,7 @@ export class ConsentDocumentsService {
         identificacion: patient.identificationNumber ?? '',
         tratamiento: version.treatment.name,
         profesional: professional ? fullName(professional) : '',
-        fecha: formatLongDateInZone(now, tenant?.settings?.timezone),
+        fecha: formatLongDateInZone(now, tenant?.settings?.timezone ?? DEFAULT_CLINIC_TIMEZONE),
       };
       const title = renderConsentText(template.title, values);
       const body = renderConsentText(template.body, values);
@@ -331,7 +331,7 @@ export class ConsentDocumentsService {
       signature: { png, ...signer },
       operatorName: operator ? fullName(operator) : actor.userId,
       signedAt,
-      timezone: tenant?.settings?.timezone ?? 'UTC',
+      timezone: tenant?.settings?.timezone ?? DEFAULT_CLINIC_TIMEZONE,
     });
     const pdfChecksum = sha256(pdf);
 
