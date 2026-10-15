@@ -177,13 +177,14 @@ describe('renderConsentPdf', () => {
 
   it('prints the signing time in the tenant zone and names the zone', async () => {
     const text = pdfTextLines(await renderConsentPdf(input())).join('\n');
-    // 15:30 UTC is 10:30 in Guayaquil (UTC-5); es-EC writes a 12-hour clock.
-    expect(text).toMatch(/15 de octubre de 2026, 10:30.*\(America\/Guayaquil\)/);
+    // 15:30 UTC is 10:30 in Guayaquil (UTC-5). The text must not depend on the ICU data of
+    // the runtime, so it is written the same way on every Node version.
+    expect(text).toContain('15 de octubre de 2026, 10:30 (America/Guayaquil)');
   });
 
   it('falls back to UTC and says so when the zone is invalid', async () => {
     const text = pdfTextLines(await renderConsentPdf(input({ timezone: 'No/Existe' }))).join('\n');
-    expect(text).toMatch(/15 de octubre de 2026, 3:30.*\(UTC\)/);
+    expect(text).toContain('15 de octubre de 2026, 15:30 (UTC)');
     expect(text).not.toContain('No/Existe');
   });
 });

@@ -30,17 +30,43 @@ const MUTED = '#555555';
 const RULE = '#bbbbbb';
 const SIGNATURE_FIT: [number, number] = [200, 80];
 
+const MONTHS = [
+  'enero',
+  'febrero',
+  'marzo',
+  'abril',
+  'mayo',
+  'junio',
+  'julio',
+  'agosto',
+  'septiembre',
+  'octubre',
+  'noviembre',
+  'diciembre',
+];
+
 /**
- * The moment of signing as the clinic reads it, followed by the zone it is written in.
+ * The moment of signing as the clinic reads it, followed by the zone it is written in, e.g.
+ * "15 de octubre de 2026, 10:30 (America/Guayaquil)". Only numeric parts come from Intl, so
+ * the text of a legal document does not change with the ICU data of the runtime.
  * An unknown zone falls back to UTC and says so.
  */
 function formatSignedAt(date: Date, timeZone: string): string {
-  const format = (zone: string) =>
-    `${new Intl.DateTimeFormat('es-EC', {
+  const format = (zone: string) => {
+    const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: zone,
-      dateStyle: 'long',
-      timeStyle: 'short',
-    }).format(date)} (${zone})`;
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date);
+    const read = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? '';
+    const month = MONTHS[Number(read('month')) - 1];
+    return `${Number(read('day'))} de ${month} de ${read('year')}, ${read('hour')}:${read('minute')} (${zone})`;
+  };
   try {
     return format(timeZone);
   } catch {
