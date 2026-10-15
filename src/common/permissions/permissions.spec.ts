@@ -6,6 +6,7 @@ import { AppointmentsController } from '../../appointments/appointments.controll
 import { BillingController } from '../../billing/billing.controller';
 import { ClinicalNotesController } from '../../clinical-notes/clinical-notes.controller';
 import { ClinicalTimelineController } from '../../clinical-timeline/clinical-timeline.controller';
+import { ConsentTemplatesController } from '../../consents/consent-templates.controller';
 import { EncountersController } from '../../encounters/encounters.controller';
 import { NextSessionPlansController } from '../../next-session-plans/next-session-plans.controller';
 import { PatientFilesController } from '../../patient-files/patient-files.controller';
@@ -41,6 +42,7 @@ const controllers: Controller[] = [
   NextSessionPlansController,
   PatientFilesController,
   RecordDocumentsController,
+  ConsentTemplatesController,
 ];
 
 /** Every handler that names a permission, with the roles the role guard lets through. */
@@ -110,21 +112,16 @@ describe('permission catalog', () => {
   it('is exercised by at least one route for every permission', () => {
     const used = new Set(guardedHandlers.map(({ permission }) => permission));
 
-    // TODO(treatment-sessions): drop the exemption once the treatment and consent-template
-    // controllers name 'treatments.manage'.
-    const pending: Permission[] = ['treatments.manage'];
-
-    expect([...used].sort()).toEqual(
-      PERMISSION_CATALOG.map(({ key }) => key)
-        .filter((key) => !pending.includes(key))
-        .sort(),
-    );
+    expect([...used].sort()).toEqual(PERMISSION_CATALOG.map(({ key }) => key).sort());
   });
 
   it.each(guardedHandlers)(
     '$route ($permission) is open only to roles that have the permission',
     ({ permission, roles }) => {
-      const allowed = PERMISSION_CATALOG.find((entry) => entry.key === permission)!.roles;
+      const entry: { roles: readonly string[]; grantable?: readonly string[] } =
+        PERMISSION_CATALOG.find((candidate) => candidate.key === permission)!;
+      // A role the account holder can grant the permission to may reach the route too.
+      const allowed = [...entry.roles, ...(entry.grantable ?? [])];
 
       expect(roles.length).toBeGreaterThan(0);
       for (const role of roles) expect(allowed).toContain(role);
@@ -148,6 +145,7 @@ describe('permission catalog', () => {
         'billing.controller.ts',
         'clinical-notes.controller.ts',
         'clinical-timeline.controller.ts',
+        'consent-templates.controller.ts',
         'encounters.controller.ts',
         'next-session-plans.controller.ts',
         'patient-files.controller.ts',
