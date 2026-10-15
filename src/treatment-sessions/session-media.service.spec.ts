@@ -175,6 +175,11 @@ describe('SessionMediaService', () => {
     expect(db.auditLog.createMany.mock.calls.flatMap(([args]) => args.data)).toEqual([
       expect.objectContaining({ action: 'CREATE', entity: 'PATIENT_FILE', entityId: 'file-1' }),
     ]);
+    const [{ changes }] = db.auditLog.createMany.mock.calls[0][0].data;
+    expect(plain.decryptJson('tenant-1', changes)).toMatchObject({
+      before: null,
+      after: { treatmentSessionId: 'session-1', phase: 'BEFORE', category: 'IMAGEN' },
+    });
   });
 
   it('refuses an AFTER photo before the procedure has started', async () => {

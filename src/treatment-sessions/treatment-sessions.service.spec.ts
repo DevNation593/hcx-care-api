@@ -837,6 +837,55 @@ describe('TreatmentSessionsService', () => {
         expect(cipher.decrypt('tenant-1', entry.reason)).toBe('Reacción vasovagal');
       });
 
+      it('cancels the unattended appointment of the session without its clinical reason', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(
+          loaded(fullPolicy, { status: 'INTAKE_IN_PROGRESS', appointmentId: 'appointment-1' }),
+        );
+        openEncounter({ appointmentId: 'appointment-1' });
+        writes({ status: 'INTAKE_IN_PROGRESS', appointmentId: 'appointment-1' });
+
+        await sessions.cancel('tenant-1', 'session-1', professional, {
+          reason: 'Embarazo no informado',
+        });
+
+        expect(db.appointment.updateMany.mock.calls[0][0]).toEqual({
+          where: {
+            id: 'appointment-1',
+            tenantId: 'tenant-1',
+            status: { in: ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] },
+          },
+          data: {
+            status: 'CANCELLED',
+            cancelledAt: expect.any(Date),
+            cancelledBy: 'pro',
+            cancellationReason: 'Atención de tratamiento cancelada',
+          },
+        });
+        // Cancelled before the encounter closes, whose completion only reaches open appointments.
+        expect(db.appointment.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+          db.encounter.update.mock.invocationCallOrder[0],
+        );
+        expect(db.appointment.updateMany.mock.calls[1][0]).toMatchObject({
+          where: { status: { in: ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] } },
+          data: { status: 'COMPLETED' },
+        });
+        expect(db.encounter.update.mock.calls[0][0].data).toMatchObject({ status: 'CLOSED' });
+      });
+
+      it('touches no appointment when the session has none', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(
+          loaded(fullPolicy, { status: 'IN_PROGRESS', startedAt: new Date() }),
+        );
+        writes({ status: 'IN_PROGRESS' });
+
+        await sessions.cancel('tenant-1', 'session-1', professional, {
+          reason: 'Paciente se retira',
+        });
+
+        expect(db.appointment.updateMany).not.toHaveBeenCalled();
+        expect(updateData()).toMatchObject({ status: 'CANCELLED' });
+      });
+
       it('requires a reason of 3 to 1000 characters', () => {
         const errors = (body: Record<string, unknown>) =>
           validateSync(plainToInstance(CancelTreatmentSessionDto, body)).map(

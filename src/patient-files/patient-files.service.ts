@@ -61,6 +61,8 @@ export function snapshotPatientFile(file: PatientFile) {
     description: file.description,
     mimeType: file.mimeType,
     sizeBytes: file.sizeBytes,
+    treatmentSessionId: file.treatmentSessionId,
+    phase: file.phase,
   };
 }
 

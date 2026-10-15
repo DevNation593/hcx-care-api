@@ -162,8 +162,11 @@ const invalidTransition = (status: TreatmentSessionStatus, message: string, extr
 
 const STARTED_STATUSES: readonly TreatmentSessionStatus[] = ['IN_PROGRESS', 'CLINICAL_COMPLETE'];
 
-/** Appointments a no-show can still be recorded on. */
-const NO_SHOW_APPOINTMENT_STATUSES = ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] as const;
+/** Appointments a cancellation or a no-show of the session still applies to. */
+const OPEN_APPOINTMENT_STATUSES = ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] as const;
+
+/** The appointment keeps a plain note; the clinical reason stays encrypted on the session. */
+const APPOINTMENT_CANCELLATION_NOTE = 'Atención de tratamiento cancelada';
 
 @Injectable()
 export class TreatmentSessionsService {
@@ -518,7 +521,10 @@ export class TreatmentSessionsService {
     });
   }
 
-  /** Cancels the session with a reason, stored encrypted, and closes its encounter. */
+  /**
+   * Cancels the session with a reason, stored encrypted; its appointment (if still unattended
+   * or in progress) is cancelled too, and its encounter closes.
+   */
   async cancel(
     tenantId: string,
     sessionId: string,
@@ -539,6 +545,22 @@ export class TreatmentSessionsService {
         cancelledAt: new Date(),
         cancellationReason: this.crypto.encrypt(tenantId, reason),
       });
+      // Before the encounter closes, which would otherwise complete the appointment.
+      if (session.appointmentId) {
+        await tx.appointment.updateMany({
+          where: {
+            id: session.appointmentId,
+            tenantId,
+            status: { in: [...OPEN_APPOINTMENT_STATUSES] },
+          },
+          data: {
+            status: 'CANCELLED',
+            cancelledAt: new Date(),
+            cancelledBy: actor.userId,
+            cancellationReason: APPOINTMENT_CANCELLATION_NOTE,
+          },
+        });
+      }
       await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
       await this.auditTransition(tx, actor, session, cancelled, reason);
       return this.detail(tx, cancelled, version, policy);
@@ -568,7 +590,7 @@ export class TreatmentSessionsService {
           where: {
             id: session.appointmentId,
             tenantId,
-            status: { in: [...NO_SHOW_APPOINTMENT_STATUSES] },
+            status: { in: [...OPEN_APPOINTMENT_STATUSES] },
           },
           data: { status: 'NO_SHOW' },
         });
