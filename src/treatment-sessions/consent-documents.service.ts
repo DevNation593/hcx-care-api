@@ -29,11 +29,18 @@ import { runSerializableTransaction } from '../prisma/serializable-transaction';
 import { parseTreatmentRequirements } from '../treatments/treatment-requirements';
 import { ConsentReasonDto, SignConsentDto } from './dto/consent-document.dto';
 import { assertCommandAllowed } from './session-state';
-import { snapshotTreatmentSession, TreatmentSessionsService } from './treatment-sessions.service';
+import {
+  ConsentSignerView,
+  consentSignerView,
+  snapshotTreatmentSession,
+  TreatmentSessionsService,
+} from './treatment-sessions.service';
 
 /** A consent document as the API returns it: decrypted title, never the storage key; the body only where asked. */
 export type ConsentDocumentView = Omit<ConsentDocument, 'pdfStorageKey' | 'body'> & {
   body?: string;
+  /** Who signed; only the sign response carries it, with the same shape as the session detail. */
+  signature?: ConsentSignerView | null;
 };
 
 /** The state of a document stored in the audit log; no text, signature or storage key. */
@@ -356,7 +363,7 @@ export class ConsentDocumentsService {
           'SIGN_CONSENT',
         );
 
-        await tx.consentSignature.create({
+        const stored = await tx.consentSignature.create({
           data: {
             tenantId,
             documentId,
@@ -408,7 +415,10 @@ export class ConsentDocumentsService {
           ],
           tx,
         );
-        return this.view(signed);
+        return {
+          ...this.view(signed),
+          signature: consentSignerView(this.crypto, tenantId, stored),
+        };
       });
     } catch (error) {
       // Nothing refers to these objects once the signature could not be recorded.

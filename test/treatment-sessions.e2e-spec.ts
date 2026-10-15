@@ -376,7 +376,16 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     const signed = await sign(document.id).expect(201);
     expect(signed.body.status).toBe('SIGNED');
     expect(signed.body.pdfChecksum).toMatch(/^[0-9a-f]{64}$/);
-    expect(await detail(session.id)).toMatchObject({ status: 'CONSENTED' });
+    expect(signed.body.signature).toEqual({
+      signerName: 'Ana Paciente',
+      signerRole: 'PATIENT',
+      relationship: null,
+    });
+    // After a reload the detail still says who signed, and in which zone to show the time.
+    const consented = await detail(session.id);
+    expect(consented).toMatchObject({ status: 'CONSENTED', timezone: expect.any(String) });
+    expect(consented.consentDocuments[0].signature).toEqual(signed.body.signature);
+    expect(JSON.stringify(consented.consentDocuments)).not.toContain('0102030405');
 
     await upload(session.id, 'BEFORE').expect(201);
     const started = await request(server())

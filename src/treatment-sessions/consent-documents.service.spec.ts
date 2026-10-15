@@ -484,11 +484,43 @@ describe('ConsentDocumentsService', () => {
       expect(audited).toContain('CONSENTED');
 
       expect(signed).toMatchObject({ id: 'doc-1', status: 'SIGNED' });
+      expect(signed.signature).toEqual({
+        signerName: 'Ana Pérez',
+        signerRole: 'PATIENT',
+        relationship: null,
+      });
       expect(signed).not.toHaveProperty('pdfStorageKey');
       expect(signed).not.toHaveProperty('body');
       expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
         isolationLevel: 'Serializable',
       });
+    });
+
+    it('returns the representative and relationship in the signature of the response', async () => {
+      db.consentDocument.findFirst.mockResolvedValueOnce(document()).mockResolvedValueOnce(
+        document({
+          status: 'SIGNED',
+          signedAt: new Date(),
+          pdfChecksum: 'x',
+          pdfStorageKey: 'k',
+        }),
+      );
+
+      const signed = await sign(
+        dto({
+          signerRole: 'REPRESENTATIVE',
+          signerName: ' Rosa Pérez ',
+          signerIdentification: '0911223344',
+          relationship: ' Madre ',
+        }),
+      );
+
+      expect(signed.signature).toEqual({
+        signerName: 'Rosa Pérez',
+        signerRole: 'REPRESENTATIVE',
+        relationship: 'Madre',
+      });
+      expect(JSON.stringify(signed)).not.toContain('0911223344');
     });
 
     it('refuses a second signature of the same document without writing anything', async () => {

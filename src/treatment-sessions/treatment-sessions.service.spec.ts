@@ -144,6 +144,7 @@ describe('TreatmentSessionsService', () => {
     },
     formDefinitionVersion: { findFirst: jest.fn() },
     consentDocument: { findMany: jest.fn() },
+    tenant: { findUnique: jest.fn() },
     patientFile: { findMany: jest.fn(), count: jest.fn() },
     auditLog: { createMany: jest.fn() },
   };
@@ -185,6 +186,7 @@ describe('TreatmentSessionsService', () => {
       formDefinition: { name: 'Ficha estética' },
     });
     db.consentDocument.findMany.mockResolvedValue([]);
+    db.tenant.findUnique.mockResolvedValue({ settings: { timezone: 'America/Guayaquil' } });
     db.patientFile.findMany.mockResolvedValue([]);
     db.patientFile.count.mockResolvedValue(0);
     db.specialtyRecord.count.mockResolvedValue(0);
@@ -417,6 +419,89 @@ describe('TreatmentSessionsService', () => {
           userId: 'other',
         }),
       ]);
+    });
+
+    it('includes the decrypted signer of a signed document and null for a presented one', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy, { status: 'CONSENTED' }));
+      db.consentDocument.findMany.mockResolvedValue([
+        {
+          id: 'consent-doc-2',
+          treatmentSessionId: 'session-1',
+          templateVersionId: 'consent-v1',
+          status: 'PRESENTED',
+          title: 'Consentimiento informado',
+          checksum: 'abc',
+          signature: null,
+        },
+        {
+          id: 'consent-doc-1',
+          treatmentSessionId: 'session-1',
+          templateVersionId: 'consent-v1',
+          status: 'SIGNED',
+          signedAt: new Date('2026-10-15T14:10:00Z'),
+          title: 'Consentimiento informado',
+          checksum: 'abc',
+          signature: {
+            signerRole: 'REPRESENTATIVE',
+            signerName: plain.encrypt('tenant-1', 'Rosa Pérez'),
+            relationship: plain.encrypt('tenant-1', 'Madre'),
+          },
+        },
+      ]);
+
+      const found = await service.get('tenant-1', 'session-1', other);
+
+      expect(found.consentDocuments.map((document) => document.signature)).toEqual([
+        null,
+        { signerName: 'Rosa Pérez', signerRole: 'REPRESENTATIVE', relationship: 'Madre' },
+      ]);
+      // Only the signer's name, role and relationship are selected: no identification, key or operator data.
+      expect(db.consentDocument.findMany.mock.calls[0][0].select.signature).toEqual({
+        select: { signerRole: true, signerName: true, relationship: true },
+      });
+    });
+
+    it('returns a null relationship for a patient signer', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy, { status: 'CONSENTED' }));
+      db.consentDocument.findMany.mockResolvedValue([
+        {
+          id: 'consent-doc-1',
+          status: 'SIGNED',
+          title: 'Consentimiento informado',
+          signature: {
+            signerRole: 'PATIENT',
+            signerName: plain.encrypt('tenant-1', 'Ana Pérez'),
+            relationship: null,
+          },
+        },
+      ]);
+
+      const found = await service.get('tenant-1', 'session-1', other);
+
+      expect(found.consentDocuments[0].signature).toEqual({
+        signerName: 'Ana Pérez',
+        signerRole: 'PATIENT',
+        relationship: null,
+      });
+    });
+
+    it("returns the clinic's time zone from the tenant settings", async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy));
+      db.tenant.findUnique.mockResolvedValue({ settings: { timezone: 'America/Bogota' } });
+
+      const found = await service.get('tenant-1', 'session-1', other);
+
+      expect(found.timezone).toBe('America/Bogota');
+      expect(db.tenant.findUnique.mock.calls[0][0]).toMatchObject({ where: { id: 'tenant-1' } });
+    });
+
+    it('falls back to America/Guayaquil when the tenant has no settings', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy));
+      db.tenant.findUnique.mockResolvedValue({ settings: null });
+
+      const found = await service.get('tenant-1', 'session-1', other);
+
+      expect(found.timezone).toBe('America/Guayaquil');
     });
   });
 

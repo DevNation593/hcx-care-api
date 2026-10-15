@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import {
   ConsentDocument,
+  ConsentSignerRole,
   PatientFile,
   Prisma,
   Treatment,
@@ -76,6 +77,8 @@ const documentSelect = {
   revokedAt: true,
   pdfChecksum: true,
   createdAt: true,
+  // Who signed; the identification, signature image, operator and network data stay out.
+  signature: { select: { signerRole: true, signerName: true, relationship: true } },
 } satisfies Prisma.ConsentDocumentSelect;
 
 const mediaSelect = {
@@ -93,7 +96,18 @@ const mediaSelect = {
 } satisfies Prisma.PatientFileSelect;
 
 export type SessionPatient = Prisma.PatientGetPayload<{ select: typeof patientSelect }>;
-export type SessionConsentDocument = Pick<ConsentDocument, keyof typeof documentSelect>;
+
+/** The signer of a signed consent as the API returns it: decrypted, without identification. */
+export interface ConsentSignerView {
+  signerName: string;
+  signerRole: ConsentSignerRole;
+  relationship: string | null;
+}
+
+export type SessionConsentDocument = Pick<
+  ConsentDocument,
+  Exclude<keyof typeof documentSelect, 'signature'>
+> & { signature: ConsentSignerView | null };
 export type SessionMedia = Pick<PatientFile, keyof typeof mediaSelect>;
 export interface SessionTreatment {
   id: string;
@@ -118,10 +132,28 @@ export type SessionDetail = TreatmentSession & {
     data: Record<string, unknown> | null;
   } | null;
   consentDocuments: SessionConsentDocument[];
+  /** The clinic's IANA time zone, to show server times in. */
+  timezone: string;
   media: SessionMedia[];
   requirements: { start: MissingRequirement[]; complete: MissingRequirement[] };
   allowedCommands: SessionCommand[];
 };
+
+/** The clinic's zone when its tenant has no settings row (the pilot country). */
+const DEFAULT_TIMEZONE = 'America/Guayaquil';
+
+/** The signer fields of a stored signature, decrypted. */
+export function consentSignerView(
+  crypto: ClinicalCryptoService,
+  tenantId: string,
+  signature: { signerRole: ConsentSignerRole; signerName: string; relationship: string | null },
+): ConsentSignerView {
+  return {
+    signerName: crypto.decrypt(tenantId, signature.signerName),
+    signerRole: signature.signerRole,
+    relationship: signature.relationship ? crypto.decrypt(tenantId, signature.relationship) : null,
+  };
+}
 
 /** The state of a session, stored in the audit log with every change. */
 export function snapshotTreatmentSession(session: TreatmentSession) {
@@ -708,6 +740,10 @@ export class TreatmentSessionsService {
       select: documentSelect,
       orderBy: { presentedAt: 'desc' },
     });
+    const tenant = await tx.tenant.findUnique({
+      where: { id: tenantId },
+      select: { settings: { select: { timezone: true } } },
+    });
     const media = await tx.patientFile.findMany({
       where: { tenantId, treatmentSessionId: session.id, deletedAt: null },
       select: mediaSelect,
@@ -732,10 +768,12 @@ export class TreatmentSessionsService {
       },
       policy,
       form,
-      consentDocuments: documents.map((document) => ({
+      consentDocuments: documents.map(({ signature, ...document }) => ({
         ...document,
         title: this.crypto.decrypt(tenantId, document.title),
+        signature: signature ? consentSignerView(this.crypto, tenantId, signature) : null,
       })),
+      timezone: tenant?.settings?.timezone ?? DEFAULT_TIMEZONE,
       media: media.map((file) => this.crypto.decryptFields(tenantId, file, ENCRYPTED_FILE_FIELDS)),
       requirements: evaluateSession(policy, facts),
       allowedCommands: allowedCommands(session.status, policy),
