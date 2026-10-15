@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsDefined,
   IsInt,
   IsNumber,
   IsObject,
@@ -9,6 +10,7 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
@@ -89,6 +91,9 @@ export class CreateTreatmentDto {
   specialtyId?: string;
 
   @ApiProperty({ type: TreatmentVersionDto, description: 'Becomes version 1.' })
+  // ValidateNested skips undefined, so the presence is checked on its own.
+  @IsDefined()
+  @IsObject()
   @ValidateNested()
   @Type(() => TreatmentVersionDto)
   version: TreatmentVersionDto;
@@ -97,7 +102,7 @@ export class CreateTreatmentDto {
 export class UpdateTreatmentDto {
   @ApiPropertyOptional()
   @Transform(trimText)
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined) // null is not a name
   @IsString()
   @MinLength(2)
   @MaxLength(120)
@@ -116,7 +121,7 @@ export class UpdateTreatmentDto {
   specialtyId?: string | null;
 
   @ApiPropertyOptional()
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined) // null is not a state
   @IsBoolean()
   isActive?: boolean;
 }
