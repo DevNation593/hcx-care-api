@@ -134,10 +134,12 @@ export class ConsentTemplatesService {
         const draft = template.versions.find((version) => version.status === 'DRAFT');
 
         if (draft) {
-          await tx.consentTemplateVersion.update({
-            where: { id: draft.id },
+          // Guarded on the status: a publish that committed in between froze this text.
+          const { count } = await tx.consentTemplateVersion.updateMany({
+            where: { id: draft.id, tenantId, status: 'DRAFT' },
             data: { title, body, checksum },
           });
+          if (count === 0) throw locked('El borrador ya fue publicado.');
         } else {
           // Versions are listed newest first; the next number follows the highest one.
           const next = (template.versions[0]?.version ?? 0) + 1;
@@ -175,16 +177,23 @@ export class ConsentTemplatesService {
       const draft = template.versions.find((version) => version.status === 'DRAFT');
       if (!draft) throw locked('La plantilla no tiene un borrador para publicar.');
 
-      // Guarded on the status so two concurrent publishes cannot both succeed.
+      // Guarded on the status and on the text read above, so neither a concurrent publish nor
+      // a concurrent edit can leave a published text that does not match its checksum.
       const { count } = await tx.consentTemplateVersion.updateMany({
-        where: { id: draft.id, tenantId, status: 'DRAFT' },
+        where: {
+          id: draft.id,
+          tenantId,
+          status: 'DRAFT',
+          title: draft.title,
+          body: draft.body,
+        },
         data: {
           status: 'PUBLISHED',
           checksum: consentChecksum(draft.title, draft.body),
           publishedAt: new Date(),
         },
       });
-      if (count === 0) throw locked('El borrador ya fue publicado.');
+      if (count === 0) throw locked('El borrador cambió mientras se publicaba. Vuelve a cargarlo.');
 
       await tx.consentTemplate.update({
         where: { id },

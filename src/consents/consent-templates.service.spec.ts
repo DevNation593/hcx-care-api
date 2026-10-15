@@ -107,7 +107,13 @@ describe('ConsentTemplatesService', () => {
     await service.publish('tenant-1', 'user-1', 'template-1');
 
     const update = prisma.consentTemplateVersion.updateMany.mock.calls[0][0];
-    expect(update.where).toEqual({ id: 'version-1', tenantId: 'tenant-1', status: 'DRAFT' });
+    expect(update.where).toEqual({
+      id: 'version-1',
+      tenantId: 'tenant-1',
+      status: 'DRAFT',
+      title: 'Consentimiento',
+      body: 'Yo, {{paciente}}, acepto.',
+    });
     expect(update.data).toMatchObject({
       status: 'PUBLISHED',
       checksum: consentChecksum('Consentimiento', 'Yo, {{paciente}}, acepto.'),
@@ -130,7 +136,7 @@ describe('ConsentTemplatesService', () => {
     expect(prisma.consentTemplateVersion.updateMany).not.toHaveBeenCalled();
   });
 
-  it('refuses to publish a draft another request already published', async () => {
+  it('refuses to publish a draft that was published or edited by another request', async () => {
     prisma.consentTemplate.findFirst.mockResolvedValue(template([draft(1)]));
     prisma.consentTemplateVersion.updateMany.mockResolvedValue({ count: 0 });
 
@@ -162,7 +168,7 @@ describe('ConsentTemplatesService', () => {
         createdById: 'user-1',
       },
     });
-    expect(prisma.consentTemplateVersion.update).not.toHaveBeenCalled();
+    expect(prisma.consentTemplateVersion.updateMany).not.toHaveBeenCalled();
   });
 
   it('numbers the new draft after the highest version, not after the published one', async () => {
@@ -186,10 +192,23 @@ describe('ConsentTemplatesService', () => {
     });
 
     expect(prisma.consentTemplateVersion.create).not.toHaveBeenCalled();
-    expect(prisma.consentTemplateVersion.update).toHaveBeenCalledWith({
-      where: { id: 'version-2' },
+    expect(prisma.consentTemplateVersion.updateMany).toHaveBeenCalledWith({
+      where: { id: 'version-2', tenantId: 'tenant-1', status: 'DRAFT' },
       data: { title: 'Segundo', body: 'Texto', checksum: consentChecksum('Segundo', 'Texto') },
     });
+  });
+
+  it('does not rewrite a draft that was published while it was being saved', async () => {
+    prisma.consentTemplate.findFirst.mockResolvedValue(template([draft(1)]));
+    prisma.consentTemplateVersion.updateMany.mockResolvedValue({ count: 0 });
+
+    const error = await failure(
+      service.saveDraft('tenant-1', 'user-1', 'template-1', { title: 'Titulo', body: 'Texto' }),
+    );
+
+    expect(error.getStatus()).toBe(409);
+    expect(error.getResponse()).toMatchObject({ code: 'CONSENT_VERSION_LOCKED' });
+    expect(prisma.consentTemplateVersion.create).not.toHaveBeenCalled();
   });
 
   it('retires a published version', async () => {

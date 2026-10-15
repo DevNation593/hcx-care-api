@@ -118,10 +118,7 @@ describe('permission catalog', () => {
   it.each(guardedHandlers)(
     '$route ($permission) is open only to roles that have the permission',
     ({ permission, roles }) => {
-      const entry: { roles: readonly string[]; grantable?: readonly string[] } =
-        PERMISSION_CATALOG.find((candidate) => candidate.key === permission)!;
-      // A role the account holder can grant the permission to may reach the route too.
-      const allowed = [...entry.roles, ...(entry.grantable ?? [])];
+      const allowed = PERMISSION_CATALOG.find((entry) => entry.key === permission)!.roles;
 
       expect(roles.length).toBeGreaterThan(0);
       for (const role of roles) expect(allowed).toContain(role);

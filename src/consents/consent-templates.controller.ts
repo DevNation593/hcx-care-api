@@ -25,7 +25,7 @@ export class ConsentTemplatesController {
   }
 
   @Post('consent-templates')
-  @Roles('MASTER', 'PROFESIONAL', 'ASISTENTE')
+  @Roles('MASTER')
   @RequirePermission('treatments.manage')
   @ApiOperation({
     summary: 'Create a consent template',
@@ -47,7 +47,7 @@ export class ConsentTemplatesController {
   }
 
   @Put('consent-templates/:id/draft')
-  @Roles('MASTER', 'PROFESIONAL', 'ASISTENTE')
+  @Roles('MASTER')
   @RequirePermission('treatments.manage')
   @ApiOperation({
     summary: 'Replace the draft, or start the next version as a draft',
@@ -64,7 +64,7 @@ export class ConsentTemplatesController {
 
   @Post('consent-templates/:id/publish')
   @HttpCode(200)
-  @Roles('MASTER', 'PROFESIONAL', 'ASISTENTE')
+  @Roles('MASTER')
   @RequirePermission('treatments.manage')
   @ApiOperation({
     summary: 'Publish the draft',
@@ -80,7 +80,7 @@ export class ConsentTemplatesController {
 
   @Post('consent-template-versions/:versionId/retire')
   @HttpCode(200)
-  @Roles('MASTER', 'PROFESIONAL', 'ASISTENTE')
+  @Roles('MASTER')
   @RequirePermission('treatments.manage')
   @ApiOperation({
     summary: 'Retire a published version',
