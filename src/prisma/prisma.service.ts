@@ -70,6 +70,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       'userPermission',
       'patientFile',
       'professionalBranch',
+      'treatment',
+      'treatmentVersion',
+      'consentTemplate',
+      'consentTemplateVersion',
+      'consentDocument',
+      'consentSignature',
+      'consentEvent',
+      'treatmentSession',
       'professionalProfile',
       'user',
       'refreshToken',
@@ -130,6 +138,18 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     const orderedModels = [
       'auditLog',
+      // Consent evidence restricts deleting its document, so it goes first.
+      'consentEvent',
+      'consentSignature',
+      // Sessions restrict deleting their record, encounter, version and consent document.
+      'treatmentSession',
+      'consentDocument',
+      // Treatment versions restrict deleting their form definition and consent version, so
+      // they go before the form definitions and after the sessions and documents using them.
+      'treatmentVersion',
+      'treatment',
+      'consentTemplateVersion',
+      'consentTemplate',
       'specialtyRecord',
       // Form definitions restrict deleting while answers exist, so they go after the records.
       'formDefinition',
