@@ -95,7 +95,7 @@ export class TreatmentSessionsController {
   @ApiOperation({
     summary: 'Present the consent the treatment requires - Its professional only',
     description:
-      'Renders the pinned consent template version with the patient, treatment, professional and date. Returns the document already presented, if any. Includes the title and body. 409 TREATMENT_SESSION_INVALID_TRANSITION when the session does not take a consent now.',
+      'Renders the pinned consent template version with the patient, treatment, professional and date. Returns the document already presented, if any. Includes the title and body. 409 CONSENT_NOT_REQUIRED when the treatment requires none, 409 TREATMENT_SESSION_INVALID_TRANSITION when the session does not take a consent now.',
   })
   presentConsent(
     @Param('tenantId') tenantId: string,

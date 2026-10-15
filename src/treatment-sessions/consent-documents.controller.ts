@@ -59,7 +59,7 @@ export class ConsentDocumentsController {
   @ApiOperation({
     summary: 'Revoke a signed consent - Professional of the session or account holder',
     description:
-      'A CONSENTED session ends as CONSENT_REVOKED and its encounter is closed; a session in any other state is left as it is. 409 CONSENT_DOCUMENT_INVALID_STATE unless SIGNED.',
+      'A CONSENTED session ends as CONSENT_REVOKED and its encounter is closed; a session in any other state is left as it is. Other sessions that reused it and are still CONSENTED go back to READY_FOR_CONSENT. 409 CONSENT_DOCUMENT_INVALID_STATE unless SIGNED.',
   })
   revoke(
     @Param('tenantId') tenantId: string,

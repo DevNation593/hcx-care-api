@@ -119,13 +119,20 @@ export class ConsentDocumentsService {
     actor: ClinicalActor,
   ): Promise<ConsentDocumentView> {
     return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
-      const { session, version } = await this.sessions.loadForCommand(
-        tx,
-        tenantId,
-        sessionId,
-        actor,
-        'PRESENT_CONSENT',
-      );
+      // As loadForCommand, but a treatment without consent is told apart from a wrong moment.
+      const { session, version } = await this.sessions.findSession(tx, tenantId, sessionId);
+      if (session.professionalId !== actor.userId) {
+        throw clinicalRecordForbidden('Solo el profesional de la atención puede registrar en ella');
+      }
+      const policy = parseTreatmentRequirements(version.requirements);
+      if (!policy.informedConsent.required) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'CONSENT_NOT_REQUIRED',
+          message: 'Este tratamiento no requiere consentimiento informado.',
+        });
+      }
+      assertCommandAllowed(session.status, 'PRESENT_CONSENT', policy);
 
       const existing = await tx.consentDocument.findFirst({
         where: { tenantId, treatmentSessionId: session.id, status: 'PRESENTED' },
@@ -479,7 +486,8 @@ export class ConsentDocumentsService {
   /**
    * Revokes a signed document, by the session's professional or the tenant MASTER. Its own
    * session ends as CONSENT_REVOKED (closing its encounter) only while it is CONSENTED; a
-   * session in any other state is left alone.
+   * session in any other state is left alone. Other sessions that reused it and are still
+   * CONSENTED go back to READY_FOR_CONSENT without it.
    */
   async revoke(
     tenantId: string,
@@ -527,6 +535,33 @@ export class ConsentDocumentsService {
           patientId: session.patientId,
           before: snapshotTreatmentSession(session),
           after: snapshotTreatmentSession(revokedSession),
+        });
+      }
+
+      // Later sessions that reused this consent and have not started go back to the consent step.
+      const reusing = await tx.treatmentSession.findMany({
+        where: {
+          tenantId,
+          consentDocumentId: documentId,
+          status: 'CONSENTED',
+          id: { not: session.id },
+        },
+        select: { id: true },
+      });
+      for (const { id } of reusing) {
+        const { session: reused } = await this.sessions.findSession(tx, tenantId, id);
+        const returned = await this.sessions.transition(tx, reused, {
+          status: 'READY_FOR_CONSENT',
+          consentDocument: { disconnect: true },
+        });
+        sessionEntries.push({
+          action: 'UPDATE',
+          entity: 'TREATMENT_SESSION',
+          entityId: reused.id,
+          patientId: reused.patientId,
+          before: snapshotTreatmentSession(reused),
+          after: snapshotTreatmentSession(returned),
+          reason: 'Consentimiento revocado',
         });
       }
 

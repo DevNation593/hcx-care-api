@@ -161,7 +161,7 @@ describe('ConsentDocumentsService', () => {
     tenant: { findUnique: jest.fn() },
     appointment: { updateMany: jest.fn() },
     encounter: { findFirst: jest.fn(), update: jest.fn() },
-    treatmentSession: { findFirst: jest.fn(), update: jest.fn() },
+    treatmentSession: { findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     consentTemplateVersion: { findFirst: jest.fn() },
     consentDocument: {
       findFirst: jest.fn(),
@@ -234,11 +234,13 @@ describe('ConsentDocumentsService', () => {
           : templateVersion(3, { id: where.id }),
       ),
     );
-    db.treatmentSession.update.mockImplementation(({ data }) =>
+    db.treatmentSession.findMany.mockResolvedValue([]);
+    db.treatmentSession.update.mockImplementation(({ where, data }) =>
       Promise.resolve(
         session({
+          id: where.id,
           status: data.status,
-          consentDocumentId: data.consentDocument?.connect.id ?? null,
+          consentDocumentId: data.consentDocument?.connect?.id ?? null,
           version: 4,
         }),
       ),
@@ -350,9 +352,29 @@ describe('ConsentDocumentsService', () => {
 
       await expect(service.present('tenant-1', 'session-1', professional)).rejects.toMatchObject({
         status: 409,
-        response: { code: 'TREATMENT_SESSION_INVALID_TRANSITION' },
+        response: { code: 'CONSENT_NOT_REQUIRED' },
       });
       expect(db.consentDocument.create).not.toHaveBeenCalled();
+    });
+
+    it('checks the professional before telling whether the treatment needs a consent', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(loaded(noConsentPolicy));
+
+      await expect(service.present('tenant-1', 'session-1', colleague)).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'CLINICAL_RECORD_FORBIDDEN' },
+      });
+    });
+
+    it('is refused once the session no longer takes a consent', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(
+        loaded(consentPolicy, { status: 'IN_PROGRESS' }),
+      );
+
+      await expect(service.present('tenant-1', 'session-1', professional)).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'TREATMENT_SESSION_INVALID_TRANSITION' },
+      });
     });
 
     it('is refused to anyone but the professional of the session', async () => {
@@ -646,6 +668,26 @@ describe('ConsentDocumentsService', () => {
   });
 
   describe('revoke', () => {
+    /** Sessions stored by id; findFirst and findMany answer from them as the database would. */
+    const storeSessions = (rows: ReturnType<typeof loaded>[]) => {
+      db.treatmentSession.findFirst.mockImplementation(({ where }) =>
+        Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
+      );
+      db.treatmentSession.findMany.mockImplementation(({ where }) =>
+        Promise.resolve(
+          rows
+            .filter(
+              (row) =>
+                row.tenantId === where.tenantId &&
+                row.consentDocumentId === where.consentDocumentId &&
+                row.status === where.status &&
+                row.id !== where.id.not,
+            )
+            .map(({ treatmentVersion: _version, ...row }) => row),
+        ),
+      );
+    };
+
     const signedDocument = () =>
       document({ status: 'SIGNED', signedAt: new Date(), pdfStorageKey: 'k', pdfChecksum: 'x' });
 
@@ -691,6 +733,62 @@ describe('ConsentDocumentsService', () => {
       expect(auditRows()).toEqual([
         expect.objectContaining({ action: 'UPDATE', entity: 'CONSENT_DOCUMENT' }),
       ]);
+    });
+
+    it('returns the sessions that reused the consent and have not started to the consent step', async () => {
+      storeSessions([
+        loaded(consentPolicy, { status: 'CONSENTED', consentDocumentId: 'doc-1' }),
+        loaded(consentPolicy, {
+          id: 'session-2',
+          encounterId: 'encounter-2',
+          status: 'CONSENTED',
+          consentDocumentId: 'doc-1',
+          version: 7,
+        }),
+        loaded(consentPolicy, {
+          id: 'session-3',
+          encounterId: 'encounter-3',
+          status: 'IN_PROGRESS',
+          consentDocumentId: 'doc-1',
+          version: 9,
+        }),
+      ]);
+
+      await service.revoke('tenant-1', 'doc-1', professional, { reason: 'Cambió de opinión' });
+
+      expect(db.treatmentSession.findMany.mock.calls[0][0].where).toEqual({
+        tenantId: 'tenant-1',
+        consentDocumentId: 'doc-1',
+        status: 'CONSENTED',
+        id: { not: 'session-1' },
+      });
+      const updates = db.treatmentSession.update.mock.calls.map(([args]) => args);
+      expect(updates).toEqual([
+        {
+          where: { id: 'session-1', version: 3 },
+          data: { status: 'CONSENT_REVOKED', version: { increment: 1 } },
+        },
+        {
+          where: { id: 'session-2', version: 7 },
+          data: {
+            status: 'READY_FOR_CONSENT',
+            consentDocument: { disconnect: true },
+            version: { increment: 1 },
+          },
+        },
+      ]);
+      // Only the document's own session ends, so only its encounter closes.
+      expect(db.encounter.update).toHaveBeenCalledTimes(1);
+      expect(db.encounter.findFirst.mock.calls[0][0].where.id).toBe('encounter-1');
+
+      const reused = auditRows().find((row: { entityId: string }) => row.entityId === 'session-2');
+      expect(reused).toMatchObject({ action: 'UPDATE', entity: 'TREATMENT_SESSION' });
+      expect(cipher.decrypt('tenant-1', reused.reason)).toBe('Consentimiento revocado');
+      const after = (cipher.decryptJson('tenant-1', reused.changes) as { after: object }).after;
+      expect(after).toMatchObject({ status: 'READY_FOR_CONSENT', consentDocumentId: null });
+      expect(auditRows().some((row: { entityId: string }) => row.entityId === 'session-3')).toBe(
+        false,
+      );
     });
 
     it('lets the account holder revoke and records them as the actor', async () => {
