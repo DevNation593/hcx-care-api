@@ -574,6 +574,125 @@ describe('SpecialtyRecordsService', () => {
     });
   });
 
+  describe('writePinnedForm', () => {
+    // Version 2 asks for a select; version 3 (the current one) asks for free text instead.
+    const v2Schema = customSchema;
+    const v3Schema = {
+      sections: [
+        {
+          key: 'injury',
+          title: 'Lesión',
+          fields: [{ key: 'injuryText', label: 'Lesión', type: 'text', required: true }],
+        },
+      ],
+    };
+    const input = (overrides = {}) => ({
+      encounterId: 'encounter-1',
+      formDefinitionId: 'form-1',
+      formVersion: 2,
+      data: { injuryType: 'LABORAL' },
+      ...overrides,
+    });
+    const write = (overrides = {}, actor = psychologist) =>
+      service.writePinnedForm(db as never, 'tenant-1', 'patient-1', actor, input(overrides));
+
+    beforeEach(() => {
+      db.formDefinition.findFirst.mockResolvedValue({ id: 'form-1', currentVersion: 3 });
+      db.formDefinitionVersion.findFirst.mockImplementation(({ where }) =>
+        Promise.resolve(
+          where.version === 2
+            ? { version: 2, schema: v2Schema, formDefinition: { name: 'Ficha de lesión' } }
+            : where.version === 3
+              ? { version: 3, schema: v3Schema, formDefinition: { name: 'Ficha de lesión' } }
+              : null,
+        ),
+      );
+      db.encounter.findFirst.mockResolvedValue({ professionalId: 'psy', status: 'OPEN' });
+    });
+
+    it('validates against the pinned version, not the current one, and stores it in the encounter', async () => {
+      const written = await write();
+
+      expect(db.formDefinitionVersion.findFirst.mock.calls[0][0].where).toEqual({
+        formDefinitionId: 'form-1',
+        version: 2,
+        formDefinition: { tenantId: 'tenant-1' },
+      });
+      expect(created()).toMatchObject({
+        tenantId: 'tenant-1',
+        patientId: 'patient-1',
+        professionalId: 'psy',
+        specialtyId: 'psychology',
+        moduleKey: 'custom.form-1',
+        formDefinitionId: 'form-1',
+        schemaVersion: 2,
+        encounterId: 'encounter-1',
+        data: { injuryType: 'LABORAL' },
+      });
+      expect(written).toEqual({ id: 'record-1' });
+      expect(auditRows()).toEqual([
+        expect.objectContaining({ action: 'CREATE', entity: 'SPECIALTY_RECORD' }),
+      ]);
+    });
+
+    it('rejects data that only the current version accepts', async () => {
+      await expect(write({ data: { injuryText: 'Esguince' } })).rejects.toMatchObject({
+        status: 422,
+        response: { code: 'CLINICAL_RECORD_INVALID' },
+      });
+      expect(db.specialtyRecord.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a pinned version that does not exist in the tenant', async () => {
+      await expect(write({ formVersion: 7 })).rejects.toMatchObject({
+        status: 400,
+        response: { code: 'CLINICAL_MODULE_UNKNOWN' },
+      });
+    });
+
+    it('corrects the record it is given: bumps its version and audits both states', async () => {
+      db.specialtyRecord.findFirst.mockResolvedValue(
+        record({
+          professionalId: 'psy',
+          moduleKey: 'custom.form-1',
+          formDefinitionId: 'form-1',
+          schemaVersion: 2,
+          data: { injuryType: 'DEPORTIVA' },
+        }),
+      );
+
+      const written = await write({ recordId: 'record-1' });
+
+      expect(db.specialtyRecord.create).not.toHaveBeenCalled();
+      expect(db.specialtyRecord.update.mock.calls[0][0]).toMatchObject({
+        where: { id: 'record-1' },
+        data: { data: { injuryType: 'LABORAL' }, version: { increment: 1 } },
+      });
+      expect(written).toEqual({ id: 'record-1' });
+      expect(auditRows()).toEqual([
+        expect.objectContaining({
+          action: 'UPDATE',
+          entity: 'SPECIALTY_RECORD',
+          entityId: 'record-1',
+          changes: {
+            before: expect.objectContaining({ version: 1, data: { injuryType: 'DEPORTIVA' } }),
+            after: expect.objectContaining({ version: 2, data: { injuryType: 'LABORAL' } }),
+          },
+        }),
+      ]);
+    });
+
+    it('lets only the author correct the record', async () => {
+      db.specialtyRecord.findFirst.mockResolvedValue(record({ professionalId: 'psy' }));
+
+      await expect(write({ recordId: 'record-1' }, dentist)).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'CLINICAL_RECORD_FORBIDDEN' },
+      });
+      expect(db.specialtyRecord.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('update', () => {
     const current = record({
       schemaVersion: 2,

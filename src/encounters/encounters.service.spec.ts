@@ -332,6 +332,57 @@ describe('EncountersService', () => {
     });
   });
 
+  describe('an encounter that belongs to a treatment session', () => {
+    const managed = () => encounter({ treatmentSession: { id: 'session-1' } });
+    const refusal = { status: 409, response: { code: 'ENCOUNTER_MANAGED_BY_SESSION' } };
+
+    beforeEach(() => db.encounter.findFirst.mockResolvedValue(managed()));
+
+    it('cannot be closed from the encounters routes', async () => {
+      await expect(
+        service.close('tenant-1', 'patient-1', 'encounter-1', physio, {}),
+      ).rejects.toMatchObject(refusal);
+      expect(db.encounter.update).not.toHaveBeenCalled();
+    });
+
+    it('cannot be edited from the encounters routes', async () => {
+      await expect(
+        service.update('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' }),
+      ).rejects.toMatchObject(refusal);
+      expect(db.encounter.update).not.toHaveBeenCalled();
+    });
+
+    it('cannot be deleted from the encounters routes', async () => {
+      await expect(
+        service.delete('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' }),
+      ).rejects.toMatchObject(refusal);
+      expect(db.encounter.update).not.toHaveBeenCalled();
+    });
+
+    it('is closed by its session through closeEncounter', async () => {
+      const closed = await service.closeEncounter(
+        db as never,
+        'tenant-1',
+        'encounter-1',
+        physio,
+        ' Procedimiento sin complicaciones ',
+      );
+
+      expect(db.encounter.findFirst.mock.calls[0][0].where).toEqual({
+        id: 'encounter-1',
+        tenantId: 'tenant-1',
+        deletedAt: null,
+      });
+      expect(db.encounter.update.mock.calls[0][0].data).toEqual({
+        status: 'CLOSED',
+        closedAt: expect.any(Date),
+        summary: 'Procedimiento sin complicaciones',
+        version: { increment: 1 },
+      });
+      expect(closed.status).toBe('CLOSED');
+    });
+  });
+
   describe('assertOpenEncounter', () => {
     const check = (actor = physio) =>
       assertOpenEncounter(

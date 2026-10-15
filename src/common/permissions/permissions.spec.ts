@@ -14,6 +14,7 @@ import { PatientsController } from '../../patients/patients.controller';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RecordDocumentsController } from '../../record-documents/record-documents.controller';
 import { SpecialtyRecordsController } from '../../specialty-records/specialty-records.controller';
+import { TreatmentSessionsController } from '../../treatment-sessions/treatment-sessions.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { UserPermissionsService } from '../../users/user-permissions.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -45,6 +46,7 @@ const controllers: Controller[] = [
   RecordDocumentsController,
   ConsentTemplatesController,
   TreatmentsController,
+  TreatmentSessionsController,
 ];
 
 /** Every handler that names a permission, with the roles the role guard lets through. */
@@ -152,6 +154,7 @@ describe('permission catalog', () => {
         'record-documents.controller.ts',
         'specialty-records.controller.ts',
         'treatments.controller.ts',
+        'treatment-sessions.controller.ts',
       ].sort(),
     );
   });
