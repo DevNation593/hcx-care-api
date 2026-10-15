@@ -1,4 +1,4 @@
-import { deflateSync } from 'zlib';
+import { deflateSync, inflateSync } from 'zlib';
 import { ConsentPdfInput, renderConsentPdf } from './consent-pdf';
 
 /** A valid 2x2 RGB PNG built in memory, so the test needs no fixture file. */
@@ -34,6 +34,33 @@ function tinyPng(): Buffer {
     chunk('IDAT', deflateSync(pixels)),
     chunk('IEND', Buffer.alloc(0)),
   ]);
+}
+
+/**
+ * Reads back the text of a pdfkit document: inflates every content stream and decodes the
+ * hex strings of its TJ operators (standard fonts are written as Latin-1 bytes, with kerning
+ * numbers in between). One entry per text line.
+ */
+function pdfTextLines(pdf: Buffer): string[] {
+  const raw = pdf.toString('latin1');
+  const lines: string[] = [];
+  const streams = /stream\r?\n/g;
+  let match: RegExpExecArray | null;
+  while ((match = streams.exec(raw))) {
+    const start = match.index + match[0].length;
+    const end = raw.indexOf('endstream', start);
+    let content: string;
+    try {
+      content = inflateSync(pdf.subarray(start, end)).toString('latin1');
+    } catch {
+      continue; // not a Flate stream
+    }
+    for (const operator of content.matchAll(/\[([^\]]*)\]\s*TJ/g)) {
+      const hex = [...operator[1].matchAll(/<([0-9a-fA-F]*)>/g)].map((part) => part[1]).join('');
+      lines.push(Buffer.from(hex, 'hex').toString('latin1'));
+    }
+  }
+  return lines;
 }
 
 const input = (overrides: Partial<ConsentPdfInput> = {}): ConsentPdfInput => ({
@@ -96,5 +123,67 @@ describe('renderConsentPdf', () => {
     const short = await renderConsentPdf(input());
     const long = await renderConsentPdf(input({ body: 'Párrafo de prueba.\n\n'.repeat(200) }));
     expect(long.length).toBeGreaterThan(short.length);
+  });
+
+  it('prints every required field', async () => {
+    const text = pdfTextLines(
+      await renderConsentPdf(
+        input({
+          body: 'Autorizo el procedimiento descrito.',
+          signature: {
+            ...input().signature,
+            signerName: 'María Pérez',
+            signerRole: 'REPRESENTATIVE',
+            signerIdentification: '0999888777',
+            relationship: 'Madre',
+            marketingPhotos: true,
+          },
+        }),
+      ),
+    ).join('\n');
+    for (const expected of [
+      'Clínica Aurora',
+      'Av. Principal 123',
+      'Consentimiento informado',
+      'Ana Pérez',
+      'Identificación: 0102030405',
+      'Toxina botulínica (versión 2)',
+      'Autorizo el procedimiento descrito.',
+      'María Pérez',
+      'Representante (Madre)',
+      'Identificación: 0999888777',
+      'Comprendió la información: Sí',
+      'Sus preguntas fueron respondidas: Sí',
+      'Autoriza el uso de fotografías con fines de difusión: Sí',
+      'Registrado por Dr. Luis Mora',
+      `Huella de la plantilla: ${'a'.repeat(64)}`,
+      `(SHA-256): ${'b'.repeat(64)}`,
+    ]) {
+      expect(text).toContain(expected);
+    }
+    expect(text).toContain('Versión de la plantilla: 3');
+  });
+
+  it('prints a patient signer and a declined declaration', async () => {
+    const text = pdfTextLines(
+      await renderConsentPdf(
+        input({ signature: { ...input().signature, marketingPhotos: false } }),
+      ),
+    ).join('\n');
+    expect(text).toContain('Paciente');
+    expect(text).not.toContain('Representante');
+    expect(text).toContain('Autoriza el uso de fotografías con fines de difusión: No');
+  });
+
+  it('prints the signing time in the tenant zone and names the zone', async () => {
+    const text = pdfTextLines(await renderConsentPdf(input())).join('\n');
+    // 15:30 UTC is 10:30 in Guayaquil (UTC-5); es-EC writes a 12-hour clock.
+    expect(text).toMatch(/15 de octubre de 2026, 10:30.*\(America\/Guayaquil\)/);
+  });
+
+  it('falls back to UTC and says so when the zone is invalid', async () => {
+    const text = pdfTextLines(await renderConsentPdf(input({ timezone: 'No/Existe' }))).join('\n');
+    expect(text).toMatch(/15 de octubre de 2026, 3:30.*\(UTC\)/);
+    expect(text).not.toContain('No/Existe');
   });
 });

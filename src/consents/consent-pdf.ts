@@ -30,14 +30,17 @@ const MUTED = '#555555';
 const RULE = '#bbbbbb';
 const SIGNATURE_FIT: [number, number] = [200, 80];
 
-/** The moment of signing as the clinic reads it, falling back to UTC for an unknown zone. */
+/**
+ * The moment of signing as the clinic reads it, followed by the zone it is written in.
+ * An unknown zone falls back to UTC and says so.
+ */
 function formatSignedAt(date: Date, timeZone: string): string {
   const format = (zone: string) =>
-    new Intl.DateTimeFormat('es-EC', {
+    `${new Intl.DateTimeFormat('es-EC', {
       timeZone: zone,
       dateStyle: 'long',
       timeStyle: 'short',
-    }).format(date);
+    }).format(date)} (${zone})`;
   try {
     return format(timeZone);
   } catch {
