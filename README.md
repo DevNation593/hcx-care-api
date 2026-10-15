@@ -42,6 +42,10 @@ npm run start:dev
 - Auth login: `POST /api/v1/auth/login`
   - Requires: `email`, `password`
   - The tenant is resolved from the user's unique identity.
+- Treatments, consent templates and treatment sessions (form, consent, photos, start and
+  completion): `/api/v1/tenants/:tenantId/treatments`, `…/consent-templates`,
+  `…/patients/:patientId/treatment-sessions`, `…/treatment-sessions/:id` and
+  `…/consent-documents/:id`; see `docs/API_ENDPOINTS.md`.
 
 ## Environment notes
 
