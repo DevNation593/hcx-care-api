@@ -381,6 +381,20 @@ describe('EncountersService', () => {
       });
       expect(closed.status).toBe('CLOSED');
     });
+
+    it('is closed by another account only when the caller says it already authorized it', async () => {
+      await expect(
+        service.closeEncounter(db as never, 'tenant-1', 'encounter-1', other),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(db.encounter.update).not.toHaveBeenCalled();
+
+      await service.closeEncounter(db as never, 'tenant-1', 'encounter-1', other, undefined, {
+        anyAuthor: true,
+      });
+
+      expect(db.encounter.update).toHaveBeenCalledTimes(1);
+      expect(auditRows()[0]).toMatchObject({ action: 'UPDATE', userId: 'other' });
+    });
   });
 
   describe('assertOpenEncounter', () => {

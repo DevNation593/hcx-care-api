@@ -1,4 +1,4 @@
-import { getZonedDateParts } from './timezone';
+import { formatLongDateInZone, getZonedDateParts } from './timezone';
 
 describe('getZonedDateParts', () => {
   // Friday 2026-10-02 14:30 UTC
@@ -29,5 +29,19 @@ describe('getZonedDateParts', () => {
 
   it('falls back to the server time zone for an invalid zone', () => {
     expect(getZonedDateParts(instant, 'Not/AZone')).toEqual(getZonedDateParts(instant));
+  });
+});
+
+describe('formatLongDateInZone', () => {
+  it('writes the calendar day of the instant in the requested time zone', () => {
+    const lateUtc = new Date('2026-10-15T03:00:00.000Z');
+    expect(formatLongDateInZone(lateUtc, 'America/Guayaquil')).toBe('14 de octubre de 2026');
+    expect(formatLongDateInZone(lateUtc, 'UTC')).toBe('15 de octubre de 2026');
+  });
+
+  it('falls back to UTC when the zone is missing or invalid', () => {
+    const lateUtc = new Date('2026-10-15T03:00:00.000Z');
+    expect(formatLongDateInZone(lateUtc, null)).toBe('15 de octubre de 2026');
+    expect(formatLongDateInZone(lateUtc, 'Not/AZone')).toBe('15 de octubre de 2026');
   });
 });

@@ -26,6 +26,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { PrismaService } from './prisma/prisma.service';
 import { SpecialtyRecordsController } from './specialty-records/specialty-records.controller';
 import { SpecialtyRecordsModule } from './specialty-records/specialty-records.module';
+import { ConsentDocumentsController } from './treatment-sessions/consent-documents.controller';
 import { TreatmentSessionsController } from './treatment-sessions/treatment-sessions.controller';
 import { TreatmentSessionsModule } from './treatment-sessions/treatment-sessions.module';
 
@@ -68,6 +69,7 @@ describe('module wiring', () => {
       PatientFilesController,
       SpecialtyRecordsController,
       TreatmentSessionsController,
+      ConsentDocumentsController,
     ]) {
       expect(moduleRef.get(controller, { strict: false })).toBeInstanceOf(controller);
     }

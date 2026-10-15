@@ -1,9 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ClinicalAccessModule } from '../clinical-access/clinical-access.module';
 import { EncountersModule } from '../encounters/encounters.module';
+import { PatientFilesModule } from '../patient-files/patient-files.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { SpecialtyRecordsModule } from '../specialty-records/specialty-records.module';
 import { TreatmentsModule } from '../treatments/treatments.module';
+import { ConsentDocumentsController } from './consent-documents.controller';
+import { ConsentDocumentsService } from './consent-documents.service';
 import { TreatmentSessionsController } from './treatment-sessions.controller';
 import { TreatmentSessionsService } from './treatment-sessions.service';
 
@@ -14,9 +17,10 @@ import { TreatmentSessionsService } from './treatment-sessions.service';
     TreatmentsModule,
     EncountersModule,
     SpecialtyRecordsModule,
+    PatientFilesModule,
   ],
-  controllers: [TreatmentSessionsController],
-  providers: [TreatmentSessionsService],
+  controllers: [TreatmentSessionsController, ConsentDocumentsController],
+  providers: [TreatmentSessionsService, ConsentDocumentsService],
   exports: [TreatmentSessionsService],
 })
 export class TreatmentSessionsModule {}

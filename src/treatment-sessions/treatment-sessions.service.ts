@@ -470,7 +470,8 @@ export class TreatmentSessionsService {
     }
   }
 
-  private async findSession(tx: Prisma.TransactionClient, tenantId: string, sessionId: string) {
+  /** The decrypted session of the tenant with its pinned treatment version; 404 when it is not there. No authorization. */
+  async findSession(tx: Prisma.TransactionClient, tenantId: string, sessionId: string) {
     const stored = await tx.treatmentSession.findFirst({
       where: { id: sessionId, tenantId },
       include: sessionInclude,

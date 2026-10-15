@@ -291,6 +291,8 @@ export class EncountersService {
   /**
    * Closes an open encounter of the caller inside the caller's transaction, completes its
    * appointment and audits it. Treatment sessions close their own encounter through it.
+   * `anyAuthor` lets a caller that already authorized the actor close another professional's
+   * encounter (the tenant MASTER revoking a consent); the audit still names the actor.
    */
   async closeEncounter(
     tx: Prisma.TransactionClient,
@@ -298,8 +300,16 @@ export class EncountersService {
     encounterId: string,
     actor: ClinicalActor,
     summary?: string,
+    options: { anyAuthor?: boolean } = {},
   ): Promise<Encounter> {
-    const current = await this.findOwnOpen(tx, tenantId, null, encounterId, actor, 'cerrar');
+    const current = await this.findOwnOpen(
+      tx,
+      tenantId,
+      null,
+      encounterId,
+      options.anyAuthor ? null : actor,
+      'cerrar',
+    );
     const trimmed = summary?.trim();
 
     const stored = await tx.encounter.update({
@@ -449,7 +459,7 @@ export class EncountersService {
     tenantId: string,
     patientId: string | null,
     encounterId: string,
-    actor: ClinicalActor,
+    actor: ClinicalActor | null,
     verb: string,
   ) {
     const stored = await tx.encounter.findFirst({
@@ -457,7 +467,8 @@ export class EncountersService {
       include: { treatmentSession: { select: { id: true } } },
     });
     if (!stored) throw clinicalRecordNotFound('Atención no encontrada');
-    if (stored.professionalId !== actor.userId) {
+    // A null actor means the caller already decided who may act on this encounter.
+    if (actor && stored.professionalId !== actor.userId) {
       throw clinicalRecordForbidden(`Solo puedes ${verb} tus propias atenciones`);
     }
     return this.decrypt(stored);
@@ -468,7 +479,7 @@ export class EncountersService {
     tenantId: string,
     patientId: string | null,
     encounterId: string,
-    actor: ClinicalActor,
+    actor: ClinicalActor | null,
     verb: string,
   ) {
     const encounter = await this.findOwn(tx, tenantId, patientId, encounterId, actor, verb);

@@ -14,6 +14,7 @@ import { PatientsController } from '../../patients/patients.controller';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RecordDocumentsController } from '../../record-documents/record-documents.controller';
 import { SpecialtyRecordsController } from '../../specialty-records/specialty-records.controller';
+import { ConsentDocumentsController } from '../../treatment-sessions/consent-documents.controller';
 import { TreatmentSessionsController } from '../../treatment-sessions/treatment-sessions.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { UserPermissionsService } from '../../users/user-permissions.service';
@@ -47,6 +48,7 @@ const controllers: Controller[] = [
   ConsentTemplatesController,
   TreatmentsController,
   TreatmentSessionsController,
+  ConsentDocumentsController,
 ];
 
 /** Every handler that names a permission, with the roles the role guard lets through. */
@@ -146,6 +148,7 @@ describe('permission catalog', () => {
         'billing.controller.ts',
         'clinical-notes.controller.ts',
         'clinical-timeline.controller.ts',
+        'consent-documents.controller.ts',
         'consent-templates.controller.ts',
         'encounters.controller.ts',
         'next-session-plans.controller.ts',

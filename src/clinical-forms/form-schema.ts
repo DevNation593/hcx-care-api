@@ -92,8 +92,8 @@ export interface FormIssue {
 const KEY_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{0,59}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
-const SIGNATURE_PREFIX = 'data:image/png;base64,';
-const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+export const SIGNATURE_PREFIX = 'data:image/png;base64,';
+export const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 /** A signature pad produces a few kilobytes; this leaves room for a dense one and no more. */
 export const MAX_SIGNATURE_CHARS = 200_000;
 const NUMERIC_TYPES: readonly FormFieldType[] = ['integer', 'decimal', 'scale', 'calculated'];

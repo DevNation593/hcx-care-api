@@ -5,6 +5,7 @@ import { ClinicalProfileGuard } from '../clinical-access/clinical-profile.guard'
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
+import { ConsentDocumentsService } from './consent-documents.service';
 import { CreateTreatmentSessionDto, SaveSessionFormDto } from './dto/treatment-session.dto';
 import { TreatmentSessionsService } from './treatment-sessions.service';
 
@@ -13,7 +14,10 @@ import { TreatmentSessionsService } from './treatment-sessions.service';
 @RequireSection('core.specialties')
 @Controller('tenants/:tenantId')
 export class TreatmentSessionsController {
-  constructor(private readonly sessionsService: TreatmentSessionsService) {}
+  constructor(
+    private readonly sessionsService: TreatmentSessionsService,
+    private readonly consentsService: ConsentDocumentsService,
+  ) {}
 
   @Get('patients/:patientId/treatment-sessions')
   @UseGuards(ClinicalProfileGuard)
@@ -82,6 +86,23 @@ export class TreatmentSessionsController {
     @Body() dto: SaveSessionFormDto,
   ) {
     return this.sessionsService.saveForm(tenantId, id, actor, dto);
+  }
+
+  @Post('treatment-sessions/:id/consents')
+  @UseGuards(ClinicalProfileGuard)
+  @Roles('MASTER', 'PROFESIONAL')
+  @RequirePermission('clinical_records.create')
+  @ApiOperation({
+    summary: 'Present the consent the treatment requires - Its professional only',
+    description:
+      'Renders the pinned consent template version with the patient, treatment, professional and date. Returns the document already presented, if any. Includes the title and body. 409 TREATMENT_SESSION_INVALID_TRANSITION when the session does not take a consent now.',
+  })
+  presentConsent(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+  ) {
+    return this.consentsService.present(tenantId, id, actor);
   }
 
   @Get('treatment-sessions/:id/compliance')
