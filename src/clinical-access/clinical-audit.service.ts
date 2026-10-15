@@ -9,6 +9,8 @@ export const CLINICAL_AUDIT_ENTITIES: readonly AuditEntity[] = [
   'SPECIALTY_RECORD',
   'ENCOUNTER',
   'PATIENT_FILE',
+  'TREATMENT_SESSION',
+  'CONSENT_DOCUMENT',
 ];
 
 export interface ClinicalAuditEntry {

@@ -29,7 +29,7 @@ const MAX_TABLE_COLUMNS = 5;
  * The standard PDF fonts cover Latin-1 only. Anything else (an emoji, a symbol pasted from
  * another program) is replaced so that it does not come out as a different character.
  */
-const printable = (text: string) =>
+export const printable = (text: string) =>
   text
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')

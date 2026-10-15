@@ -14,12 +14,38 @@ async function bootstrap() {
   });
 
   // CORS
-  const corsOrigins = process.env.CORS_ORIGINS
+  const rawOrigins = process.env.CORS_ORIGINS
     ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
     : [process.env.FRONTEND_URL || 'http://localhost:4200'];
+  const normalizedOrigins = rawOrigins.filter(Boolean).map((origin) => origin.replace(/\/+$/, ''));
 
   app.enableCors({
-    origin: corsOrigins,
+    origin: (origin, callback) => {
+      // Allow non-browser clients (Postman, server-to-server)
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const normalizedOrigin = origin.replace(/\/+$/, '');
+      const isExactMatch = normalizedOrigins.includes(normalizedOrigin);
+      const isWildcardMatch = normalizedOrigins.some((allowed) => {
+        if (!allowed.includes('*')) return false;
+        // Supports patterns like https://*.netlify.app
+        try {
+          const allowedUrl = new URL(allowed.replace('*.', 'placeholder.'));
+          const incomingUrl = new URL(normalizedOrigin);
+          const protocolMatches = allowedUrl.protocol === incomingUrl.protocol;
+          const allowedHostSuffix = allowedUrl.hostname.replace('placeholder.', '.');
+          const hostMatches = incomingUrl.hostname.endsWith(allowedHostSuffix);
+          return protocolMatches && hostMatches;
+        } catch {
+          return false;
+        }
+      });
+
+      callback(null, isExactMatch || isWildcardMatch);
+    },
     credentials: true,
   });
 

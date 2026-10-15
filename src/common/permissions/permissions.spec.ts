@@ -6,6 +6,7 @@ import { AppointmentsController } from '../../appointments/appointments.controll
 import { BillingController } from '../../billing/billing.controller';
 import { ClinicalNotesController } from '../../clinical-notes/clinical-notes.controller';
 import { ClinicalTimelineController } from '../../clinical-timeline/clinical-timeline.controller';
+import { ConsentTemplatesController } from '../../consents/consent-templates.controller';
 import { EncountersController } from '../../encounters/encounters.controller';
 import { NextSessionPlansController } from '../../next-session-plans/next-session-plans.controller';
 import { PatientFilesController } from '../../patient-files/patient-files.controller';
@@ -13,6 +14,9 @@ import { PatientsController } from '../../patients/patients.controller';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RecordDocumentsController } from '../../record-documents/record-documents.controller';
 import { SpecialtyRecordsController } from '../../specialty-records/specialty-records.controller';
+import { ConsentDocumentsController } from '../../treatment-sessions/consent-documents.controller';
+import { TreatmentSessionsController } from '../../treatment-sessions/treatment-sessions.controller';
+import { TreatmentsController } from '../../treatments/treatments.controller';
 import { UserPermissionsService } from '../../users/user-permissions.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { ROLES_KEY } from '../decorators/roles.decorator';
@@ -41,6 +45,10 @@ const controllers: Controller[] = [
   NextSessionPlansController,
   PatientFilesController,
   RecordDocumentsController,
+  ConsentTemplatesController,
+  TreatmentsController,
+  TreatmentSessionsController,
+  ConsentDocumentsController,
 ];
 
 /** Every handler that names a permission, with the roles the role guard lets through. */
@@ -73,12 +81,28 @@ describe('permission catalog', () => {
   });
 
   it('adds what was granted only to a role that can receive it', () => {
-    expect(grantablePermissions('ASISTENTE')).toEqual(['billing.view', 'billing.create']);
-    expect(grantablePermissions('PROFESIONAL')).toEqual([]);
+    expect(grantablePermissions('ASISTENTE')).toEqual([
+      'billing.view',
+      'billing.create',
+      'treatments.manage',
+    ]);
+    expect(grantablePermissions('PROFESIONAL')).toEqual(['treatments.manage']);
     expect(effectivePermissions('ASISTENTE', [], ['billing.view'])).toContain('billing.view');
     expect(effectivePermissions('ASISTENTE', [], ['clinical_records.view'])).not.toContain(
       'clinical_records.view',
     );
+  });
+
+  it('keeps treatment and consent management with the account holder unless it is granted', () => {
+    expect(rolePermissions('MASTER')).toContain('treatments.manage');
+    expect(rolePermissions('PROFESIONAL')).not.toContain('treatments.manage');
+    expect(rolePermissions('ASISTENTE')).not.toContain('treatments.manage');
+    expect(grantablePermissions('PROFESIONAL')).toContain('treatments.manage');
+    expect(grantablePermissions('ASISTENTE')).toContain('treatments.manage');
+    expect(effectivePermissions('ASISTENTE', [], ['treatments.manage'])).toContain(
+      'treatments.manage',
+    );
+    expect(effectivePermissions('ASISTENTE', [])).not.toContain('treatments.manage');
   });
 
   it('removes what was withdrawn, except from the account holder', () => {
@@ -124,12 +148,16 @@ describe('permission catalog', () => {
         'billing.controller.ts',
         'clinical-notes.controller.ts',
         'clinical-timeline.controller.ts',
+        'consent-documents.controller.ts',
+        'consent-templates.controller.ts',
         'encounters.controller.ts',
         'next-session-plans.controller.ts',
         'patient-files.controller.ts',
         'patients.controller.ts',
         'record-documents.controller.ts',
         'specialty-records.controller.ts',
+        'treatments.controller.ts',
+        'treatment-sessions.controller.ts',
       ].sort(),
     );
   });
@@ -246,6 +274,7 @@ describe('UserPermissionsService', () => {
         ['appointments.cancel', false, 'role'],
         ['billing.view', true, 'grant'],
         ['billing.create', false, 'grant'],
+        ['treatments.manage', false, 'grant'],
       ],
     );
     expect(described.effective).not.toContain('appointments.cancel');

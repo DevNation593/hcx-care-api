@@ -360,6 +360,64 @@ The diagnosis catalog is loaded with `npm run catalog:import-diagnosis-codes -- 
 
 `GET /tenants/{tenantId}/audit-logs` (MASTER) returns `changes: null`, `reason: null` and `contentRedacted: true` for clinical entries when the viewer has no active professional profile.
 
+#### Treatments, consents and treatment sessions
+
+All of these routes need the section `core.specialties`. Under `/tenants/{tenantId}`. Errors keep the format `{ statusCode, code, message }`; the 422 that blocks a start or a completion adds `missing`, a list of `FINALIZED_MEDICAL_FORM`, `SIGNED_APPLICABLE_CONSENT`, `BEFORE_PHOTOS`, `CLINICAL_NOTES` and `AFTER_PHOTOS`. Writing the catalog takes the permission `treatments.manage`, which the account holder has and can grant to a professional or an assistant. The routes of a session need a professional profile (`403 PROFESSIONAL_NOT_AUTHORIZED` without it) and `clinical_records.*`; the signature, the form, the photos and the transitions are the professional of the session only (`403 CLINICAL_RECORD_FORBIDDEN`).
+
+**Consent templates.** A version is edited only while it is a draft; published, its text and fingerprint are fixed, and a change is a new version. Variables: `{{paciente}}`, `{{identificacion}}`, `{{tratamiento}}`, `{{profesional}}`, `{{fecha}}`.
+
+| Method | Path | Who | Result | Errors |
+|---|---|---|---|---|
+| GET | `/consent-templates` | MASTER, PROFESIONAL, ASISTENTE | Templates with the state of each version, without the text | |
+| POST | `/consent-templates` | MASTER + `treatments.manage` | 201, template with version 1 as a draft (`{ name, title, body }`) | 409 `CONSENT_TEMPLATE_NAME_TAKEN` |
+| GET | `/consent-templates/{id}` | MASTER, PROFESIONAL, ASISTENTE | Template with the text of every version | 404 `CONSENT_TEMPLATE_NOT_FOUND` |
+| PUT | `/consent-templates/{id}/draft` | MASTER + `treatments.manage` | Replaces the draft, or starts the next version as a draft (`{ title, body }`) | 404 `CONSENT_TEMPLATE_NOT_FOUND`, 409 `CONSENT_VERSION_LOCKED` |
+| POST | `/consent-templates/{id}/publish` | MASTER + `treatments.manage` | 200, the draft is published | 409 `CONSENT_VERSION_LOCKED` without a draft |
+| POST | `/consent-template-versions/{versionId}/retire` | MASTER + `treatments.manage` | 200, the version is retired; what already uses it keeps it | 409 `CONSENT_VERSION_LOCKED` |
+
+**Treatments.** Price and requirements live in immutable versions; a session pins the version it was opened with.
+
+| Method | Path | Who | Result | Errors |
+|---|---|---|---|---|
+| GET | `/treatments?active=` | MASTER, PROFESIONAL, ASISTENTE | Treatments with their current version | |
+| POST | `/treatments` | MASTER + `treatments.manage` | 201, treatment with version 1 (`{ name, category?, specialtyId?, version: { price, taxRatePercent, durationMinutes, formDefinitionId?, formVersion?, consentTemplateVersionId?, requirements? } }`) | 400 `TREATMENT_REQUIREMENTS_INVALID` (with `issues`), 409 `TREATMENT_NAME_TAKEN` |
+| GET | `/treatments/{id}` | MASTER, PROFESIONAL, ASISTENTE | Treatment with every version | 404 `TREATMENT_NOT_FOUND` |
+| PATCH | `/treatments/{id}` | MASTER + `treatments.manage` | Name, category, specialty or `isActive` | 404 `TREATMENT_NOT_FOUND`, 409 `TREATMENT_NAME_TAKEN` |
+| POST | `/treatments/{id}/versions` | MASTER + `treatments.manage` | 201, new version, which becomes the current one | 400 `TREATMENT_REQUIREMENTS_INVALID`, 409 `TREATMENT_VERSION_CONFLICT` |
+
+`requirements` takes `medicalForm.required`, `informedConsent.{ required, validityDays }`, `photos.{ minimumBefore, minimumAfter }` and `clinicalNotes.requiredForCompletion`; keys left out take their defaults (nothing required).
+
+**Treatment sessions.** A session lives on its own `PROCEDURE` encounter, which the encounter routes cannot edit, close or delete (`409 ENCOUNTER_MANAGED_BY_SESSION`). Status: `INTAKE_IN_PROGRESS` (waiting for the form) → `READY_FOR_CONSENT` → `CONSENTED` → `IN_PROGRESS` → `CLINICAL_COMPLETE`; `CONSENT_REFUSED`, `CONSENT_REVOKED`, `CANCELLED` and `NO_SHOW` end it. A treatment that requires no consent starts in `READY_FOR_CONSENT` and starts from there; a consent signed earlier by the patient for the same treatment, still within `validityDays`, puts a new session straight into `CONSENTED`. Every time (signature, start, completion, cancellation) is the server time and no body carries it. A command the status does not allow answers `409 TREATMENT_SESSION_INVALID_TRANSITION` with the current `status`.
+
+| Method | Path | Who | Result | Errors |
+|---|---|---|---|---|
+| GET | `/patients/{patientId}/treatment-sessions` | MASTER, PROFESIONAL (profile) | Sessions of the patient, newest first, without clinical text; audited | 404 patient |
+| POST | `/patients/{patientId}/treatment-sessions` | MASTER, PROFESIONAL (profile) | 201, session on a new encounter (`{ treatmentId, appointmentId?, branchId? }`); the appointment becomes `IN_PROGRESS` | 403 `TREATMENT_SPECIALTY_MISMATCH`, 404 `TREATMENT_NOT_FOUND`, 409 `TREATMENT_INACTIVE`, 409 `ENCOUNTER_ALREADY_OPEN` |
+| GET | `/treatment-sessions/{id}` | MASTER, PROFESIONAL (profile) | Session with its `professional` (`{ id, firstName, lastName }`), policy, form (schema and answers), consents (without body, with `pdfChecksum` and `signature`), `timezone` (`America/Guayaquil` when the clinic has none), photos, `requirements: { start, complete }` and `allowedCommands`, which is empty for anyone but the session professional (a MASTER keeps `REVOKE_CONSENT`); audited | 404 `TREATMENT_SESSION_NOT_FOUND` |
+| PUT | `/treatment-sessions/{id}/form` | Session professional | The whole answers (`{ data }`), validated against the pinned form version; the first save moves the session on | 422 `CLINICAL_RECORD_INVALID`, 409 `TREATMENT_SESSION_INVALID_TRANSITION` (started, or no form required) |
+| POST | `/treatment-sessions/{id}/consents` | Session professional | 201, the pinned consent rendered for the patient, with title and body; a presented one is returned again | 409 `CONSENT_NOT_REQUIRED`, 409 `TREATMENT_SESSION_INVALID_TRANSITION` |
+| POST | `/treatment-sessions/{id}/media` | Session professional | 201, multipart `file`, `phase` (`BEFORE`, `AFTER`, `OTHER`), `description?`; BEFORE and AFTER take JPG or PNG, JPG loses its EXIF/XMP except the orientation; stored encrypted | 400 `PATIENT_FILE_INVALID`, 409 `SESSION_PHOTO_PHASE_NOT_ALLOWED`, 413 `STORAGE_LIMIT_REACHED` |
+| POST | `/treatment-sessions/{id}/start` | Session professional | 201, `IN_PROGRESS`; no body | 422 `TREATMENT_REQUIREMENTS_MISSING` (with `missing`), 409 `TREATMENT_SESSION_INVALID_TRANSITION` |
+| POST | `/treatment-sessions/{id}/complete` | Session professional | 201, `CLINICAL_COMPLETE`; `{ procedureNotes? }` is stored encrypted and becomes the summary of the closed encounter | 422 `TREATMENT_REQUIREMENTS_MISSING` (with `missing`), 409 `TREATMENT_SESSION_INVALID_TRANSITION` |
+| POST | `/treatment-sessions/{id}/cancel` | Session professional | 201, `CANCELLED`; `{ reason }` required (3–1000 characters after trimming), stored encrypted. Its open appointment is cancelled when the procedure had not started and `COMPLETED` (the patient attended) when it had; the encounter closes | 400 validation, 409 `TREATMENT_SESSION_INVALID_TRANSITION` once ended |
+| POST | `/treatment-sessions/{id}/no-show` | Session professional | 201, `NO_SHOW`; its open appointment is `NO_SHOW` and the encounter closes | 409 `TREATMENT_SESSION_INVALID_TRANSITION` once started or ended |
+| GET | `/treatment-sessions/{id}/compliance` | MASTER, PROFESIONAL + `billing.view` (an ASISTENTE once granted it) | `{ status, missing }` only, no clinical content: what is missing to start, and after the start to complete; always `missing: []` once `CLINICAL_COMPLETE` (checked at the close) | 404 `TREATMENT_SESSION_NOT_FOUND` |
+
+In the session detail each entry of `consentDocuments` carries `signature: { signerName, signerRole: PATIENT | REPRESENTATIVE, relationship: string | null } | null` (decrypted; `null` until it is signed; never the identification, the signature image, the operator or storage keys), and the detail carries `timezone`, the clinic's IANA time zone (`America/Guayaquil` when the tenant has no settings), in which to show the signature time.
+
+The form of a session is fixed once it is `IN_PROGRESS` or ended: correcting or removing its record through `/specialty-records` answers `409 TREATMENT_SESSION_INVALID_TRANSITION`.
+
+**Consent documents.** A document keeps the template version and the text it was presented with, whatever is published afterwards. Signing stores the drawn signature (PNG data URL) and a PDF, both encrypted, and the SHA-256 of the PDF (`pdfChecksum`); each download is checked against it.
+
+| Method | Path | Who | Result | Errors |
+|---|---|---|---|---|
+| POST | `/consent-documents/{id}/sign` | Session professional | 201, the document `SIGNED` with the same `signature: { signerName, signerRole, relationship }` as the session detail, session `CONSENTED` (`{ signerRole: PATIENT \| REPRESENTATIVE, signerName, signerIdentification?, relationship?, understood, questionsAnswered, marketingPhotos?, signature }`) | 400 `CONSENT_SIGNATURE_INVALID`, 400 `CONSENT_RELATIONSHIP_REQUIRED` (a representative), 422 `CONSENT_DECLARATIONS_REQUIRED`, 422 `CONSENT_REPRESENTATIVE_REQUIRED` (patient under 18 signing as `PATIENT`), 409 `CONSENT_DOCUMENT_INVALID_STATE` |
+| POST | `/consent-documents/{id}/refuse` | Session professional | 201, `REFUSED`, session `CONSENT_REFUSED`, encounter closed (`{ reason }`) | 409 `CONSENT_DOCUMENT_INVALID_STATE` unless presented |
+| POST | `/consent-documents/{id}/revoke` | Session professional or MASTER | 201, `REVOKED` (`{ reason }`); a `CONSENTED` session ends as `CONSENT_REVOKED` with its encounter closed; other sessions that reused it and are still `CONSENTED` return to `READY_FOR_CONSENT` | 409 `CONSENT_DOCUMENT_INVALID_STATE` unless signed |
+| GET | `/consent-documents/{id}/pdf` | MASTER, PROFESIONAL (profile) with `clinical_records.view` | `application/pdf`; audited | 404 `CONSENT_DOCUMENT_NOT_FOUND`, 500 `CONSENT_PDF_INTEGRITY` |
+
+Documents and sessions of another clinic answer `404 TREATMENT_SESSION_NOT_FOUND` / `CONSENT_DOCUMENT_NOT_FOUND` under the caller's own tenant, and `403` under the other tenant's id. Reads and writes of sessions and documents are audited (`TREATMENT_SESSION`, `CONSENT_DOCUMENT`).
+
 ### 7. Create Next Session Plan
 
 ```bash

@@ -135,6 +135,8 @@ enum AuditEntity {
   APPOINTMENT
   USER
   TENANT
+  TREATMENT_SESSION
+  CONSENT_DOCUMENT
 }
 
 enum EncounterType {
@@ -164,6 +166,50 @@ enum InvoiceStatus {
 enum InvoiceDocumentType {
   INVOICE
   CREDIT_NOTE
+}
+
+enum ConsentTemplateVersionStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
+enum ConsentDocumentStatus {
+  PRESENTED
+  SIGNED
+  REFUSED
+  REVOKED
+}
+
+enum ConsentEventType {
+  PRESENTED
+  SIGNED
+  REFUSED
+  REVOKED
+}
+
+enum ConsentSignerRole {
+  PATIENT
+  REPRESENTATIVE
+}
+
+enum TreatmentSessionStatus {
+  INTAKE_IN_PROGRESS
+  READY_FOR_CONSENT
+  CONSENTED
+  IN_PROGRESS
+  CLINICAL_COMPLETE
+  CONSENT_REFUSED
+  CONSENT_REVOKED
+  CANCELLED
+  NO_SHOW
+}
+
+// Where in the procedure a session photo was taken.
+enum SessionMediaPhase {
+  BEFORE
+  AFTER
+  OTHER
 }
 
 // ============================================
@@ -215,6 +261,14 @@ model Tenant {
   userPermissions      UserPermission[]
   patientFiles         PatientFile[]
   professionalBranches ProfessionalBranch[]
+  treatments              Treatment[]
+  treatmentVersions       TreatmentVersion[]
+  consentTemplates        ConsentTemplate[]
+  consentTemplateVersions ConsentTemplateVersion[]
+  consentDocuments        ConsentDocument[]
+  consentSignatures       ConsentSignature[]
+  consentEvents           ConsentEvent[]
+  treatmentSessions       TreatmentSession[]
 
   @@index([isActive])
 }
@@ -241,6 +295,7 @@ model Branch {
   appointments  Appointment[]
   encounters    Encounter[]
   professionals ProfessionalBranch[]
+  treatmentSessions TreatmentSession[]
 
   @@unique([tenantId, name])
   @@index([tenantId, isActive])
@@ -585,6 +640,9 @@ model User {
   branchAssignments        ProfessionalBranch[]
   uploadedFiles            PatientFile[]
   issuedInvoices           Invoice[]             @relation("IssuedInvoices")
+  treatmentSessions        TreatmentSession[]
+  consentEvents            ConsentEvent[]
+  consentSignaturesTaken   ConsentSignature[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -682,6 +740,8 @@ model Patient {
   invoices         Invoice[]
   encounters              Encounter[]
   files            PatientFile[]
+  treatmentSessions TreatmentSession[]
+  consentDocuments  ConsentDocument[]
 
   @@index([tenantId])
   @@index([tenantId, isActive])
@@ -734,6 +794,7 @@ model Specialty {
   records                 SpecialtyRecord[]
   formDefinitions         FormDefinition[]
   encounters              Encounter[]
+  treatments              Treatment[]
 }
 
 model SpecialtyRecord {
@@ -778,6 +839,8 @@ model SpecialtyRecord {
   @@index([appointmentId])
   @@index([formDefinitionId])
   @@index([encounterId])
+
+  treatmentSession TreatmentSession?
 }
 
 // One attention of a patient by a professional. It groups the records written during it.
@@ -820,6 +883,7 @@ model Encounter {
   records SpecialtyRecord[]
   notes   ClinicalNote[]
   files   PatientFile[]
+  treatmentSession TreatmentSession?
 
   @@index([tenantId, patientId, startedAt])
   @@index([tenantId, professionalId, status])
@@ -848,6 +912,11 @@ model PatientFile {
   sizeBytes  Int
   storageKey String @unique
 
+  // Set for photos taken during a treatment session; null for every other file.
+  treatmentSessionId String?
+  treatmentSession   TreatmentSession? @relation(fields: [treatmentSessionId], references: [id], onDelete: SetNull)
+  phase              SessionMediaPhase?
+
   // Clinical files are never removed physically: removal sets deletedAt.
   deletedAt      DateTime?
   deletedById    String?
@@ -857,6 +926,7 @@ model PatientFile {
 
   @@index([tenantId, patientId, createdAt])
   @@index([encounterId])
+  @@index([treatmentSessionId])
 }
 
 // Diagnosis classification shared by every clinic (CIE-10, CIE-11).
@@ -953,6 +1023,7 @@ model FormDefinition {
 
   versions FormDefinitionVersion[]
   records  SpecialtyRecord[]
+  treatmentVersions TreatmentVersion[]
 
   @@unique([tenantId, name])
   @@index([tenantId, isActive])
@@ -1108,6 +1179,7 @@ model Appointment {
   clinicalNotes ClinicalNote[]
   specialtyRecords SpecialtyRecord[]
   encounter        Encounter?
+  treatmentSessions TreatmentSession[]
 
   @@index([tenantId])
   @@index([patientId])
@@ -1346,4 +1418,272 @@ model AuditLog {
   @@index([userId])
   @@index([entity, entityId])
   @@index([createdAt])
+}
+
+// ============================================
+// TREATMENT SESSIONS
+// ============================================
+
+// A procedure the clinic offers. Price, duration and requirements live in its versions.
+model Treatment {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name     String
+  category String?
+  // Null: any professional of the tenant can open sessions. Set: only that specialty.
+  specialtyId String?
+  specialty   Specialty? @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
+
+  isActive       Boolean @default(true)
+  currentVersion Int     @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions TreatmentVersion[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive])
+}
+
+// An immutable snapshot of a treatment's price and requirements: sessions pin the version they
+// were opened with.
+model TreatmentVersion {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  treatmentId String
+  treatment   Treatment @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
+  version     Int
+
+  price           Decimal @db.Decimal(10, 2)
+  taxRatePercent  Decimal @db.Decimal(5, 2)
+  durationMinutes Int
+
+  formDefinitionId String?
+  formDefinition   FormDefinition? @relation(fields: [formDefinitionId], references: [id], onDelete: Restrict)
+  formVersion      Int?
+
+  consentTemplateVersionId String?
+  consentTemplateVersion   ConsentTemplateVersion? @relation(fields: [consentTemplateVersionId], references: [id], onDelete: Restrict)
+
+  // Validated by the server: medical form, informed consent, photos and clinical notes.
+  requirements Json
+
+  createdById String
+  createdAt   DateTime @default(now())
+
+  sessions TreatmentSession[]
+
+  @@unique([treatmentId, version])
+  @@index([tenantId])
+}
+
+// A consent text of the clinic. The text itself lives in its versions.
+model ConsentTemplate {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name           String
+  isActive       Boolean @default(true)
+  currentVersion Int     @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions ConsentTemplateVersion[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive])
+}
+
+// One text of a consent template. Once published or retired it is never edited.
+model ConsentTemplateVersion {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  templateId String
+  template   ConsentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  version    Int
+
+  title String
+  body  String
+  // SHA-256 hex of `title + "\n" + body`.
+  checksum String
+
+  status      ConsentTemplateVersionStatus @default(DRAFT)
+  publishedAt DateTime?
+  retiredAt   DateTime?
+  createdById String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents         ConsentDocument[]
+  treatmentVersions TreatmentVersion[]
+
+  @@unique([templateId, version])
+  @@index([tenantId])
+}
+
+// The consent text as the patient saw it in a session. The session it was presented in and the
+// session it applies to can differ: a signed consent can be reused while it is valid.
+model ConsentDocument {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  treatmentSessionId String
+  treatmentSession   TreatmentSession @relation("ConsentDocumentPresentedIn", fields: [treatmentSessionId], references: [id], onDelete: Cascade)
+
+  templateVersionId String
+  templateVersion   ConsentTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+
+  // Stored encrypted: the resolved text the patient saw.
+  title String
+  body  String
+  // SHA-256 hex of the resolved title and body, in the clear.
+  checksum String
+
+  status      ConsentDocumentStatus @default(PRESENTED)
+  presentedAt DateTime              @default(now())
+  signedAt    DateTime?
+  refusedAt   DateTime?
+  revokedAt   DateTime?
+
+  // The PDF generated on signing, encrypted in the file storage.
+  pdfStorageKey String?
+  pdfChecksum   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  signature       ConsentSignature?
+  events          ConsentEvent[]
+  appliedSessions TreatmentSession[] @relation("TreatmentSessionApplicableConsent")
+
+  @@index([tenantId, patientId, createdAt])
+  @@index([treatmentSessionId])
+  @@index([templateVersionId])
+}
+
+// The evidence of a signed consent. One per signed document.
+model ConsentSignature {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  documentId String          @unique
+  document   ConsentDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  signerRole ConsentSignerRole
+  // Stored encrypted.
+  signerName           String
+  signerIdentification String
+  // Required when the signer is a representative.
+  relationship         String?
+
+  understood        Boolean
+  questionsAnswered Boolean
+  // A separate authorization to use the photos in advertising.
+  marketingPhotos   Boolean @default(false)
+
+  // The signature drawing as a PNG, encrypted in the file storage.
+  signatureStorageKey String
+
+  operatorId String
+  operator   User     @relation(fields: [operatorId], references: [id], onDelete: Restrict)
+  ipAddress  String?
+  userAgent  String?
+  signedAt   DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([operatorId])
+}
+
+// An entry of the history of a consent document. Insert only.
+model ConsentEvent {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  documentId String
+  document   ConsentDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  type ConsentEventType
+  // Stored encrypted. Required for a refusal and a revocation.
+  reason String?
+
+  actorId String
+  actor   User   @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([documentId])
+  @@index([actorId])
+}
+
+// One application of a treatment to a patient, from intake to clinical completion. Its status
+// only changes through commands.
+model TreatmentSession {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  patientId      String
+  patient        Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  professionalId String
+  professional   User         @relation(fields: [professionalId], references: [id], onDelete: Restrict)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  appointmentId  String?
+  appointment    Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  // The version of the treatment the session was opened with.
+  treatmentVersionId String
+  treatmentVersion   TreatmentVersion @relation(fields: [treatmentVersionId], references: [id], onDelete: Restrict)
+
+  // The PROCEDURE encounter that opens the session.
+  encounterId String    @unique
+  encounter   Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+
+  // The answers to the medical form the treatment requires.
+  formRecordId String?          @unique
+  formRecord   SpecialtyRecord? @relation(fields: [formRecordId], references: [id], onDelete: Restrict)
+
+  // The consent that applies: presented in this session or reused from an earlier one.
+  consentDocumentId String?
+  consentDocument   ConsentDocument? @relation("TreatmentSessionApplicableConsent", fields: [consentDocumentId], references: [id], onDelete: Restrict)
+
+  status TreatmentSessionStatus @default(INTAKE_IN_PROGRESS)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  cancelledAt DateTime?
+
+  // Stored encrypted.
+  procedureNotes     String?
+  cancellationReason String?
+
+  // Optimistic concurrency: every transition increments it.
+  version Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  presentedConsents ConsentDocument[] @relation("ConsentDocumentPresentedIn")
+  files             PatientFile[]
+
+  @@index([tenantId, patientId, createdAt])
 }
