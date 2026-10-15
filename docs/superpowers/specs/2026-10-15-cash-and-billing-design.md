@@ -69,19 +69,25 @@ Una migración aditiva, `20261016000000_cash_and_billing`. Todos los modelos nue
 No tiene relación con `Encounter`, notas ni archivos, y crear un perfil nunca crea un paciente
 (RN-11). No se cifra: es dato fiscal, no clínico.
 
-Validación en el servidor: cédula de 10 dígitos con provincia 01–24 o 30 y dígito verificador
-módulo 10; RUC de 13 dígitos terminado en `001` (persona natural: cédula válida + `001`; sociedad
-privada y pública: dígito verificador módulo 11); pasaporte de 3 a 20 caracteres alfanuméricos;
-`07` solo con `9999999999999` y nombre `CONSUMIDOR FINAL`. Fuera de eso,
-`422 BILLING_PROFILE_INVALID`.
+Validación en el servidor: cédula de 10 dígitos con provincia 01–24 o 30, tercer dígito 0–5 y
+dígito verificador módulo 10; RUC de 13 dígitos terminado en `001`: si el tercer dígito es 0–5
+(persona natural), los 10 primeros deben ser una cédula válida; si es 6 o 9 (sociedad pública o
+privada) solo se valida el formato, sin dígito verificador, porque un falso rechazo impediría
+facturar a una empresa real y emite-facil solo valida el formato; pasaporte de 3 a 20 caracteres
+alfanuméricos; `07` solo con `9999999999999` y nombre `CONSUMIDOR FINAL`, y ninguna otra
+identificación puede ser `9999999999999`. Fuera de eso, `422 BILLING_PROFILE_INVALID`.
 
 `PatientBillingProfile`: `patientId`, `billingProfileId`, `isDefault`. Único
 `(patientId, billingProfileId)`; a lo sumo un `isDefault` por paciente (índice parcial).
 
 Migración de datos: por cada paciente vivo con `billingName` y `billingTaxId`, se crea (o reusa,
-si la identificación ya existe en el tenant) un `BillingProfile` y se vincula como predeterminado.
-`billingTaxIdType` se traduce `RUC → 04`, `CEDULA → 05`, `PASSPORT → 06`. Los campos `billing*`
-de `Patient` dejan de usarse en la API y la web; no se borran.
+si la identificación ya existe en el tenant) un `BillingProfile` y se vincula como predeterminado
+si el paciente aún no tiene uno. `billingTaxIdType` se traduce `RUC → 04`, `CEDULA → 05`,
+`PASSPORT → 06`; una identificación inválida para su tipo se salta y se informa. Lo hace un
+script idempotente (`npm run prisma:migrate-billing-profiles`), no la migración SQL, para poder
+probarlo y repetirlo: se ejecuta al desplegar B1 y otra vez al desplegar B2. Mientras Faktur
+siga activo (hasta B2), los campos `billing*` de `Patient` se siguen usando para sus facturas;
+B2 los quita de la API y de la web. No se borran de la base.
 
 ### Caja
 
@@ -152,7 +158,9 @@ El resumen por forma de pago (`GET /cash-registers/:id`) se calcula; no se guard
   `CONSENT_REFUSED`, `CONSENT_REVOKED`, `BILLING_PENDING` ni `BILLED`, y que su sucursal (si
   tiene) sea la de la orden. Se puede cobrar antes de que termine la atención; la factura es lo
   que se bloquea.
-- Un ítem `FREE` y cualquier descuento exigen `billing.adjust`.
+- Un ítem `FREE` y cualquier descuento exigen `billing.adjust`. La tarifa de un ítem `FREE` es
+  0, 5 o 15 (`422 TAX_RATE_UNSUPPORTED` en otro caso), las tarifas vigentes del catálogo de
+  emite-facil.
 - Un pago exige la orden `OPEN`, la caja `OPEN` de su sucursal (`409 CASH_REGISTER_CLOSED`) y
   `amount ≤ total − paidTotal` (`422 PAYMENT_EXCEEDS_BALANCE`). Con saldo cero la orden pasa a
   `PAID`. Un pago con `Idempotency-Key` repetido devuelve el mismo pago; con otro cuerpo,
@@ -177,6 +185,14 @@ CLINICAL_COMPLETE (o cualquier estado facturable) ─solicitud─▶ BILLING_PEN
                                                                     └─rechazada/fallida─▶ BILLING_FAILED ─nueva solicitud─▶ BILLING_PENDING
 ```
 
+- Las transiciones a estados de facturación solo se aplican a sesiones `CLINICAL_COMPLETE` o
+  `BILLING_FAILED`. Una sesión facturada antes de cerrarse (tratamiento con
+  `billingGate.requireClinicalCompletion: false`) conserva su estado clínico y su flujo; al
+  cerrarse pasa a `CLINICAL_COMPLETE` y, si su factura ya está autorizada, B2 la pasa a `BILLED`
+  en ese momento.
+- Los tres estados nuevos cuentan como terminales para el flujo clínico de A
+  (`TERMINAL_SESSION_STATUSES`) y `GET /treatment-sessions/:id/compliance` responde `missing: []`
+  para ellos, como para `CLINICAL_COMPLETE`.
 - El cierre clínico se lee de `completedAt` (que A fija al pasar a `CLINICAL_COMPLETE`), no del
   estado: una sesión `BILLING_FAILED` sigue contando como cerrada si lo estaba, y su
   elegibilidad se evalúa con los hechos clínicos, no con su estado de facturación.
@@ -269,7 +285,8 @@ Las lecturas de caja no se auditan como acceso clínico; los comandos sí se aud
 | `cash.manage` (nuevo) | Caja | MASTER | PROFESIONAL, ASISTENTE |
 
 Quitar `billing.*` de los permisos por defecto de PROFESIONAL cambia lo que hoy ve un profesional.
-Para que nadie pierda acceso al desplegar, la migración inserta una fila `UserPermission` con
+Para que nadie pierda acceso al desplegar, el mismo script de despliegue
+(`npm run prisma:migrate-billing-profiles`) inserta una fila `UserPermission` con
 `granted: true` de `billing.view` y de `billing.create` para cada PROFESIONAL activo que no
 tenga ya una fila de ese permiso (una fila `granted: false` significa que el MASTER se lo quitó, y
 se respeta). El MASTER decide después.
@@ -525,6 +542,11 @@ Ninguna acción se muestra como hecha hasta que responde el servidor (E2E-15).
 | `SESSION_ALREADY_IN_ORDER` | 409 | La sesión está en otra orden viva |
 | `TREATMENT_SESSION_NOT_BILLABLE` | 409 | Agregar a una orden una sesión en estado no facturable o de otra sucursal |
 | `PAYMENT_EXCEEDS_BALANCE` | 422 | Pago mayor que el saldo |
+| `TAX_RATE_UNSUPPORTED` | 422 | Concepto libre con tarifa distinta de 0, 5 o 15 |
+| `ORDER_LINE_INVALID` | 422 | Cantidad ≤ 0, precio o descuento negativo, o descuento mayor que el bruto de la línea |
+| `ORDER_BRANCH_MISMATCH` | 422 | Crear una orden con sesiones de sucursales distintas |
+| `BILLING_PROFILE_INACTIVE` | 409 | Asignar o vincular un perfil inactivo |
+| `IDEMPOTENCY_KEY_INVALID` | 400 | `Idempotency-Key` de más de 100 caracteres o con caracteres fuera de `[A-Za-z0-9._:-]` |
 | `PAYMENT_NOT_REFUNDABLE` | 409 | Devolver con una solicitud de factura viva o ya devuelto |
 | `IDEMPOTENCY_KEY_REQUIRED` | 400 | Pedir factura sin `Idempotency-Key` |
 | `IDEMPOTENCY_KEY_REUSED` | 409 | Misma clave con otro cuerpo u otra orden |
