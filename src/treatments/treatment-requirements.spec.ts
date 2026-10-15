@@ -78,6 +78,9 @@ describe('parseTreatmentRequirements', () => {
       'clinicalNotes.requiredForCompletion',
     ],
     ['a non-object section', { photos: 3 }, 'photos'],
+    ['a prototype-named top-level key', { constructor: 1 }, 'constructor'],
+    ['a JSON-parsed __proto__ key', JSON.parse('{"__proto__":1}'), '__proto__'],
+    ['a prototype-named nested key', { photos: { toString: 1 } }, 'photos.toString'],
   ])('rejects %s', (_name, raw, path) => {
     const body = invalid(raw);
     expect(body.statusCode).toBe(400);

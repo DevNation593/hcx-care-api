@@ -15,6 +15,9 @@ export const DEFAULT_REQUIREMENTS: TreatmentRequirements = {
   clinicalNotes: { requiredForCompletion: false },
 };
 
+// Own keys only: `in` would also accept prototype names such as `constructor`.
+const SECTION_KEYS = Object.keys(DEFAULT_REQUIREMENTS);
+
 const MAX_PHOTOS = 20;
 const MAX_VALIDITY_DAYS = 3650;
 
@@ -71,7 +74,7 @@ export function parseTreatmentRequirements(raw: unknown): TreatmentRequirements 
     return value;
   };
 
-  for (const unknownKey of Object.keys(raw).filter((k) => !(k in DEFAULT_REQUIREMENTS))) {
+  for (const unknownKey of Object.keys(raw).filter((k) => !SECTION_KEYS.includes(k))) {
     issues.push(`${unknownKey} no es un campo permitido`);
   }
 
