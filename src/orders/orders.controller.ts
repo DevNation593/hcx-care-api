@@ -1,8 +1,11 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
+  Headers,
+  HttpCode,
   Param,
   ParseIntPipe,
   Patch,
@@ -10,7 +13,7 @@ import {
   Put,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -23,14 +26,21 @@ import {
   SetOrderBillingProfileDto,
   UpdateOrderItemDto,
 } from './dto/order.dto';
+import { RecordPaymentDto, RefundPaymentDto } from './dto/payment.dto';
 import { OrdersService } from './orders.service';
+import { PaymentsService } from './payments.service';
+
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{1,100}$/;
 
 @ApiTags('orders')
 @ApiBearerAuth('access-token')
 @RequireSection('core.billing')
 @Controller('tenants/:tenantId/orders')
 export class OrdersController {
-  constructor(private readonly service: OrdersService) {}
+  constructor(
+    private readonly service: OrdersService,
+    private readonly payments: PaymentsService,
+  ) {}
 
   @Get()
   @Roles('MASTER')
@@ -125,6 +135,32 @@ export class OrdersController {
     return this.service.setBillingProfile(tenantId, user.userId, id, dto);
   }
 
+  @Post(':id/payments')
+  @Roles('MASTER')
+  @RequirePermission('billing.create')
+  @ApiOperation({
+    summary: 'Record a partial or full payment into the open cash register',
+    description:
+      'Optional Idempotency-Key header (up to 100 chars, [A-Za-z0-9._:-]). 400 IDEMPOTENCY_KEY_INVALID, 409 ORDER_NOT_EDITABLE, 409 CASH_REGISTER_CLOSED, 409 IDEMPOTENCY_KEY_REUSED, 422 PAYMENT_EXCEEDS_BALANCE.',
+  })
+  @ApiHeader({ name: 'Idempotency-Key', required: false })
+  recordPayment(
+    @Param('tenantId') tenantId: string,
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: RecordPaymentDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    if (idempotencyKey !== undefined && !IDEMPOTENCY_KEY.test(idempotencyKey)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'IDEMPOTENCY_KEY_INVALID',
+        message: 'La clave de idempotencia no es válida.',
+      });
+    }
+    return this.payments.record(tenantId, user.userId, id, dto, idempotencyKey);
+  }
+
   @Post(':id/cancel')
   @Roles('MASTER')
   @RequirePermission('billing.create')
@@ -139,5 +175,30 @@ export class OrdersController {
     @Body() dto: CancelOrderDto,
   ) {
     return this.service.cancel(tenantId, user.userId, id, dto);
+  }
+}
+
+@ApiTags('orders')
+@ApiBearerAuth('access-token')
+@RequireSection('core.billing')
+@Controller('tenants/:tenantId/payments')
+export class PaymentsController {
+  constructor(private readonly payments: PaymentsService) {}
+
+  @Post(':id/refund')
+  @HttpCode(200)
+  @Roles('MASTER')
+  @RequirePermission('billing.adjust')
+  @ApiOperation({
+    summary: 'Refund a payment before invoicing',
+    description: '404 PAYMENT_NOT_FOUND, 409 PAYMENT_NOT_REFUNDABLE, 409 CASH_REGISTER_CLOSED.',
+  })
+  refund(
+    @Param('tenantId') tenantId: string,
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: RefundPaymentDto,
+  ) {
+    return this.payments.refund(tenantId, user.userId, id, dto);
   }
 }
