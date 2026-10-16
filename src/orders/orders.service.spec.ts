@@ -1,0 +1,552 @@
+import { ForbiddenException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { AuthUser } from '../common/decorators/current-user.decorator';
+import { PermissionChecker } from '../common/permissions/permission-checker.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { computeOrderTotals } from './order-totals';
+import { toOrderView } from './order-view';
+import { OrdersService } from './orders.service';
+
+const D = (value: string) => new Prisma.Decimal(value);
+
+describe('OrdersService', () => {
+  const prisma = {
+    $transaction: jest.fn(),
+    applyRlsContext: jest.fn(),
+    auditLog: { create: jest.fn() },
+    branch: { findFirst: jest.fn() },
+    patient: { findFirst: jest.fn() },
+    billingProfile: { findFirst: jest.fn() },
+    patientBillingProfile: { findFirst: jest.fn() },
+    treatmentSession: { findMany: jest.fn(), findFirst: jest.fn() },
+    order: {
+      aggregate: jest.fn(),
+      create: jest.fn(),
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn(),
+      update: jest.fn(),
+    },
+    orderItem: {
+      create: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+      delete: jest.fn(),
+    },
+  };
+  const permissionChecker = { assertAllowed: jest.fn() };
+  const service = new OrdersService(
+    prisma as unknown as PrismaService,
+    permissionChecker as unknown as PermissionChecker,
+  );
+
+  const actor: AuthUser = {
+    userId: 'user-1',
+    tenantId: 'tenant-1',
+    email: 'a@b.c',
+    role: 'ASISTENTE',
+    isPlatformTenant: false,
+    mustChangePassword: false,
+  };
+
+  const person = (id: string) => ({ id, firstName: 'Ana', lastName: 'Paz' });
+
+  const item = (extra: Record<string, unknown> = {}) => ({
+    id: 'item-1',
+    tenantId: 'tenant-1',
+    orderId: 'order-1',
+    kind: 'TREATMENT_SESSION',
+    treatmentSessionId: 'session-1',
+    patientId: 'patient-1',
+    patient: person('patient-1'),
+    description: 'Botox',
+    quantity: D('1'),
+    unitPrice: D('100'),
+    discount: D('0'),
+    taxRatePercent: D('15'),
+    lineSubtotal: D('100'),
+    lineTax: D('15'),
+    releasedAt: null,
+    createdAt: new Date('2026-10-15T10:00:00Z'),
+    ...extra,
+  });
+
+  const order = (extra: Record<string, unknown> = {}) => ({
+    id: 'order-1',
+    tenantId: 'tenant-1',
+    number: 7,
+    status: 'OPEN',
+    branchId: 'branch-1',
+    billingProfileId: null,
+    billingProfile: null,
+    subtotal: D('100'),
+    discountTotal: D('0'),
+    taxTotal: D('15'),
+    total: D('115'),
+    paidTotal: D('0'),
+    version: 3,
+    createdAt: new Date('2026-10-15T10:00:00Z'),
+    items: [item()],
+    payments: [],
+    ...extra,
+  });
+
+  const payment = (extra: Record<string, unknown> = {}) => ({
+    id: 'payment-1',
+    method: 'CASH',
+    amount: D('115'),
+    reference: null,
+    status: 'RECORDED',
+    receivedAt: new Date('2026-10-15T11:00:00Z'),
+    receivedBy: person('user-1'),
+    refundedAt: null,
+    refundReason: null,
+    ...extra,
+  });
+
+  const session = (extra: Record<string, unknown> = {}) => ({
+    id: 'session-1',
+    tenantId: 'tenant-1',
+    patientId: 'patient-1',
+    branchId: 'branch-1',
+    status: 'CLINICAL_COMPLETE',
+    treatmentVersion: {
+      price: D('100'),
+      taxRatePercent: D('15'),
+      treatment: { name: 'Botox' },
+    },
+    orderItems: [],
+    ...extra,
+  });
+
+  const rejection = (promise: Promise<unknown>) =>
+    promise.then(
+      () => undefined,
+      (error: { getResponse: () => { code: string } }) => error.getResponse().code,
+    );
+
+  const lastTotals = () => prisma.order.update.mock.calls.at(-1)![0].data;
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    prisma.$transaction.mockImplementation((callback: (tx: unknown) => unknown) =>
+      callback(prisma),
+    );
+    prisma.branch.findFirst.mockResolvedValue({ id: 'branch-1' });
+    prisma.order.aggregate.mockResolvedValue({ _max: { number: 4 } });
+    prisma.order.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+      Promise.resolve({ id: 'order-1', ...data }),
+    );
+    prisma.order.update.mockResolvedValue({});
+    prisma.orderItem.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+      Promise.resolve({ id: 'item-new', ...data }),
+    );
+    prisma.patientBillingProfile.findFirst.mockResolvedValue(null);
+    prisma.billingProfile.findFirst.mockResolvedValue({ id: 'profile-1', isActive: true });
+    prisma.order.findFirst.mockResolvedValue(order());
+  });
+
+  describe('create', () => {
+    it('numbers the order after the last one of the tenant and has no automatic recipient for sessions of two patients', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([
+        session(),
+        session({ id: 'session-2', patientId: 'patient-2' }),
+      ]);
+
+      await service.create('tenant-1', actor, {
+        treatmentSessionIds: ['session-1', 'session-2'],
+      });
+
+      expect(prisma.order.create.mock.calls[0][0].data).toMatchObject({
+        tenantId: 'tenant-1',
+        number: 5,
+        branchId: 'branch-1',
+        billingProfileId: null,
+        createdById: 'user-1',
+      });
+      expect(prisma.patientBillingProfile.findFirst).not.toHaveBeenCalled();
+      expect(prisma.orderItem.create).toHaveBeenCalledTimes(2);
+      expect(prisma.orderItem.create.mock.calls[0][0].data).toMatchObject({
+        kind: 'TREATMENT_SESSION',
+        treatmentSessionId: 'session-1',
+        patientId: 'patient-1',
+        description: 'Botox',
+        unitPrice: D('100'),
+        taxRatePercent: D('15'),
+        discount: D('0'),
+        createdById: 'user-1',
+      });
+      expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
+        action: 'CREATE',
+        entity: 'ORDER',
+        entityId: 'order-1',
+      });
+    });
+
+    it('takes the default active billing profile of the only patient', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([session()]);
+      prisma.patientBillingProfile.findFirst.mockResolvedValue({ billingProfileId: 'profile-9' });
+
+      await service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] });
+
+      expect(prisma.patientBillingProfile.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            tenantId: 'tenant-1',
+            patientId: 'patient-1',
+            isDefault: true,
+            billingProfile: { isActive: true },
+          },
+        }),
+      );
+      expect(prisma.order.create.mock.calls[0][0].data.billingProfileId).toBe('profile-9');
+    });
+
+    it('rejects sessions of different branches', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([
+        session(),
+        session({ id: 'session-2', branchId: 'branch-2' }),
+      ]);
+
+      expect(
+        await rejection(
+          service.create('tenant-1', actor, { treatmentSessionIds: ['session-1', 'session-2'] }),
+        ),
+      ).toBe('ORDER_BRANCH_MISMATCH');
+    });
+
+    it('rejects a session that cannot be billed', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([session({ status: 'NO_SHOW' })]);
+
+      expect(
+        await rejection(service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] })),
+      ).toBe('TREATMENT_SESSION_NOT_BILLABLE');
+    });
+
+    it('rejects a session already in a live order', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([
+        session({ orderItems: [{ id: 'item-x' }] }),
+      ]);
+
+      expect(
+        await rejection(service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] })),
+      ).toBe('SESSION_ALREADY_IN_ORDER');
+    });
+
+    it('rejects a session of another tenant', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([]);
+
+      expect(
+        await rejection(service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] })),
+      ).toBe('TREATMENT_SESSION_NOT_FOUND');
+    });
+
+    it('requires a branch when there are no sessions', async () => {
+      expect(await rejection(service.create('tenant-1', actor, {}))).toBe('ORDER_BRANCH_REQUIRED');
+    });
+  });
+
+  describe('addItem', () => {
+    const sessionDto = { version: 3, kind: 'TREATMENT_SESSION' as const };
+
+    it('adds a session item copying the price and tax of its treatment version', async () => {
+      prisma.treatmentSession.findFirst.mockResolvedValue(session({ id: 'session-2' }));
+
+      await service.addItem('tenant-1', actor, 'order-1', {
+        ...sessionDto,
+        treatmentSessionId: 'session-2',
+      });
+
+      expect(permissionChecker.assertAllowed).not.toHaveBeenCalled();
+      expect(prisma.orderItem.create.mock.calls[0][0].data).toMatchObject({
+        orderId: 'order-1',
+        treatmentSessionId: 'session-2',
+        quantity: D('1'),
+        unitPrice: D('100'),
+        taxRatePercent: D('15'),
+      });
+      expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
+        action: 'UPDATE',
+        entity: 'ORDER',
+      });
+    });
+
+    it('rejects a session already in another live order and translates the unique index', async () => {
+      prisma.treatmentSession.findFirst.mockResolvedValue(
+        session({ orderItems: [{ id: 'item-x' }] }),
+      );
+      expect(
+        await rejection(
+          service.addItem('tenant-1', actor, 'order-1', {
+            ...sessionDto,
+            treatmentSessionId: 'session-1',
+          }),
+        ),
+      ).toBe('SESSION_ALREADY_IN_ORDER');
+
+      prisma.treatmentSession.findFirst.mockResolvedValue(session());
+      prisma.orderItem.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('unique', {
+          code: 'P2002',
+          clientVersion: 'test',
+          meta: { target: 'OrderItem_live_session_key' },
+        }),
+      );
+      expect(
+        await rejection(
+          service.addItem('tenant-1', actor, 'order-1', {
+            ...sessionDto,
+            treatmentSessionId: 'session-1',
+          }),
+        ),
+      ).toBe('SESSION_ALREADY_IN_ORDER');
+    });
+
+    it('lets a session go into a new order after the other one was cancelled', async () => {
+      // The cancelled order released its items, so the live-item filter finds nothing.
+      prisma.treatmentSession.findFirst.mockResolvedValue(session({ orderItems: [] }));
+
+      await service.addItem('tenant-1', actor, 'order-1', {
+        ...sessionDto,
+        treatmentSessionId: 'session-1',
+      });
+
+      expect(prisma.treatmentSession.findFirst.mock.calls[0][0].include.orderItems.where).toEqual({
+        releasedAt: null,
+      });
+      expect(prisma.orderItem.create).toHaveBeenCalled();
+    });
+
+    it('requires billing.adjust for a free item', async () => {
+      permissionChecker.assertAllowed.mockRejectedValue(
+        new ForbiddenException({ statusCode: 403, code: 'PERMISSION_DENIED' }),
+      );
+
+      expect(
+        await rejection(
+          service.addItem('tenant-1', actor, 'order-1', {
+            version: 3,
+            kind: 'FREE',
+            description: 'Gel',
+            unitPrice: '10.00',
+            taxRatePercent: 15,
+          }),
+        ),
+      ).toBe('PERMISSION_DENIED');
+      expect(permissionChecker.assertAllowed).toHaveBeenCalledWith(actor, 'billing.adjust');
+      expect(prisma.orderItem.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a tax rate the server does not support', async () => {
+      expect(
+        await rejection(
+          service.addItem('tenant-1', actor, 'order-1', {
+            version: 3,
+            kind: 'FREE',
+            description: 'Gel',
+            unitPrice: '10.00',
+            taxRatePercent: 12,
+          }),
+        ),
+      ).toBe('TAX_RATE_UNSUPPORTED');
+    });
+
+    it('requires billing.adjust for a discount on a session item', async () => {
+      prisma.treatmentSession.findFirst.mockResolvedValue(session());
+
+      await service.addItem('tenant-1', actor, 'order-1', {
+        ...sessionDto,
+        treatmentSessionId: 'session-1',
+        discount: '10.00',
+      });
+
+      expect(permissionChecker.assertAllowed).toHaveBeenCalledWith(actor, 'billing.adjust');
+    });
+
+    it('stores totals equal to computeOrderTotals of every line', async () => {
+      await service.addItem('tenant-1', actor, 'order-1', {
+        version: 3,
+        kind: 'FREE',
+        description: 'Gel',
+        quantity: '3',
+        unitPrice: '3.33',
+        taxRatePercent: 5,
+        discount: '1.00',
+      });
+
+      const expected = computeOrderTotals([
+        { quantity: '1', unitPrice: '100', discount: '0', taxRatePercent: '15' },
+        { quantity: '3', unitPrice: '3.33', discount: '1.00', taxRatePercent: '5' },
+      ]);
+      const data = lastTotals();
+      expect(data.subtotal).toEqual(expected.subtotal);
+      expect(data.discountTotal).toEqual(expected.discountTotal);
+      expect(data.taxTotal).toEqual(expected.taxTotal);
+      expect(data.total).toEqual(expected.total);
+      expect(data.version).toEqual({ increment: 1 });
+      expect(data).not.toHaveProperty('paidTotal');
+      expect(data).not.toHaveProperty('status');
+    });
+
+    it('refuses to edit an order that has a recorded payment', async () => {
+      prisma.order.findFirst.mockResolvedValue(order({ payments: [payment()] }));
+
+      expect(
+        await rejection(
+          service.addItem('tenant-1', actor, 'order-1', {
+            ...sessionDto,
+            treatmentSessionId: 'session-2',
+          }),
+        ),
+      ).toBe('ORDER_NOT_EDITABLE');
+    });
+
+    it('rejects a stale version', async () => {
+      expect(
+        await rejection(
+          service.addItem('tenant-1', actor, 'order-1', {
+            version: 2,
+            kind: 'TREATMENT_SESSION',
+            treatmentSessionId: 'session-2',
+          }),
+        ),
+      ).toBe('ORDER_VERSION_CONFLICT');
+    });
+
+    it('reports a missing order', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      expect(
+        await rejection(
+          service.addItem('tenant-1', actor, 'order-1', {
+            version: 3,
+            kind: 'TREATMENT_SESSION',
+            treatmentSessionId: 'session-2',
+          }),
+        ),
+      ).toBe('ORDER_NOT_FOUND');
+    });
+  });
+
+  describe('removeItem and updateItemDiscount', () => {
+    it('removes an item and recalculates', async () => {
+      await service.removeItem('tenant-1', 'user-1', 'order-1', 'item-1', 3);
+
+      expect(prisma.orderItem.delete).toHaveBeenCalledWith({ where: { id: 'item-1' } });
+      expect(lastTotals().total).toEqual(D('0'));
+    });
+
+    it('changes the discount of an item', async () => {
+      await service.updateItemDiscount('tenant-1', 'user-1', 'order-1', 'item-1', {
+        version: 3,
+        discount: '10.00',
+      });
+
+      expect(lastTotals().discountTotal).toEqual(D('10'));
+    });
+
+    it('does not find an item of another order', async () => {
+      expect(
+        await rejection(service.removeItem('tenant-1', 'user-1', 'order-1', 'item-zzz', 3)),
+      ).toBe('ORDER_ITEM_NOT_FOUND');
+    });
+  });
+
+  describe('setBillingProfile', () => {
+    it('sets an active profile of the tenant on an open or paid order', async () => {
+      prisma.order.findFirst.mockResolvedValue(order({ status: 'PAID' }));
+
+      await service.setBillingProfile('tenant-1', 'user-1', 'order-1', {
+        version: 3,
+        billingProfileId: 'profile-1',
+      });
+
+      expect(prisma.order.update.mock.calls[0][0].data).toMatchObject({
+        billingProfileId: 'profile-1',
+      });
+    });
+
+    it('rejects an inactive profile', async () => {
+      prisma.billingProfile.findFirst.mockResolvedValue({ id: 'profile-1', isActive: false });
+
+      expect(
+        await rejection(
+          service.setBillingProfile('tenant-1', 'user-1', 'order-1', {
+            version: 3,
+            billingProfileId: 'profile-1',
+          }),
+        ),
+      ).toBe('BILLING_PROFILE_INACTIVE');
+    });
+  });
+
+  describe('cancel', () => {
+    it('cancels the order and releases its sessions', async () => {
+      await service.cancel('tenant-1', 'user-1', 'order-1', { version: 3, reason: 'Error' });
+
+      expect(prisma.order.update.mock.calls[0][0].data).toMatchObject({
+        status: 'CANCELLED',
+        cancelledById: 'user-1',
+        cancellationReason: 'Error',
+      });
+      expect(prisma.orderItem.updateMany).toHaveBeenCalledWith({
+        where: { orderId: 'order-1', releasedAt: null },
+        data: { releasedAt: expect.any(Date) },
+      });
+      expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
+        action: 'UPDATE',
+        entity: 'ORDER',
+        reason: 'Error',
+      });
+    });
+
+    it('refuses to cancel an order with a recorded payment', async () => {
+      prisma.order.findFirst.mockResolvedValue(order({ payments: [payment()] }));
+
+      expect(
+        await rejection(
+          service.cancel('tenant-1', 'user-1', 'order-1', { version: 3, reason: 'Error' }),
+        ),
+      ).toBe('ORDER_HAS_PAYMENTS');
+    });
+  });
+
+  describe('toOrderView', () => {
+    it('exposes nothing of the session but its id', () => {
+      const view = toOrderView(
+        order({
+          payments: [payment()],
+          items: [item({ treatmentSession: { procedureNotes: 'secret' } })],
+        }) as never,
+      );
+
+      expect(view.items[0].treatmentSessionId).toBe('session-1');
+      expect(JSON.stringify(view)).not.toContain('secret');
+      expect(view.balance).toBe('115.00');
+      expect(view.total).toBe('115.00');
+      expect(view.payments[0].amount).toBe('115.00');
+    });
+  });
+
+  describe('list and get', () => {
+    it('lists the orders of the tenant', async () => {
+      prisma.order.findMany.mockResolvedValue([order()]);
+      prisma.order.count.mockResolvedValue(1);
+
+      const result = await service.list('tenant-1', { status: 'OPEN', q: '7' });
+
+      expect(prisma.order.findMany.mock.calls[0][0].where).toMatchObject({
+        tenantId: 'tenant-1',
+        status: 'OPEN',
+      });
+      expect(result).toMatchObject({ total: 1, page: 1, pageSize: 20 });
+      expect(result.items[0].number).toBe(7);
+    });
+
+    it('404s an order of another tenant', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      expect(await rejection(service.get('tenant-1', 'order-1'))).toBe('ORDER_NOT_FOUND');
+    });
+  });
+});

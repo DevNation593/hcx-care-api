@@ -18,6 +18,7 @@ import { ConsentDocumentsController } from '../../treatment-sessions/consent-doc
 import { TreatmentSessionsController } from '../../treatment-sessions/treatment-sessions.controller';
 import { BillingProfilesController } from '../../billing-profiles/billing-profiles.controller';
 import { CashRegistersController } from '../../cash-registers/cash-registers.controller';
+import { OrdersController } from '../../orders/orders.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { UserPermissionsService } from '../../users/user-permissions.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -51,6 +52,7 @@ const controllers: Controller[] = [
   TreatmentsController,
   BillingProfilesController,
   CashRegistersController,
+  OrdersController,
   TreatmentSessionsController,
   ConsentDocumentsController,
 ];
@@ -142,12 +144,7 @@ describe('permission catalog', () => {
 
   it('is exercised by at least one route for every permission', () => {
     const used = new Set(guardedHandlers.map(({ permission }) => permission));
-    // Permissions whose routes arrive with the later B1 tasks (cash registers, orders, payments).
-    const notRoutedYet: Permission[] = ['billing.adjust'];
-
-    expect([...used, ...notRoutedYet].sort()).toEqual(
-      PERMISSION_CATALOG.map(({ key }) => key).sort(),
-    );
+    expect([...used].sort()).toEqual(PERMISSION_CATALOG.map(({ key }) => key).sort());
   });
 
   it.each(guardedHandlers)(
@@ -183,6 +180,7 @@ describe('permission catalog', () => {
         'consent-templates.controller.ts',
         'encounters.controller.ts',
         'next-session-plans.controller.ts',
+        'orders.controller.ts',
         'patient-files.controller.ts',
         'patients.controller.ts',
         'record-documents.controller.ts',
