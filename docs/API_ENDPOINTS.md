@@ -326,7 +326,7 @@ Files live where `STORAGE_DRIVER` says: a private bucket of Supabase Storage (`s
 
 The role still decides who may call a route. A permission can only be **withdrawn** from one user (`403 PERMISSION_DENIED` afterwards), never granted beyond the role, and the account holder cannot be restricted. The catalog is in `src/common/permissions/permission-catalog.ts`.
 
-A permission can also be **granted** to one user when the catalog lists their role in `grantable` (today `billing.view` and `billing.create` for `ASISTENTE`): `PUT …/permissions { "revoked": [], "granted": ["billing.view"] }`. No clinical permission is grantable. Each entry of `GET …/permissions` carries `source`: `role` (can be withdrawn) or `grant` (can be given).
+A permission can also be **granted** to one user when the catalog lists their role in `grantable` (today `billing.view`, `billing.create`, `billing.adjust` and `cash.manage`, all held by MASTER by default and grantable to `PROFESIONAL` and `ASISTENTE`): `PUT …/permissions { "revoked": [], "granted": ["billing.view"] }`. No clinical permission is grantable. Each entry of `GET …/permissions` carries `source`: `role` (can be withdrawn) or `grant` (can be given).
 
 ```bash
 # Activity of the clinic: appointments by status and encounters by type, by branch and by

@@ -416,7 +416,7 @@ describe('Cash register, orders, payments and billing eligibility (E2E)', () => 
 
     const result = await eligibility(order.id);
     expect(result.eligible).toBe(false);
-    expect(result.missing.sort()).toEqual(['CLINICAL_COMPLETION', 'FINALIZED_MEDICAL_FORM']);
+    expect(result.missing).toEqual(['FINALIZED_MEDICAL_FORM', 'CLINICAL_COMPLETION']);
   });
 
   it('E2E-03: a paid order of a session without a signed consent lists the consent', async () => {
