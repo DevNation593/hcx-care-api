@@ -69,7 +69,8 @@ export class CreateBillingProfileDto {
 /** idType and idNumber never change once the profile exists. */
 export class UpdateBillingProfileDto {
   @ApiPropertyOptional()
-  @IsOptional()
+  // Not IsOptional: null must fail validation, the name is required.
+  @ValidateIf((_, value) => value !== undefined)
   @Transform(trimText)
   @IsString()
   @MinLength(1)

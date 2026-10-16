@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { BillingProfile, Prisma } from '@prisma/client';
 import { recordBillingAudit } from '../common/audit/billing-audit';
 import { PrismaService } from '../prisma/prisma.service';
@@ -148,9 +153,20 @@ export class BillingProfilesService {
         assertValidTaxIdentification(current.idType, current.idNumber, legalName);
         data.legalName = legalName;
       }
-      if (dto.email !== undefined) data.email = dto.email.trim() || null;
-      if (dto.address !== undefined) data.address = dto.address.trim() || null;
-      if (dto.phone !== undefined) data.phone = dto.phone.trim() || null;
+      // null clears the field; the e-mail may only be cleared on a final-consumer profile.
+      if (dto.email !== undefined) {
+        const email = dto.email?.trim() || null;
+        if (email === null && current.idType !== '07') {
+          throw new UnprocessableEntityException({
+            statusCode: 422,
+            code: 'BILLING_PROFILE_INVALID',
+            message: 'El correo electrónico es obligatorio.',
+          });
+        }
+        data.email = email;
+      }
+      if (dto.address !== undefined) data.address = dto.address?.trim() || null;
+      if (dto.phone !== undefined) data.phone = dto.phone?.trim() || null;
       if (dto.isActive !== undefined) data.isActive = dto.isActive;
 
       const updated = await tx.billingProfile.update({ where: { id }, data });

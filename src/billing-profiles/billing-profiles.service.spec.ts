@@ -157,6 +157,32 @@ describe('BillingProfilesService', () => {
       expect(auditedChanges().join()).not.toContain('1710034065');
     });
 
+    it('clears the address when it is null', async () => {
+      prisma.billingProfile.update.mockResolvedValue(profile());
+
+      await service.update('tenant-1', 'user-1', 'profile-1', { address: null } as never);
+
+      expect(prisma.billingProfile.update.mock.calls[0][0].data).toEqual({ address: null });
+    });
+
+    it('rejects clearing the e-mail of a profile that is not a final consumer', async () => {
+      await expect(
+        service.update('tenant-1', 'user-1', 'profile-1', { email: null } as never),
+      ).rejects.toMatchObject({
+        response: { statusCode: 422, code: 'BILLING_PROFILE_INVALID' },
+      });
+      expect(prisma.billingProfile.update).not.toHaveBeenCalled();
+    });
+
+    it('clears the e-mail of a final-consumer profile', async () => {
+      prisma.billingProfile.findFirst.mockResolvedValue(profile({ idType: '07' }));
+      prisma.billingProfile.update.mockResolvedValue(profile({ idType: '07', email: null }));
+
+      await service.update('tenant-1', 'user-1', 'profile-1', { email: null } as never);
+
+      expect(prisma.billingProfile.update.mock.calls[0][0].data).toEqual({ email: null });
+    });
+
     it('answers 404 for a profile of another tenant', async () => {
       prisma.billingProfile.findFirst.mockResolvedValue(null);
 
