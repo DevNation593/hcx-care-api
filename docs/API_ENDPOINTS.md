@@ -418,6 +418,55 @@ The form of a session is fixed once it is `IN_PROGRESS` or ended: correcting or 
 
 Documents and sessions of another clinic answer `404 TREATMENT_SESSION_NOT_FOUND` / `CONSENT_DOCUMENT_NOT_FOUND` under the caller's own tenant, and `403` under the other tenant's id. Reads and writes of sessions and documents are audited (`TREATMENT_SESSION`, `CONSENT_DOCUMENT`).
 
+#### Cash desk, orders and payments
+
+All of these routes need the section `core.billing`. Under `/tenants/{tenantId}`. Errors keep the format `{ statusCode, code, message }`. "Who" lists the permission: the account holder (MASTER) has all of them, and can grant `billing.view`, `billing.create`, `billing.adjust` and `cash.manage` to a PROFESIONAL or an ASISTENTE. Lists take `page` and `pageSize`. Money travels as strings with 2 decimals; commands are audited, reads are not. An order is edited with its `version`: a stale one answers `409 ORDER_VERSION_CONFLICT`.
+
+**Billing profiles.** Who receives the invoice, apart from the patient (a company is never a patient). `idType` is the SRI code: `04` RUC, `05` cédula, `06` passport, `07` final consumer. `idType` and `idNumber` never change.
+
+| Method | Path | Who | Result | Errors |
+|---|---|---|---|---|
+| GET | `/billing-profiles?q=&active=` | `billing.view` | Profiles; `q` searches the name or the start of the identification | |
+| POST | `/billing-profiles` | `billing.create` | 201, `{ kind: PERSON \| COMPANY, idType, idNumber, legalName, email?, address?, phone? }` (`email` is required unless `idType` is `07`) | 422 `BILLING_PROFILE_INVALID`, 409 `BILLING_PROFILE_DUPLICATE` |
+| GET | `/billing-profiles/{id}` | `billing.view` | The profile | 404 `BILLING_PROFILE_NOT_FOUND` |
+| PATCH | `/billing-profiles/{id}` | `billing.create` | Name, email, address, phone or `isActive`; `null` clears an optional field | 404 `BILLING_PROFILE_NOT_FOUND` |
+| GET | `/patients/{patientId}/billing-profiles` | `billing.view` | Profiles linked to the patient | 404 patient |
+| POST | `/patients/{patientId}/billing-profiles` | `billing.create` | `{ billingProfileId, isDefault? }`; a new default replaces the previous one | 404 `BILLING_PROFILE_NOT_FOUND`, 409 `BILLING_PROFILE_INACTIVE` |
+| DELETE | `/patients/{patientId}/billing-profiles/{profileId}` | `billing.create` | 204, unlinks; the profile stays | 404 `BILLING_PROFILE_NOT_FOUND` |
+
+**Cash registers.** One open register per branch. The cash count (`summary.expectedCash`) is the opening cash plus the cash payments recorded in the register, minus the cash refunded.
+
+| Method | Path | Who | Result | Errors |
+|---|---|---|---|---|
+| GET | `/cash-registers?branchId=&status=` | `billing.view` | Registers, newest first | |
+| POST | `/cash-registers/open` | `cash.manage` | 201, `{ branchId, openingCash }` | 404 `BRANCH_NOT_FOUND`, 409 `CASH_REGISTER_ALREADY_OPEN` |
+| GET | `/cash-registers/{id}` | `billing.view` | The register with its summary by payment method and, once closed, the count | 404 `CASH_REGISTER_NOT_FOUND` |
+| POST | `/cash-registers/{id}/close` | `cash.manage` | 201, `{ countedCash, closingNote? }`; `difference` is counted minus expected | 404 `CASH_REGISTER_NOT_FOUND`, 409 `CASH_REGISTER_CLOSED`, 422 `CASH_CLOSING_NOTE_REQUIRED` (the count differs and there is no note) |
+
+**Orders.** An order (`OPEN`, `PAID`, `CANCELLED`) groups treatment sessions and free items for one billing profile. The server computes the lines, the tax and the totals; prices of sessions come from the pinned treatment version.
+
+| Method | Path | Who | Result | Errors |
+|---|---|---|---|---|
+| GET | `/treatment-sessions/billable?branchId=&patientId=` | `billing.view` | Sessions in a billable state with no live order: `{ id, status, createdAt, completedAt, branchId, patient: { id, firstName, lastName, identificationNumber }, treatment: { id, name, version }, price, taxRatePercent, compliant }`. `compliant` says whether the clinical documentation is complete, without detail | |
+| GET | `/orders?status=&branchId=&q=` | `billing.view` | Orders; `q` searches the number, the billing profile or the patient | |
+| POST | `/orders` | `billing.create` | 201, `{ branchId?, treatmentSessionIds?, billingProfileId? }`. Without `branchId` the branch of the sessions is used. Without a profile, the default profile of the patient when all the sessions are of one patient | 404 `TREATMENT_SESSION_NOT_FOUND`, 404 `BILLING_PROFILE_NOT_FOUND`, 409 `TREATMENT_SESSION_NOT_BILLABLE`, 409 `SESSION_ALREADY_IN_ORDER`, 409 `BILLING_PROFILE_INACTIVE`, 422 `ORDER_BRANCH_MISMATCH` |
+| GET | `/orders/{id}` | `billing.view` | Items, payments, totals (`subtotal`, `discountTotal`, `taxTotal`, `total`, `paidTotal`, `balance`) and `version` | 404 `ORDER_NOT_FOUND` |
+| POST | `/orders/{id}/items` | `billing.create` (a `FREE` item and a discount also need `billing.adjust`) | `{ version, kind: TREATMENT_SESSION \| FREE, treatmentSessionId? \| description, quantity?, unitPrice, taxRatePercent (0, 5 or 15), patientId?, discount? }` | 404 `ORDER_NOT_FOUND`, 409 `ORDER_NOT_EDITABLE`, 409 `ORDER_VERSION_CONFLICT`, 409 `SESSION_ALREADY_IN_ORDER`, 422 `TAX_RATE_UNSUPPORTED`, 422 `ORDER_LINE_INVALID` |
+| DELETE | `/orders/{id}/items/{itemId}?version=` | `billing.create` | The order without the item | 409 `ORDER_NOT_EDITABLE`, 409 `ORDER_VERSION_CONFLICT` |
+| PATCH | `/orders/{id}/items/{itemId}` | `billing.adjust` | `{ version, discount }` | 409 `ORDER_NOT_EDITABLE`, 409 `ORDER_VERSION_CONFLICT`, 422 `ORDER_LINE_INVALID` |
+| PUT | `/orders/{id}/billing-profile` | `billing.create` | `{ version, billingProfileId }` | 404 `BILLING_PROFILE_NOT_FOUND`, 409 `BILLING_PROFILE_INACTIVE`, 409 `ORDER_VERSION_CONFLICT` |
+| POST | `/orders/{id}/cancel` | `billing.create` | `{ version, reason }`; its sessions are released | 409 `ORDER_HAS_PAYMENTS`, 409 `ORDER_VERSION_CONFLICT` |
+| GET | `/orders/{id}/billing-eligibility` | `billing.view` | `{ eligible, missing, items: [{ itemId, patientName, codes }] }`, computed from the server-side facts of the sessions. Clinical codes: `FINALIZED_MEDICAL_FORM`, `SIGNED_APPLICABLE_CONSENT`, `CLINICAL_COMPLETION`, `SESSION_NOT_BILLABLE`; cash codes: `BILLING_PROFILE`, `INVOICE_ITEMS`, `BALANCE_DUE` | 404 `ORDER_NOT_FOUND` |
+
+**Payments.** A payment goes into the open register of the branch of the order; partial payments are allowed and the order is `PAID` when the paid total equals the total. A refund is possible only before invoicing and moves a `PAID` order back to `OPEN`.
+
+| Method | Path | Who | Result | Errors |
+|---|---|---|---|---|
+| POST | `/orders/{id}/payments` | `billing.create` | 201, the order; `{ method: CASH \| DEBIT_CARD \| CREDIT_CARD \| TRANSFER \| OTHER, amount, reference? }`. Optional header `Idempotency-Key` (up to 100 characters of `[A-Za-z0-9._:-]`): a retry with the same key returns the original payment | 400 `IDEMPOTENCY_KEY_INVALID`, 404 `ORDER_NOT_FOUND`, 409 `ORDER_NOT_EDITABLE`, 409 `CASH_REGISTER_CLOSED`, 409 `IDEMPOTENCY_KEY_REUSED`, 422 `PAYMENT_EXCEEDS_BALANCE` |
+| POST | `/payments/{id}/refund` | `billing.adjust` | 200, the order; `{ reason }` | 404 `PAYMENT_NOT_FOUND`, 409 `PAYMENT_NOT_REFUNDABLE`, 409 `CASH_REGISTER_CLOSED` |
+
+Orders, profiles, registers and payments of another clinic answer `404` (`ORDER_NOT_FOUND`, `BILLING_PROFILE_NOT_FOUND`, `CASH_REGISTER_NOT_FOUND`, `PAYMENT_NOT_FOUND`) under the caller's own tenant, and `403` under the other tenant's id.
+
 ### 7. Create Next Session Plan
 
 ```bash

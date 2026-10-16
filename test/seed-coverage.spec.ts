@@ -161,9 +161,18 @@ describe('demo seed', () => {
     expect(values('notificationLog', 'type')).toEqual(all(NotificationType));
     expect(values('notificationLog', 'status')).toEqual(all(NotificationStatus));
     expect(values('auditLog', 'action')).toEqual(all(AuditAction));
-    // TODO(treatment-sessions): the demo seed has no treatment sessions or consent documents
+    // TODO(treatment-sessions, cash-and-billing): the demo seed has no treatment sessions,
+    // consent documents, orders, payments, cash registers, billing profiles or invoice requests
     // yet; drop this exemption when it gains them.
-    const unseededEntities = ['TREATMENT_SESSION', 'CONSENT_DOCUMENT'];
+    const unseededEntities = [
+      'TREATMENT_SESSION',
+      'CONSENT_DOCUMENT',
+      'BILLING_PROFILE',
+      'CASH_REGISTER',
+      'INVOICE_REQUEST',
+      'ORDER',
+      'PAYMENT',
+    ];
     expect(values('auditLog', 'entity')).toEqual(
       all(AuditEntity).filter((entity) => !unseededEntities.includes(entity)),
     );
