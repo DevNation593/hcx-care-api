@@ -4,7 +4,14 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { OrderItem, Prisma, TreatmentSessionStatus } from '@prisma/client';
+import { OrderItem, Prisma } from '@prisma/client';
+import { BillingEligibility, evaluateBillingEligibility } from './billing-eligibility';
+import {
+  BillableSession,
+  loadOrderBillingFacts,
+  loadSessionBillingFacts,
+  NOT_BILLABLE_SESSION_STATUSES,
+} from './eligibility-facts';
 import { recordBillingAudit } from '../common/audit/billing-audit';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { PermissionChecker } from '../common/permissions/permission-checker.service';
@@ -14,6 +21,7 @@ import {
   AddOrderItemDto,
   CancelOrderDto,
   CreateOrderDto,
+  BillableSessionsQuery,
   ListOrdersQuery,
   SetOrderBillingProfileDto,
   UpdateOrderItemDto,
@@ -22,16 +30,8 @@ import { computeOrderTotals, SUPPORTED_FREE_TAX_RATES } from './order-totals';
 import { orderInclude, OrderView, OrderWithRelations, toOrderView } from './order-view';
 
 const DEFAULT_PAGE_SIZE = 20;
+const BILLABLE_SESSIONS_LIMIT = 100;
 const D = Prisma.Decimal;
-
-const NOT_BILLABLE_STATUSES: TreatmentSessionStatus[] = [
-  'CANCELLED',
-  'NO_SHOW',
-  'CONSENT_REFUSED',
-  'CONSENT_REVOKED',
-  'BILLING_PENDING',
-  'BILLED',
-];
 
 const orderNotFound = () =>
   new NotFoundException({
@@ -167,7 +167,7 @@ const sessionInclude = {
   orderItems: { where: { releasedAt: null }, select: { id: true } },
 } satisfies Prisma.TreatmentSessionInclude;
 
-type BillableSession = Prisma.TreatmentSessionGetPayload<{ include: typeof sessionInclude }>;
+type SessionToOrder = Prisma.TreatmentSessionGetPayload<{ include: typeof sessionInclude }>;
 
 /** Loads the order for a write; 404 ORDER_NOT_FOUND, 409 ORDER_VERSION_CONFLICT on a stale version. */
 export async function loadOrderForWrite(
@@ -225,7 +225,7 @@ function assertEditable(order: OrderWithRelations): void {
 }
 
 /** The line of a session item: price and tax of the treatment version the session was opened with. */
-function sessionLine(session: BillableSession, discount: string): LineData {
+function sessionLine(session: SessionToOrder, discount: string): LineData {
   return {
     kind: 'TREATMENT_SESSION',
     treatmentSessionId: session.id,
@@ -238,8 +238,8 @@ function sessionLine(session: BillableSession, discount: string): LineData {
   };
 }
 
-function assertBillable(session: BillableSession, orderBranchId: string): void {
-  if (NOT_BILLABLE_STATUSES.includes(session.status)) throw sessionNotBillable();
+function assertBillable(session: SessionToOrder, orderBranchId: string): void {
+  if (NOT_BILLABLE_SESSION_STATUSES.includes(session.status)) throw sessionNotBillable();
   if (session.branchId !== null && session.branchId !== orderBranchId) throw sessionNotBillable();
   if (session.orderItems.length > 0) throw sessionAlreadyInOrder();
 }
@@ -334,6 +334,78 @@ export class OrdersService {
     });
     if (!order) throw orderNotFound();
     return toOrderView(order);
+  }
+
+  /** RN-10 for an order, from the server-side facts of its sessions. */
+  eligibility(tenantId: string, orderId: string, userId = ''): Promise<BillingEligibility> {
+    return runSerializableTransaction(this.prisma, tenantId, userId, async (tx) =>
+      evaluateBillingEligibility(await loadOrderBillingFacts(tx, tenantId, orderId, new Date())),
+    );
+  }
+
+  /** Sessions without a live item that can still be invoiced, newest first. */
+  billableSessions(
+    tenantId: string,
+    query: BillableSessionsQuery,
+    userId = '',
+  ): Promise<BillableSession[]> {
+    return runSerializableTransaction(this.prisma, tenantId, userId, async (tx) => {
+      const now = new Date();
+      const sessions = await tx.treatmentSession.findMany({
+        where: {
+          tenantId,
+          status: { notIn: NOT_BILLABLE_SESSION_STATUSES },
+          orderItems: { none: { releasedAt: null } },
+          ...(query.branchId ? { OR: [{ branchId: query.branchId }, { branchId: null }] } : {}),
+          ...(query.patientId ? { patientId: query.patientId } : {}),
+        },
+        include: {
+          treatmentVersion: { include: { treatment: { select: { id: true, name: true } } } },
+          patient: {
+            select: { id: true, firstName: true, lastName: true, identificationNumber: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: BILLABLE_SESSIONS_LIMIT,
+      });
+
+      const result: BillableSession[] = [];
+      for (const session of sessions) {
+        const facts = await loadSessionBillingFacts(tx, session, session.id, now);
+        // The session alone: neutral cash facts so only its clinical codes can show up.
+        const evaluation = evaluateBillingEligibility({
+          sessions: [facts],
+          itemCount: 1,
+          total: new D(1),
+          paidTotal: new D(1),
+          profile: { isActive: true, idType: '05' },
+          invoicingConfigured: null,
+        });
+        const { treatmentVersion, patient } = session;
+        result.push({
+          id: session.id,
+          status: session.status,
+          createdAt: session.createdAt.toISOString(),
+          completedAt: session.completedAt ? session.completedAt.toISOString() : null,
+          branchId: session.branchId,
+          patient: {
+            id: patient.id,
+            firstName: patient.firstName,
+            lastName: patient.lastName,
+            identificationNumber: patient.identificationNumber,
+          },
+          treatment: {
+            id: treatmentVersion.treatment.id,
+            name: treatmentVersion.treatment.name,
+            version: treatmentVersion.version,
+          },
+          price: new D(treatmentVersion.price).toFixed(2),
+          taxRatePercent: new D(treatmentVersion.taxRatePercent).toFixed(2),
+          compliant: evaluation.eligible,
+        });
+      }
+      return result;
+    });
   }
 
   create(tenantId: string, actor: AuthUser, dto: CreateOrderDto): Promise<OrderView> {

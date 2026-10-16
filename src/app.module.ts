@@ -112,10 +112,11 @@ const throttleTtlMs = throttleTtlRaw < 1000 ? throttleTtlRaw * 1000 : throttleTt
     DocumentTemplatesModule,
     ConsentsModule,
     TreatmentsModule,
+    // Before TreatmentSessionsModule: `treatment-sessions/billable` must not match `:id`.
+    OrdersModule,
     TreatmentSessionsModule,
     BillingProfilesModule,
     CashRegistersModule,
-    OrdersModule,
     DocumentVerificationModule,
     PlatformModule,
   ],

@@ -20,6 +20,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
 import {
   AddOrderItemDto,
+  BillableSessionsQuery,
   CancelOrderDto,
   CreateOrderDto,
   ListOrdersQuery,
@@ -72,6 +73,21 @@ export class OrdersController {
   @ApiOperation({ summary: 'An order with its items, payments and totals' })
   get(@Param('tenantId') tenantId: string, @Param('id') id: string) {
     return this.service.get(tenantId, id);
+  }
+
+  @Get(':id/billing-eligibility')
+  @Roles('MASTER')
+  @RequirePermission('billing.view')
+  @ApiOperation({
+    summary: 'What still stands between the order and its invoice (RN-10)',
+    description: 'Computed from server-side facts only. 404 ORDER_NOT_FOUND.',
+  })
+  eligibility(
+    @Param('tenantId') tenantId: string,
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ) {
+    return this.service.eligibility(tenantId, id, user.userId);
   }
 
   @Post(':id/items')
@@ -175,6 +191,30 @@ export class OrdersController {
     @Body() dto: CancelOrderDto,
   ) {
     return this.service.cancel(tenantId, user.userId, id, dto);
+  }
+}
+
+/**
+ * Lives here, not with the treatment sessions: its route must be matched before
+ * `treatment-sessions/:id`, so OrdersModule is registered before TreatmentSessionsModule.
+ */
+@ApiTags('orders')
+@ApiBearerAuth('access-token')
+@RequireSection('core.billing')
+@Controller('tenants/:tenantId/treatment-sessions')
+export class BillableSessionsController {
+  constructor(private readonly service: OrdersService) {}
+
+  @Get('billable')
+  @Roles('MASTER')
+  @RequirePermission('billing.view')
+  @ApiOperation({ summary: 'Sessions that can still be added to an order' })
+  billable(
+    @Param('tenantId') tenantId: string,
+    @CurrentUser() user: AuthUser,
+    @Query() query: BillableSessionsQuery,
+  ) {
+    return this.service.billableSessions(tenantId, query, user.userId);
   }
 }
 

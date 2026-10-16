@@ -16,6 +16,10 @@ describe('OrdersService', () => {
     auditLog: { create: jest.fn() },
     branch: { findFirst: jest.fn() },
     patient: { findFirst: jest.fn() },
+    specialtyRecord: { count: jest.fn() },
+    patientFile: { count: jest.fn() },
+    treatmentVersion: { findUnique: jest.fn() },
+    consentDocument: { findMany: jest.fn() },
     billingProfile: { findFirst: jest.fn() },
     patientBillingProfile: { findFirst: jest.fn() },
     treatmentSession: { findMany: jest.fn(), findFirst: jest.fn() },
@@ -547,6 +551,144 @@ describe('OrdersService', () => {
       prisma.order.findFirst.mockResolvedValue(null);
 
       expect(await rejection(service.get('tenant-1', 'order-1'))).toBe('ORDER_NOT_FOUND');
+    });
+  });
+
+  describe('billing eligibility and billable sessions', () => {
+    const fullSession = (extra: Record<string, unknown> = {}) => ({
+      id: 'session-1',
+      tenantId: 'tenant-1',
+      patientId: 'patient-1',
+      branchId: 'branch-1',
+      status: 'CLINICAL_COMPLETE',
+      formRecordId: null,
+      consentDocumentId: null,
+      startedAt: new Date('2026-10-14T10:00:00Z'),
+      completedAt: new Date('2026-10-14T11:00:00Z'),
+      createdAt: new Date('2026-10-14T09:00:00Z'),
+      treatmentVersionId: 'version-1',
+      patient: {
+        id: 'patient-1',
+        firstName: 'Ana',
+        lastName: 'Paz',
+        identificationNumber: '0912345678',
+      },
+      treatmentVersion: {
+        id: 'version-1',
+        version: 2,
+        consentTemplateVersionId: null,
+        price: D('100'),
+        taxRatePercent: D('15'),
+        requirements: {},
+        treatment: { id: 'treatment-1', name: 'Botox' },
+      },
+      ...extra,
+    });
+
+    const orderForEligibility = (extra: Record<string, unknown> = {}) => ({
+      id: 'order-1',
+      total: D('115'),
+      paidTotal: D('115'),
+      items: [item()],
+      billingProfile: { isActive: true, idType: '05' },
+      ...extra,
+    });
+
+    beforeEach(() => {
+      prisma.patientFile.count.mockResolvedValue(0);
+      prisma.specialtyRecord.count.mockResolvedValue(0);
+    });
+
+    it('flags a paid order whose session was cancelled', async () => {
+      prisma.order.findFirst.mockResolvedValue(orderForEligibility());
+      prisma.treatmentSession.findMany.mockResolvedValue([fullSession({ status: 'CANCELLED' })]);
+
+      const result = await service.eligibility('tenant-1', 'order-1');
+
+      expect(result.eligible).toBe(false);
+      expect(result.missing).toContain('SESSION_NOT_BILLABLE');
+      expect(result.items[0].codes).toEqual(['SESSION_NOT_BILLABLE']);
+      expect(Object.keys(result).sort()).toEqual(['eligible', 'items', 'missing']);
+    });
+
+    it('asks for a receiver and the balance of an order without them', async () => {
+      prisma.order.findFirst.mockResolvedValue(
+        orderForEligibility({ paidTotal: D('0'), billingProfile: null }),
+      );
+      prisma.treatmentSession.findMany.mockResolvedValue([fullSession()]);
+
+      const result = await service.eligibility('tenant-1', 'order-1');
+
+      expect(result.missing).toEqual(['BILLING_PROFILE', 'BALANCE_DUE']);
+      expect(result.items).toEqual([]);
+    });
+
+    it('404s an order of another tenant', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      expect(await rejection(service.eligibility('tenant-1', 'order-9'))).toBe('ORDER_NOT_FOUND');
+    });
+
+    it('lists only sessions with no live item and not in a non-billable status', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([fullSession()]);
+
+      await service.billableSessions('tenant-1', { branchId: 'branch-1', patientId: 'patient-1' });
+
+      const args = prisma.treatmentSession.findMany.mock.calls[0][0];
+      expect(args.where).toMatchObject({
+        tenantId: 'tenant-1',
+        patientId: 'patient-1',
+        orderItems: { none: { releasedAt: null } },
+        OR: [{ branchId: 'branch-1' }, { branchId: null }],
+      });
+      expect(args.where.status.notIn).toEqual(
+        expect.arrayContaining(['CANCELLED', 'NO_SHOW', 'BILLED', 'BILLING_PENDING']),
+      );
+      expect(args.orderBy).toEqual({ createdAt: 'desc' });
+      expect(args.take).toBe(100);
+    });
+
+    it('returns exactly the billable fields and marks a compliant session', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([fullSession()]);
+
+      const [session] = await service.billableSessions('tenant-1', {});
+
+      expect(Object.keys(session).sort()).toEqual(
+        [
+          'branchId',
+          'compliant',
+          'completedAt',
+          'createdAt',
+          'id',
+          'patient',
+          'price',
+          'status',
+          'taxRatePercent',
+          'treatment',
+        ].sort(),
+      );
+      expect(session).toMatchObject({
+        compliant: true,
+        price: '100.00',
+        taxRatePercent: '15.00',
+        treatment: { id: 'treatment-1', name: 'Botox', version: 2 },
+        patient: { identificationNumber: '0912345678' },
+      });
+    });
+
+    it('marks non compliant a session without the required form', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([
+        fullSession({
+          treatmentVersion: {
+            ...fullSession().treatmentVersion,
+            requirements: { medicalForm: { required: true } },
+          },
+        }),
+      ]);
+
+      const [session] = await service.billableSessions('tenant-1', {});
+
+      expect(session.compliant).toBe(false);
     });
   });
 });
