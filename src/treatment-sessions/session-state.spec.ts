@@ -55,6 +55,9 @@ const WITH_CONSENT: Record<TreatmentSessionStatus, SessionCommand[]> = {
   CONSENT_REVOKED: [],
   CANCELLED: [],
   NO_SHOW: [],
+  BILLING_PENDING: [],
+  BILLED: [],
+  BILLING_FAILED: [],
 };
 
 const WITHOUT_CONSENT: Record<TreatmentSessionStatus, SessionCommand[]> = {

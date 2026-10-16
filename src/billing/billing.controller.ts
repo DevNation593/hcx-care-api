@@ -19,7 +19,7 @@ export class BillingController {
   constructor(private readonly billingService: BillingService) {}
 
   @Post('invoices')
-  @Roles('MASTER', 'PROFESIONAL')
+  @Roles('MASTER')
   @ApiOperation({ summary: 'Emitir factura electrónica mediante Faktur' })
   @RequirePermission('billing.create')
   createInvoice(
@@ -31,7 +31,7 @@ export class BillingController {
   }
 
   @Get('invoices')
-  @Roles('MASTER', 'PROFESIONAL')
+  @Roles('MASTER')
   @ApiOperation({ summary: 'Listar facturas del tenant' })
   @ApiQuery({ name: 'patientId', required: false })
   @RequirePermission('billing.view')
@@ -40,7 +40,7 @@ export class BillingController {
   }
 
   @Get('invoices/:invoiceId')
-  @Roles('MASTER', 'PROFESIONAL')
+  @Roles('MASTER')
   @ApiOperation({ summary: 'Consultar una factura' })
   @RequirePermission('billing.view')
   getInvoice(@Param('tenantId') tenantId: string, @Param('invoiceId') invoiceId: string) {
