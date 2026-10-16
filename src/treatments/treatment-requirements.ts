@@ -6,6 +6,7 @@ export interface TreatmentRequirements {
   informedConsent: { required: boolean; validityDays: number | null };
   photos: { minimumBefore: number; minimumAfter: number };
   clinicalNotes: { requiredForCompletion: boolean };
+  billingGate: { requireClinicalCompletion: boolean };
 }
 
 export const DEFAULT_REQUIREMENTS: TreatmentRequirements = {
@@ -13,6 +14,7 @@ export const DEFAULT_REQUIREMENTS: TreatmentRequirements = {
   informedConsent: { required: false, validityDays: null },
   photos: { minimumBefore: 0, minimumAfter: 0 },
   clinicalNotes: { requiredForCompletion: false },
+  billingGate: { requireClinicalCompletion: true },
 };
 
 // Own keys only: `in` would also accept prototype names such as `constructor`.
@@ -82,6 +84,7 @@ export function parseTreatmentRequirements(raw: unknown): TreatmentRequirements 
   const informedConsent = section('informedConsent', ['required', 'validityDays']);
   const photos = section('photos', ['minimumBefore', 'minimumAfter']);
   const clinicalNotes = section('clinicalNotes', ['requiredForCompletion']);
+  const billingGate = section('billingGate', ['requireClinicalCompletion']);
 
   const parsed: TreatmentRequirements = {
     medicalForm: {
@@ -129,6 +132,13 @@ export function parseTreatmentRequirements(raw: unknown): TreatmentRequirements 
         clinicalNotes.requiredForCompletion,
         'clinicalNotes.requiredForCompletion',
         DEFAULT_REQUIREMENTS.clinicalNotes.requiredForCompletion,
+      ),
+    },
+    billingGate: {
+      requireClinicalCompletion: bool(
+        billingGate.requireClinicalCompletion,
+        'billingGate.requireClinicalCompletion',
+        DEFAULT_REQUIREMENTS.billingGate.requireClinicalCompletion,
       ),
     },
   };

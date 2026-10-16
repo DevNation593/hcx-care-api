@@ -33,12 +33,14 @@ describe('TreatmentSessionsService', () => {
     informedConsent: { required: true, validityDays: null },
     photos: { minimumBefore: 1, minimumAfter: 1 },
     clinicalNotes: { requiredForCompletion: true },
+    billingGate: { requireClinicalCompletion: true },
   };
   const reusablePolicy: TreatmentRequirements = {
     medicalForm: { required: false },
     informedConsent: { required: true, validityDays: 30 },
     photos: { minimumBefore: 0, minimumAfter: 0 },
     clinicalNotes: { requiredForCompletion: false },
+    billingGate: { requireClinicalCompletion: true },
   };
   const formSchema = {
     sections: [
@@ -594,6 +596,22 @@ describe('TreatmentSessionsService', () => {
         missing: [],
       });
     });
+  });
+
+  describe('compliance of billing statuses', () => {
+    it.each(['BILLING_PENDING', 'BILLED', 'BILLING_FAILED'] as const)(
+      'answers nothing missing for a %s session without reading facts',
+      async (status) => {
+        db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy, { status }));
+
+        await expect(service.compliance('tenant-1', 'session-1')).resolves.toEqual({
+          status,
+          missing: [],
+        });
+        expect(db.specialtyRecord.count).not.toHaveBeenCalled();
+        expect(db.patientFile.count).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('transition', () => {
