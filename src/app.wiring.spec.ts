@@ -3,6 +3,8 @@ import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { AppointmentsController } from './appointments/appointments.controller';
 import { AppointmentsModule } from './appointments/appointments.module';
+import { BillingProfilesController } from './billing-profiles/billing-profiles.controller';
+import { BillingProfilesModule } from './billing-profiles/billing-profiles.module';
 import { BranchesController } from './branches/branches.controller';
 import { BranchesModule } from './branches/branches.module';
 import { CatalogsController } from './catalogs/catalogs.controller';
@@ -53,6 +55,7 @@ describe('module wiring', () => {
         DocumentVerificationModule,
         SpecialtyRecordsModule,
         TreatmentSessionsModule,
+        BillingProfilesModule,
       ],
       providers: [PermissionGuard, Reflector],
     })
@@ -70,6 +73,7 @@ describe('module wiring', () => {
       SpecialtyRecordsController,
       TreatmentSessionsController,
       ConsentDocumentsController,
+      BillingProfilesController,
     ]) {
       expect(moduleRef.get(controller, { strict: false })).toBeInstanceOf(controller);
     }

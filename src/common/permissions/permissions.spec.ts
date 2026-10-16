@@ -16,6 +16,7 @@ import { RecordDocumentsController } from '../../record-documents/record-documen
 import { SpecialtyRecordsController } from '../../specialty-records/specialty-records.controller';
 import { ConsentDocumentsController } from '../../treatment-sessions/consent-documents.controller';
 import { TreatmentSessionsController } from '../../treatment-sessions/treatment-sessions.controller';
+import { BillingProfilesController } from '../../billing-profiles/billing-profiles.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { UserPermissionsService } from '../../users/user-permissions.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -47,6 +48,7 @@ const controllers: Controller[] = [
   RecordDocumentsController,
   ConsentTemplatesController,
   TreatmentsController,
+  BillingProfilesController,
   TreatmentSessionsController,
   ConsentDocumentsController,
 ];
@@ -170,6 +172,7 @@ describe('permission catalog', () => {
     expect(annotated.sort()).toEqual(
       [
         'appointments.controller.ts',
+        'billing-profiles.controller.ts',
         'billing.controller.ts',
         'clinical-notes.controller.ts',
         'clinical-timeline.controller.ts',
