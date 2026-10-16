@@ -102,7 +102,7 @@ B2 los quita de la API y de la web. No se borran de la base.
 | `expectedCash?`, `countedCash?`, `difference?` | Arqueo, calculado al cerrar |
 | `closingNote?` | Obligatoria si `difference` ≠ 0 |
 
-`expectedCash = openingCash + Σ pagos CASH RECORDED − Σ pagos CASH devueltos durante esta caja`.
+`expectedCash = openingCash + Σ pagos CASH recibidos en esta caja (cualquiera sea su estado actual) − Σ pagos CASH devueltos desde esta caja`: un pago recibido y luego devuelto cuenta en ambos lados.
 El resumen por forma de pago (`GET /cash-registers/:id`) se calcula; no se guarda.
 
 ### Órdenes
