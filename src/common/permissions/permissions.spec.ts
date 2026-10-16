@@ -17,6 +17,7 @@ import { SpecialtyRecordsController } from '../../specialty-records/specialty-re
 import { ConsentDocumentsController } from '../../treatment-sessions/consent-documents.controller';
 import { TreatmentSessionsController } from '../../treatment-sessions/treatment-sessions.controller';
 import { BillingProfilesController } from '../../billing-profiles/billing-profiles.controller';
+import { CashRegistersController } from '../../cash-registers/cash-registers.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { UserPermissionsService } from '../../users/user-permissions.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -49,6 +50,7 @@ const controllers: Controller[] = [
   ConsentTemplatesController,
   TreatmentsController,
   BillingProfilesController,
+  CashRegistersController,
   TreatmentSessionsController,
   ConsentDocumentsController,
 ];
@@ -141,7 +143,7 @@ describe('permission catalog', () => {
   it('is exercised by at least one route for every permission', () => {
     const used = new Set(guardedHandlers.map(({ permission }) => permission));
     // Permissions whose routes arrive with the later B1 tasks (cash registers, orders, payments).
-    const notRoutedYet: Permission[] = ['billing.adjust', 'cash.manage'];
+    const notRoutedYet: Permission[] = ['billing.adjust'];
 
     expect([...used, ...notRoutedYet].sort()).toEqual(
       PERMISSION_CATALOG.map(({ key }) => key).sort(),
@@ -174,6 +176,7 @@ describe('permission catalog', () => {
         'appointments.controller.ts',
         'billing-profiles.controller.ts',
         'billing.controller.ts',
+        'cash-registers.controller.ts',
         'clinical-notes.controller.ts',
         'clinical-timeline.controller.ts',
         'consent-documents.controller.ts',

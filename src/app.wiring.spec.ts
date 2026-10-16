@@ -5,6 +5,8 @@ import { AppointmentsController } from './appointments/appointments.controller';
 import { AppointmentsModule } from './appointments/appointments.module';
 import { BillingProfilesController } from './billing-profiles/billing-profiles.controller';
 import { BillingProfilesModule } from './billing-profiles/billing-profiles.module';
+import { CashRegistersController } from './cash-registers/cash-registers.controller';
+import { CashRegistersModule } from './cash-registers/cash-registers.module';
 import { BranchesController } from './branches/branches.controller';
 import { BranchesModule } from './branches/branches.module';
 import { CatalogsController } from './catalogs/catalogs.controller';
@@ -56,6 +58,7 @@ describe('module wiring', () => {
         SpecialtyRecordsModule,
         TreatmentSessionsModule,
         BillingProfilesModule,
+        CashRegistersModule,
       ],
       providers: [PermissionGuard, Reflector],
     })
@@ -74,6 +77,7 @@ describe('module wiring', () => {
       TreatmentSessionsController,
       ConsentDocumentsController,
       BillingProfilesController,
+      CashRegistersController,
     ]) {
       expect(moduleRef.get(controller, { strict: false })).toBeInstanceOf(controller);
     }

@@ -33,6 +33,7 @@ import { RecordDocumentsModule } from './record-documents/record-documents.modul
 import { DocumentTemplatesModule } from './document-templates/document-templates.module';
 import { ConsentsModule } from './consents/consents.module';
 import { BillingProfilesModule } from './billing-profiles/billing-profiles.module';
+import { CashRegistersModule } from './cash-registers/cash-registers.module';
 import { TreatmentsModule } from './treatments/treatments.module';
 import { TreatmentSessionsModule } from './treatment-sessions/treatment-sessions.module';
 import { DocumentVerificationModule } from './document-verification/document-verification.module';
@@ -112,6 +113,7 @@ const throttleTtlMs = throttleTtlRaw < 1000 ? throttleTtlRaw * 1000 : throttleTt
     TreatmentsModule,
     TreatmentSessionsModule,
     BillingProfilesModule,
+    CashRegistersModule,
     DocumentVerificationModule,
     PlatformModule,
   ],
