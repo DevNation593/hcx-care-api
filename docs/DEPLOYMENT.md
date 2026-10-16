@@ -392,6 +392,16 @@ Rollback: restore the backup.
 
 Before production, run once against a disposable database (`DATABASE_URL_TEST`): the migration, the verification script and `npm run test:e2e`.
 
+### 1c. Billing profiles and professionals' billing access (B1 cash register)
+
+Right after `prisma migrate deploy` for B1, run once:
+
+```bash
+DATABASE_URL="postgresql://..." npm run prisma:migrate-billing-profiles
+```
+
+It turns the legacy billing fields of live patients into billing profiles linked as their default, and grants every active PROFESIONAL the `billing.view` and `billing.create` permissions (they are no longer role defaults), without touching rows that already exist. Profiles are created on behalf of each tenant's MASTER user. It prints a JSON summary (never identification numbers); patients listed in `skippedInvalid` (`EMAIL_MISSING`, `IDENTIFICATION_INVALID`) need their billing data fixed by hand. It is idempotent: run it again when deploying B2.
+
 ### 2. Generate Prisma Client
 
 ```bash
