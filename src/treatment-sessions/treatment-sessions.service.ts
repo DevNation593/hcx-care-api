@@ -42,6 +42,7 @@ import {
   BILLING_SESSION_STATUSES,
   SessionCommand,
   statusAfterIntake,
+  statusAfterClinicalCompletion,
 } from './session-state';
 
 /** Stored encrypted; everything outside this service works with the decrypted session. */
@@ -563,8 +564,23 @@ export class TreatmentSessionsService {
       const { complete } = evaluateSession(policy, facts);
       if (complete.length > 0) throw requirementsMissing(complete);
 
+      const invoice = !policy.billingGate.requireClinicalCompletion
+        ? await tx.invoiceRequest.findFirst({
+            where: {
+              tenantId,
+              order: { items: { some: { treatmentSessionId: sessionId, releasedAt: null } } },
+              OR: [
+                { status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] } },
+                { requiresReconciliation: true },
+              ],
+            },
+            orderBy: { requestedAt: 'desc' },
+          })
+        : null;
       const completed = await this.transition(tx, session, {
-        status: 'CLINICAL_COMPLETE',
+        status: statusAfterClinicalCompletion(
+          invoice?.requiresReconciliation ? 'PROCESSING' : invoice?.status,
+        ),
         completedAt: new Date(),
         ...(notes !== session.procedureNotes
           ? { procedureNotes: notes ? this.crypto.encrypt(tenantId, notes) : null }
@@ -684,6 +700,25 @@ export class TreatmentSessionsService {
     }
     const policy = parseTreatmentRequirements(version.requirements);
     assertCommandAllowed(session.status, command, policy);
+    if (
+      !policy.billingGate.requireClinicalCompletion &&
+      ['CANCEL', 'NO_SHOW', 'REVOKE_CONSENT'].includes(command) &&
+      (await tx.invoiceRequest.findFirst({
+        where: {
+          tenantId,
+          order: { items: { some: { treatmentSessionId: sessionId, releasedAt: null } } },
+          OR: [
+            { status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] } },
+            { requiresReconciliation: true },
+          ],
+        },
+      }))
+    ) {
+      throw invalidTransition(
+        session.status,
+        'La atención tiene una factura pendiente o autorizada.',
+      );
+    }
     return { session, version, policy };
   }
 

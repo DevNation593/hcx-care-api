@@ -225,50 +225,53 @@ enum SessionMediaPhase {
 // ============================================
 
 model Tenant {
-  id                  String     @id @default(cuid())
-  name                String
-  email               String
-  phone               String?
-  address             String?
-  logoUrl             String?
-  tenantType          TenantType @default(PERSONAL)
-  isActive            Boolean    @default(true)
-  onboardingCompleted Boolean    @default(false)
-  isPlatform          Boolean    @default(false)
-  legalName           String?
-  taxIdentificationType String? // RUC, CEDULA or PASSPORT
+  invoicingConnection InvoicingConnection?
+  invoiceRequests     InvoiceRequest[]
+
+  id                      String     @id @default(cuid())
+  name                    String
+  email                   String
+  phone                   String?
+  address                 String?
+  logoUrl                 String?
+  tenantType              TenantType @default(PERSONAL)
+  isActive                Boolean    @default(true)
+  onboardingCompleted     Boolean    @default(false)
+  isPlatform              Boolean    @default(false)
+  legalName               String?
+  taxIdentificationType   String? // RUC, CEDULA or PASSPORT
   taxIdentificationNumber String?
-  createdAt           DateTime   @default(now())
-  updatedAt           DateTime   @updatedAt
+  createdAt               DateTime   @default(now())
+  updatedAt               DateTime   @updatedAt
 
   // Relations
-  settings           TenantSettings?
-  billingSettings    BillingSettings?
-  subscription       TenantSubscription?
-  subscriptionPayments SubscriptionPayment[]
-  users              User[]
-  patients           Patient[]
-  patientProfessionals PatientProfessional[]
-  specialtyRecords   SpecialtyRecord[]
-  appointments       Appointment[]
-  clinicalNotes      ClinicalNote[]
-  tasks              Task[]
-  nextSessionPlans   NextSessionPlan[]
-  notifications      NotificationLog[]
-  auditLogs          AuditLog[]
-  usageMetrics       UsageMetrics[]
-  subscriptionEvents SubscriptionEvent[]
-  invoices          Invoice[]
-  specialties        TenantSpecialty[]
-  enabledModules     TenantModule[]
-  formDefinitions      FormDefinition[]
-  branches             Branch[]
-  encounters           Encounter[]
-  medications          Medication[]
-  documentTemplates DocumentTemplate[]
-  userPermissions      UserPermission[]
-  patientFiles         PatientFile[]
-  professionalBranches ProfessionalBranch[]
+  settings                TenantSettings?
+  billingSettings         BillingSettings?
+  subscription            TenantSubscription?
+  subscriptionPayments    SubscriptionPayment[]
+  users                   User[]
+  patients                Patient[]
+  patientProfessionals    PatientProfessional[]
+  specialtyRecords        SpecialtyRecord[]
+  appointments            Appointment[]
+  clinicalNotes           ClinicalNote[]
+  tasks                   Task[]
+  nextSessionPlans        NextSessionPlan[]
+  notifications           NotificationLog[]
+  auditLogs               AuditLog[]
+  usageMetrics            UsageMetrics[]
+  subscriptionEvents      SubscriptionEvent[]
+  invoices                Invoice[]
+  specialties             TenantSpecialty[]
+  enabledModules          TenantModule[]
+  formDefinitions         FormDefinition[]
+  branches                Branch[]
+  encounters              Encounter[]
+  medications             Medication[]
+  documentTemplates       DocumentTemplate[]
+  userPermissions         UserPermission[]
+  patientFiles            PatientFile[]
+  professionalBranches    ProfessionalBranch[]
   treatments              Treatment[]
   treatmentVersions       TreatmentVersion[]
   consentTemplates        ConsentTemplate[]
@@ -289,6 +292,8 @@ model Tenant {
 
 // A physical location of the clinic. Every clinic has one main branch.
 model Branch {
+  emissionPoint BranchEmissionPoint?
+
   id       String @id @default(cuid())
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -306,12 +311,12 @@ model Branch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  appointments  Appointment[]
-  encounters    Encounter[]
-  professionals ProfessionalBranch[]
-  treatmentSessions TreatmentSession[]
+  appointments         Appointment[]
+  encounters           Encounter[]
+  professionals        ProfessionalBranch[]
+  treatmentSessions    TreatmentSession[]
   cashRegisterSessions CashRegisterSession[]
-  orders Order[]
+  orders               Order[]
 
   @@unique([tenantId, name])
   @@index([tenantId, isActive])
@@ -334,22 +339,22 @@ model ProfessionalBranch {
 }
 
 model BillingSettings {
-  id                   String   @id @default(cuid())
-  tenantId             String   @unique
-  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  provider             String   @default("FAKTUR")
-  apiKey               String?
-  establishment        String?
-  emissionPoint        String?
-  nextSequential       Int      @default(1)
-  businessName         String?
-  businessAddress      String?
-  specialTaxpayer      Boolean  @default(false)
-  accountingRequired   Boolean  @default(false)
-  withholdingAgent     Boolean  @default(false)
-  isEnabled            Boolean  @default(false)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  tenantId           String   @unique
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider           String   @default("FAKTUR")
+  apiKey             String?
+  establishment      String?
+  emissionPoint      String?
+  nextSequential     Int      @default(1)
+  businessName       String?
+  businessAddress    String?
+  specialTaxpayer    Boolean  @default(false)
+  accountingRequired Boolean  @default(false)
+  withholdingAgent   Boolean  @default(false)
+  isEnabled          Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@index([tenantId, isEnabled])
 }
@@ -361,33 +366,33 @@ model Invoice {
   subscriptionId String?
   subscription   TenantSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   issuerId       String
-  issuer         User               @relation("IssuedInvoices", fields: [issuerId], references: [id], onDelete: Restrict)
+  issuer         User                @relation("IssuedInvoices", fields: [issuerId], references: [id], onDelete: Restrict)
   patientId      String?
   patient        Patient?            @relation(fields: [patientId], references: [id], onDelete: SetNull)
 
-  documentType InvoiceDocumentType @default(INVOICE)
-  status       InvoiceStatus       @default(PENDING)
-  issueDate    DateTime            @default(now())
-  currency     String              @default("USD")
-  subtotal     Decimal             @db.Decimal(10, 2)
+  documentType        InvoiceDocumentType @default(INVOICE)
+  status              InvoiceStatus       @default(PENDING)
+  issueDate           DateTime            @default(now())
+  currency            String              @default("USD")
+  subtotal            Decimal             @db.Decimal(10, 2)
   tax                 Decimal             @default(0) @db.Decimal(10, 2)
-  total       Decimal             @db.Decimal(10, 2)
-  customerName String
-  customerEmail String
-  customerTaxIdType String
-  customerTaxId String
-  customerAddress String?
-  description String
-  externalId String?
-  accessKey  String?
+  total               Decimal             @db.Decimal(10, 2)
+  customerName        String
+  customerEmail       String
+  customerTaxIdType   String
+  customerTaxId       String
+  customerAddress     String?
+  description         String
+  externalId          String?
+  accessKey           String?
   authorizationNumber String?
-  xmlUrl     String?
-  pdfUrl     String?
-  errorMessage String?
-  providerResponse Json?
-  idempotencyKey String @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  xmlUrl              String?
+  pdfUrl              String?
+  errorMessage        String?
+  providerResponse    Json?
+  idempotencyKey      String              @unique
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   @@index([tenantId, createdAt])
   @@index([status])
@@ -450,12 +455,12 @@ model TenantSubscription {
   seatsPsychologistsUsed Int @default(0)
 
   // Resource Limits
-  maxActivePatients         Int @default(10)
-  storageGB                 Int @default(0) // 0 = unlimited
-  monthlyNotificationsLimit Int @default(100)
-  includedSpecialties       Int @default(1)
-  specialtyPrice            Decimal @default(15) @db.Decimal(10, 2)
-  monthlyElectronicInvoicesLimit Int @default(50)
+  maxActivePatients              Int     @default(10)
+  storageGB                      Int     @default(0) // 0 = unlimited
+  monthlyNotificationsLimit      Int     @default(100)
+  includedSpecialties            Int     @default(1)
+  specialtyPrice                 Decimal @default(15) @db.Decimal(10, 2)
+  monthlyElectronicInvoicesLimit Int     @default(50)
 
   // Feature Flags (boolean)
   featureClinicalNotes           Boolean @default(true)
@@ -475,12 +480,12 @@ model TenantSubscription {
   featureSSO                     Boolean @default(false)
 
   // Usage Tracking (updated in real-time)
-  activePatientsCount      Int      @default(0)
-  storageUsedBytes         BigInt   @default(0)
-  monthlyNotificationsSent Int      @default(0)
-  lastNotificationReset    DateTime @default(now())
-  monthlyElectronicInvoicesUsed Int  @default(0)
-  lastInvoiceReset          DateTime @default(now())
+  activePatientsCount           Int      @default(0)
+  storageUsedBytes              BigInt   @default(0)
+  monthlyNotificationsSent      Int      @default(0)
+  lastNotificationReset         DateTime @default(now())
+  monthlyElectronicInvoicesUsed Int      @default(0)
+  lastInvoiceReset              DateTime @default(now())
 
   // Scheduled changes
   scheduledPlanChange   PlanType?
@@ -598,6 +603,8 @@ model SubscriptionEvent {
 // ============================================
 
 model User {
+  requestedInvoices InvoiceRequest[]
+
   id       String @id @default(cuid())
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -611,10 +618,10 @@ model User {
   professionalTitle String?
   licenseNumber     String?
 
-  role          UserRole
-  isActive      Boolean  @default(true)
-  emailVerified Boolean  @default(false)
-  mustChangePassword Boolean @default(false)
+  role               UserRole
+  isActive           Boolean  @default(true)
+  emailVerified      Boolean  @default(false)
+  mustChangePassword Boolean  @default(false)
 
   // Provider-managed access (for PSYCHOLOGIST role in CLINIC tenants)
   // When true, only the system provider (OWNER) can grant/revoke access
@@ -633,39 +640,39 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Relations
-  refreshTokens           RefreshToken[]
-  assignedAppointments    Appointment[]          @relation("LegacyAppointmentPsychologist")
-  professionalAppointments Appointment[]         @relation("AppointmentProfessional")
-  patientAssignments PatientProfessional[]       @relation("PatientTeamProfessional")
-  patientAssignmentsMade PatientProfessional[]   @relation("PatientTeamAssigner")
-  assignedPatients        Patient[]               @relation("AssignedPatients")
-  clinicalNotes           ClinicalNote[]
-  tasksCreated            Task[]                  @relation("TaskCreator")
-  tasksAssigned           Task[]                  @relation("TaskAssignee")
-  nextSessionPlans        NextSessionPlan[]
-  notifications           NotificationLog[]
-  notificationPreference  NotificationPreference?
-  pushSubscriptions       PushSubscription[]
-  auditLogs               AuditLog[]
-  subscriptionEvents      SubscriptionEvent[]
-  professionalSpecialties ProfessionalSpecialty[]
-  professionalProfile     ProfessionalProfile?
-  specialtyRecords        SpecialtyRecord[]
+  refreshTokens            RefreshToken[]
+  assignedAppointments     Appointment[]           @relation("LegacyAppointmentPsychologist")
+  professionalAppointments Appointment[]           @relation("AppointmentProfessional")
+  patientAssignments       PatientProfessional[]   @relation("PatientTeamProfessional")
+  patientAssignmentsMade   PatientProfessional[]   @relation("PatientTeamAssigner")
+  assignedPatients         Patient[]               @relation("AssignedPatients")
+  clinicalNotes            ClinicalNote[]
+  tasksCreated             Task[]                  @relation("TaskCreator")
+  tasksAssigned            Task[]                  @relation("TaskAssignee")
+  nextSessionPlans         NextSessionPlan[]
+  notifications            NotificationLog[]
+  notificationPreference   NotificationPreference?
+  pushSubscriptions        PushSubscription[]
+  auditLogs                AuditLog[]
+  subscriptionEvents       SubscriptionEvent[]
+  professionalSpecialties  ProfessionalSpecialty[]
+  professionalProfile      ProfessionalProfile?
+  specialtyRecords         SpecialtyRecord[]
   encounters               Encounter[]
   permissionOverrides      UserPermission[]        @relation("UserPermissionOverrides")
   branchAssignments        ProfessionalBranch[]
   uploadedFiles            PatientFile[]
-  issuedInvoices           Invoice[]             @relation("IssuedInvoices")
+  issuedInvoices           Invoice[]               @relation("IssuedInvoices")
   treatmentSessions        TreatmentSession[]
   consentEvents            ConsentEvent[]
-  createdBillingProfiles   BillingProfile[]      @relation("BillingProfileCreatedBy")
-  openedCashRegisters      CashRegisterSession[] @relation("CashRegisterOpenedBy")
-  closedCashRegisters      CashRegisterSession[] @relation("CashRegisterClosedBy")
-  createdOrders            Order[]               @relation("OrderCreatedBy")
-  cancelledOrders          Order[]               @relation("OrderCancelledBy")
-  createdOrderItems        OrderItem[]           @relation("OrderItemCreatedBy")
-  receivedPayments         Payment[]             @relation("PaymentReceivedBy")
-  refundedPayments         Payment[]             @relation("PaymentRefundedBy")
+  createdBillingProfiles   BillingProfile[]        @relation("BillingProfileCreatedBy")
+  openedCashRegisters      CashRegisterSession[]   @relation("CashRegisterOpenedBy")
+  closedCashRegisters      CashRegisterSession[]   @relation("CashRegisterClosedBy")
+  createdOrders            Order[]                 @relation("OrderCreatedBy")
+  cancelledOrders          Order[]                 @relation("OrderCancelledBy")
+  createdOrderItems        OrderItem[]             @relation("OrderItemCreatedBy")
+  receivedPayments         Payment[]               @relation("PaymentReceivedBy")
+  refundedPayments         Payment[]               @relation("PaymentRefundedBy")
   consentSignaturesTaken   ConsentSignature[]
 
   @@unique([tenantId, email])
@@ -755,19 +762,19 @@ model Patient {
   updatedAt DateTime @updatedAt
 
   // Relations
-  appointments     Appointment[]
-  clinicalNotes    ClinicalNote[]
-  tasks            Task[]
-  nextSessionPlans NextSessionPlan[]
-  specialtyRecords SpecialtyRecord[]
+  appointments            Appointment[]
+  clinicalNotes           ClinicalNote[]
+  tasks                   Task[]
+  nextSessionPlans        NextSessionPlan[]
+  specialtyRecords        SpecialtyRecord[]
   professionalAssignments PatientProfessional[]
-  invoices         Invoice[]
+  invoices                Invoice[]
   encounters              Encounter[]
-  files            PatientFile[]
-  treatmentSessions TreatmentSession[]
-  billingProfiles PatientBillingProfile[]
-  orderItems OrderItem[]
-  consentDocuments  ConsentDocument[]
+  files                   PatientFile[]
+  treatmentSessions       TreatmentSession[]
+  billingProfiles         PatientBillingProfile[]
+  orderItems              OrderItem[]
+  consentDocuments        ConsentDocument[]
 
   @@index([tenantId])
   @@index([tenantId, isActive])
@@ -824,32 +831,32 @@ model Specialty {
 }
 
 model SpecialtyRecord {
-  id             String       @id @default(cuid())
-  tenantId       String
-  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  patientId      String
-  patient        Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  professionalId String
-  professional   User         @relation(fields: [professionalId], references: [id], onDelete: Restrict)
-  specialtyId    String
-  specialty      Specialty    @relation(fields: [specialtyId], references: [id], onDelete: Restrict)
-  appointmentId  String?
-  appointment    Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  id               String          @id @default(cuid())
+  tenantId         String
+  tenant           Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  patientId        String
+  patient          Patient         @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  professionalId   String
+  professional     User            @relation(fields: [professionalId], references: [id], onDelete: Restrict)
+  specialtyId      String
+  specialty        Specialty       @relation(fields: [specialtyId], references: [id], onDelete: Restrict)
+  appointmentId    String?
+  appointment      Appointment?    @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
   // The encounter the record was written in, when the professional opened one.
   encounterId      String?
   encounter        Encounter?      @relation(fields: [encounterId], references: [id], onDelete: SetNull)
-  moduleKey      String
+  moduleKey        String
   // The version of the module or form definition the data was validated against.
   schemaVersion    Int             @default(1)
   // Printed on the document and encoded in its QR, so that a third party can check it is
   // authentic without reading its content.
-  verificationCode String? @unique
+  verificationCode String?         @unique
   // Set for answers to a form defined by the tenant (moduleKey `custom.<formDefinitionId>`).
   formDefinitionId String?
   formDefinition   FormDefinition? @relation(fields: [formDefinitionId], references: [id], onDelete: Restrict)
-  recordDate     DateTime     @default(now())
-  data           Json
-  notes          String?
+  recordDate       DateTime        @default(now())
+  data             Json
+  notes            String?
 
   // Clinical records are never removed physically: corrections bump the version, removals set deletedAt.
   version        Int       @default(1)
@@ -857,16 +864,16 @@ model SpecialtyRecord {
   deletedById    String?
   deletionReason String?
 
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  treatmentSession TreatmentSession?
 
   @@index([tenantId, patientId, recordDate])
   @@index([tenantId, specialtyId, moduleKey])
   @@index([appointmentId])
   @@index([formDefinitionId])
   @@index([encounterId])
-
-  treatmentSession TreatmentSession?
 }
 
 // One attention of a patient by a professional. It groups the records written during it.
@@ -906,9 +913,9 @@ model Encounter {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  records SpecialtyRecord[]
-  notes   ClinicalNote[]
-  files   PatientFile[]
+  records          SpecialtyRecord[]
+  notes            ClinicalNote[]
+  files            PatientFile[]
   treatmentSession TreatmentSession?
 
   @@index([tenantId, patientId, startedAt])
@@ -929,7 +936,7 @@ model PatientFile {
   encounterId  String?
   encounter    Encounter? @relation(fields: [encounterId], references: [id], onDelete: SetNull)
 
-  category String
+  category    String
   // Stored encrypted: a file name or a description can say what the patient has.
   fileName    String
   description String?
@@ -940,7 +947,7 @@ model PatientFile {
 
   // Set for photos taken during a treatment session; null for every other file.
   treatmentSessionId String?
-  treatmentSession   TreatmentSession? @relation(fields: [treatmentSessionId], references: [id], onDelete: SetNull)
+  treatmentSession   TreatmentSession?  @relation(fields: [treatmentSessionId], references: [id], onDelete: SetNull)
   phase              SessionMediaPhase?
 
   // Clinical files are never removed physically: removal sets deletedAt.
@@ -1047,8 +1054,8 @@ model FormDefinition {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  versions FormDefinitionVersion[]
-  records  SpecialtyRecord[]
+  versions          FormDefinitionVersion[]
+  records           SpecialtyRecord[]
   treatmentVersions TreatmentVersion[]
 
   @@unique([tenantId, name])
@@ -1202,9 +1209,9 @@ model Appointment {
   updatedAt DateTime @updatedAt
 
   // Relations
-  clinicalNotes ClinicalNote[]
-  specialtyRecords SpecialtyRecord[]
-  encounter        Encounter?
+  clinicalNotes     ClinicalNote[]
+  specialtyRecords  SpecialtyRecord[]
+  encounter         Encounter?
   treatmentSessions TreatmentSession[]
 
   @@index([tenantId])
@@ -1402,9 +1409,9 @@ model PushSubscription {
   userId   String
   user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  endpoint String  @unique
-  p256dh   String
-  auth     String
+  endpoint  String  @unique
+  p256dh    String
+  auth      String
   userAgent String?
 
   createdAt DateTime @default(now())
@@ -1456,8 +1463,8 @@ model Treatment {
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name     String
-  category String?
+  name        String
+  category    String?
   // Null: any professional of the tenant can open sessions. Set: only that specialty.
   specialtyId String?
   specialty   Specialty? @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
@@ -1537,8 +1544,8 @@ model ConsentTemplateVersion {
   template   ConsentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
   version    Int
 
-  title String
-  body  String
+  title    String
+  body     String
   // SHA-256 hex of `title + "\n" + body`.
   checksum String
 
@@ -1574,8 +1581,8 @@ model ConsentDocument {
   templateVersion   ConsentTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
 
   // Stored encrypted: the resolved text the patient saw.
-  title String
-  body  String
+  title    String
+  body     String
   // SHA-256 hex of the resolved title and body, in the clear.
   checksum String
 
@@ -1610,7 +1617,7 @@ model ConsentSignature {
   documentId String          @unique
   document   ConsentDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
 
-  signerRole ConsentSignerRole
+  signerRole           ConsentSignerRole
   // Stored encrypted.
   signerName           String
   signerIdentification String
@@ -1646,7 +1653,7 @@ model ConsentEvent {
   documentId String
   document   ConsentDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
 
-  type ConsentEventType
+  type   ConsentEventType
   // Stored encrypted. Required for a refusal and a revocation.
   reason String?
 
@@ -1753,11 +1760,13 @@ enum PaymentStatus {
 // Who receives an invoice. Fiscal data, not clinical: it is not encrypted and has no relation
 // to encounters, notes or files. Creating one never creates a patient.
 model BillingProfile {
+  invoiceRequests InvoiceRequest[]
+
   id       String @id @default(cuid())
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  kind BillingProfileKind
+  kind      BillingProfileKind
   // SRI identification type code: 04 RUC, 05 cedula, 06 passport, 07 final consumer.
   idType    String
   idNumber  String
@@ -1765,7 +1774,7 @@ model BillingProfile {
   email     String?
   address   String?
   phone     String?
-  isActive  Boolean @default(true)
+  isActive  Boolean            @default(true)
 
   createdById String
   createdBy   User     @relation("BillingProfileCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
@@ -1832,12 +1841,14 @@ model CashRegisterSession {
 
 // A charge to one billing profile, made of treatment sessions and free items.
 model Order {
+  invoiceRequests InvoiceRequest[]
+
   id       String @id @default(cuid())
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   branchId String
-  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branch   Branch      @relation(fields: [branchId], references: [id], onDelete: Restrict)
   // Sequential per tenant.
   number   Int
   status   OrderStatus @default(OPEN)
@@ -1938,4 +1949,129 @@ model Payment {
   @@index([orderId])
   @@index([cashRegisterSessionId])
   @@index([refundCashRegisterSessionId])
+}
+
+enum InvoiceRequestStatus {
+  REQUESTED
+  PROCESSING
+  AUTHORIZED
+  REJECTED
+  FAILED
+}
+
+model InvoicingConnection {
+  id                     String                @id @default(cuid())
+  tenantId               String                @unique
+  tenant                 Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  apiKeyEncrypted        String
+  webhookSecretEncrypted String?
+  externalTenantId       String
+  taxpayerId             String
+  taxpayerName           String
+  taxpayerRuc            String
+  environment            String
+  active                 Boolean               @default(true)
+  revision               Int                   @default(1)
+  validatedAt            DateTime
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  points                 BranchEmissionPoint[]
+  refs                   InvoicingRef[]
+  requests               InvoiceRequest[]
+  events                 InvoiceRequestEvent[]
+}
+
+model BranchEmissionPoint {
+  id                String              @id @default(cuid())
+  branchId          String              @unique
+  branch            Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  connectionId      String
+  connection        InvoicingConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  establishmentId   String
+  emissionPointId   String
+  establishmentCode String
+  emissionPointCode String
+  updatedAt         DateTime            @updatedAt
+
+  @@index([connectionId])
+}
+
+model InvoicingRef {
+  id           String              @id @default(cuid())
+  connectionId String
+  connection   InvoicingConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  kind         String
+  localId      String
+  externalId   String
+  syncedHash   String
+  updatedAt    DateTime            @updatedAt
+
+  @@unique([connectionId, kind, localId])
+}
+
+model InvoiceRequest {
+  id                       String                @id @default(cuid())
+  tenantId                 String
+  tenant                   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  orderId                  String
+  order                    Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  connectionId             String
+  connection               InvoicingConnection   @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  billingProfileId         String
+  billingProfile           BillingProfile        @relation(fields: [billingProfileId], references: [id], onDelete: Restrict)
+  requestedById            String
+  requestedBy              User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  status                   InvoiceRequestStatus  @default(REQUESTED)
+  clientIdempotencyKey     String
+  providerIdempotencyKey   String                @unique
+  snapshotEncrypted        String
+  providerBodyEncrypted    String?
+  providerBodyHash         String?
+  requiresReconciliation   Boolean               @default(false)
+  replacesInvoiceRequestId String?               @unique
+  replacesInvoiceRequest   InvoiceRequest?       @relation("InvoiceReplacement", fields: [replacesInvoiceRequestId], references: [id], onDelete: Restrict)
+  replacedBy               InvoiceRequest?       @relation("InvoiceReplacement")
+  rootRequestId            String
+  externalDocumentId       String?
+  externalState            String?
+  number                   String?
+  accessKey                String?
+  authorizationNumber      String?
+  authorizedAt             DateTime?
+  xmlStorageKey            String?
+  xmlSha256                String?
+  rideStorageKey           String?
+  rideSha256               String?
+  attempts                 Int                   @default(0)
+  nextAttemptAt            DateTime              @default(now())
+  lastErrorEncrypted       String?
+  leaseToken               String?
+  leaseUntil               DateTime?
+  requestedAt              DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  finishedAt               DateTime?
+  events                   InvoiceRequestEvent[]
+
+  @@unique([tenantId, clientIdempotencyKey])
+  @@unique([connectionId, externalDocumentId])
+  @@index([tenantId, requestedAt])
+  @@index([status, nextAttemptAt, leaseUntil])
+  @@index([orderId])
+  @@index([rootRequestId])
+}
+
+model InvoiceRequestEvent {
+  id               String              @id @default(cuid())
+  connectionId     String
+  connection       InvoicingConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  invoiceRequestId String?
+  invoiceRequest   InvoiceRequest?     @relation(fields: [invoiceRequestId], references: [id], onDelete: Restrict)
+  type             String
+  source           String
+  detail           Json
+  webhookEventId   String?
+  createdAt        DateTime            @default(now())
+
+  @@unique([connectionId, webhookEventId])
+  @@index([invoiceRequestId, createdAt])
 }

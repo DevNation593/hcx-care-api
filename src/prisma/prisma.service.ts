@@ -61,6 +61,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       'subscriptionEvent',
       'usageMetrics',
       'invoice',
+      'invoicingConnection',
+      'branchEmissionPoint',
+      'invoicingRef',
+      'invoiceRequest',
+      'invoiceRequestEvent',
       'specialtyRecord',
       'formDefinition',
       'encounter',
@@ -144,6 +149,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     const orderedModels = [
       'auditLog',
+      'invoiceRequestEvent',
+      'invoiceRequest',
+      'invoicingRef',
+      'branchEmissionPoint',
+      'invoicingConnection',
       // Payments restrict deleting their order and cash register; items restrict their session.
       'payment',
       'orderItem',

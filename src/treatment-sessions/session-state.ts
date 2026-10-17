@@ -107,3 +107,10 @@ export function statusAfterIntake(
   if (policy.informedConsent.required && facts.hasApplicableConsent) return 'CONSENTED';
   return 'READY_FOR_CONSENT';
 }
+
+/** Financial state is applied only after clinical completion, so early invoices cannot block care. */
+export function statusAfterClinicalCompletion(invoiceStatus?: string): TreatmentSessionStatus {
+  if (invoiceStatus === 'AUTHORIZED') return 'BILLED';
+  if (invoiceStatus === 'REQUESTED' || invoiceStatus === 'PROCESSING') return 'BILLING_PENDING';
+  return 'CLINICAL_COMPLETE';
+}

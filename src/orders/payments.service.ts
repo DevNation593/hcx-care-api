@@ -159,6 +159,19 @@ export class PaymentsService {
 
       const order = await loadOrderForWrite(tx, tenantId, payment.orderId);
       if (order.status !== 'OPEN' && order.status !== 'PAID') throw notRefundable();
+      if (
+        await tx.invoiceRequest.findFirst({
+          where: {
+            tenantId,
+            orderId: order.id,
+            OR: [
+              { status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] } },
+              { requiresReconciliation: true },
+            ],
+          },
+        })
+      )
+        throw notRefundable();
 
       const register = await findOpenCashRegister(tx, tenantId, order.branchId);
       await tx.payment.update({

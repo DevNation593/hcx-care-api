@@ -1,8 +1,8 @@
 ## Billing
 
-The billing routes are a read-only history of the invoices issued before electronic
-invoicing was retired; the API no longer issues invoices. They require a JWT, the `MASTER`
-role and the `billing.view` permission.
+The `/billing/invoices` routes preserve the read-only history of Faktur invoices.
+New electronic invoices use the durable emite-facil request endpoints below. Historical
+routes require a JWT, the `MASTER` role and the `billing.view` permission.
 
 ### List invoices
 
@@ -11,6 +11,71 @@ role and the `billing.view` permission.
 ### Get invoice
 
 `GET /api/v1/tenants/:tenantId/billing/invoices/:invoiceId`
+
+### Electronic invoicing (emite-facil)
+
+All tenant routes require JWT and the `core.billing` section. Configuration is
+restricted to MASTER. Request creation requires `billing.create`; list, detail and
+downloads require `billing.view`. MASTER has these permissions; PROFESIONAL and
+ASISTENTE can use invoice workflows when given the corresponding personal grants
+through the existing RolesGuard/PermissionGuard. Configuration remains MASTER-only.
+
+| Method | Path after `/api/v1/tenants/:tenantId` | Body / response |
+| --- | --- | --- |
+| GET | `/invoicing/connection` | Connection metadata or JSON null |
+| PUT | `/invoicing/connection` | `{taxpayerId, apiKey?, active?, webhookSecret?}` -> metadata |
+| POST | `/invoicing/test` | `{apiKey?}` -> `{tenant,taxpayers}`; 200, never saves credentials |
+| GET | `/invoicing/options` | `{tenant,taxpayers:[{...taxpayer,establishments:[{...establishment,emissionPoints:[]}]}]}` |
+| PUT | `/branches/:branchId/emission-point` | `{establishmentId,emissionPointId}` -> saved point with branchId and three-digit codes |
+| POST | `/orders/:id/invoice-requests` | No body. Required `Idempotency-Key` header; 202 with durable request |
+| GET | `/invoice-requests` | `{items,total,page,pageSize}` |
+| GET | `/invoice-requests/:id` | Request plus safe event timeline |
+| GET | `/invoice-requests/:id/xml` | Authorized XML bytes, `application/xml` |
+| GET | `/invoice-requests/:id/ride` | RIDE PDF bytes, `application/pdf` |
+
+List accepts `status=REQUESTED|PROCESSING|AUTHORIZED|REJECTED|FAILED`, `branchId`,
+`orderId`, `patientId`, `page` (1-based, default 1), `pageSize` (1..100, default 20).
+List/detail permit 120 requests/minute per caller for polling every five seconds.
+
+Connection metadata: `{id,active,externalTenantId,taxpayerId,taxpayerName,taxpayerRuc,
+environment,hasApiKey,hasWebhookSecret,revision,validatedAt,webhookUrl,points}`.
+Environment is `'1'` (test) or `'2'` (production), read from the provider issuer.
+`webhookUrl` is null if BACKEND_PUBLIC_URL is absent/invalid. No secret is returned.
+Omit `apiKey` to reuse it; omit `webhookSecret` to preserve it, send `""` to remove it.
+`active` defaults to true on PUT. A new key is tested before saving. Company/issuer
+identity is immutable once any request exists; same-identity key rotation is supported.
+Same-issuer environment refresh is allowed only without active/uncertain requests or
+authorized artifacts awaiting collection. Identity changes before first use invalidate
+branch points; key rotation and environment refresh preserve them and dispatch rechecks them.
+
+Request responses expose `{id,orderId,orderNumber,branchId,billingProfileId,status,
+requiresReconciliation,replacesInvoiceRequestId,externalDocumentId,externalState,number,
+accessKey,authorizationNumber,authorizedAt,artifacts:{xml,ride},attempts,lastError,
+requestedAt,finishedAt}`. Nullable fiscal values remain null until known. `lastError`
+is null or `{code,message,attempts?}`; attempts contain actual SRI explanations, visible
+only through the protected billing endpoints. Detail additionally returns `events` with
+`{id,type,source,detail,createdAt}`. No credentials, fiscal snapshots, storage keys or
+leases are exposed. The exact typed contract and examples are in
+`../.superpowers/sdd/2026-10-17-emite-facil-b2/task-2-report.md`.
+
+Creation performs no provider HTTP call. Keep the same client key after a transport
+failure; reusing it for the same order returns the same request, for another order 409.
+Only a known safe FAILED or REJECTED request permits correction and a new key. Never
+offer reissue/refund when `requiresReconciliation` is true, even if status is FAILED.
+SIGNATURE_FAILED stays PROCESSING: correct/retry that same document in emite-facil;
+HCX keeps reconciling it. Authorized invoices cannot be cancelled/refunded in HCX.
+
+Errors use `{statusCode,code,message}` with controlled Spanish messages. Eligibility
+422 uses the existing `{statusCode,code,message,missing,items}` billing eligibility
+contract. Examples: INVOICING_NOT_CONFIGURED, INVOICE_LIMIT_REACHED,
+INVOICE_REQUEST_IN_PROGRESS, INVOICE_RECONCILIATION_REQUIRED, ORDER_ALREADY_AUTHORIZED,
+CUSTOMER_SYNC_REQUIRED. An unavailable artifact returns 404; integrity failures 503.
+
+Public callback: `POST /api/v1/integrations/emite-facil/webhook/:connectionId` -> 204.
+No JWT; requires authentic raw-body signature in `webhook-id`, `webhook-timestamp`,
+`webhook-signature`, rejects invalid signatures/foreign company with 401. Limit300/min.
+Register its URL and secret manually in emite-facil. No API-key subscription management
+is attempted; minute reconciliation works without webhook.
 # API Endpoints Reference
 
 Base URL: `http://localhost:3000/api/v1`

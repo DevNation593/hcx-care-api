@@ -30,3 +30,7 @@ Complementa `2026-10-15-cash-and-billing-design.md`, secciones B2, Web, Errores 
 ## Verificación
 
 Pruebas del adaptador contra HTTP local, errores y firma; conexión y validación de puntos; transacciones de solicitud, idempotencia, límite, aislamiento de clínica, rechazos, reintentos, leases, estados finales y artefactos. Pruebas web de configuración, permiso MASTER, clave conservada en fallos de red, 422, estados y descargas. Migración SQL revisada y schema validado; E2E con PostgreSQL separado y simulador, si se dispone de un motor local. No se ejecutan migraciones en bases reales del usuario.
+
+## Aclaración de estados recuperables comprobada durante B2
+
+`SIGNATURE_FAILED` no es un rechazo definitivo. `DocumentRetryController` permite reanudar ese mismo documento después de corregir la firma en emite-facil; `InvoiceService` solo permite reemplazar `RETURNED`, `NOT_AUTHORIZED` y `XSD_INVALID`. HCX conserva `PROCESSING` al observar `SIGNATURE_FAILED`, con explicación de corregir y reintentar en emite-facil, y sigue reconciliando. No libera la orden ni permite devolver los pagos o crear otra factura: el documento original todavía puede autorizarse. Esto sustituye la traducción de ese estado a REJECTED en la especificación inicial. No se agrega gestión de certificados ni un endpoint de reintento del proveedor a HCX.
