@@ -14,11 +14,25 @@ import {
   ListBillingProfilesQuery,
   UpdateBillingProfileDto,
 } from './dto/billing-profile.dto';
-import { assertValidTaxIdentification, normalizeIdNumber } from './tax-identification';
+import {
+  assertValidTaxIdentification,
+  FINAL_CONSUMER_NAME,
+  normalizeIdNumber,
+  type SriIdType,
+} from './tax-identification';
 
 export type LinkedBillingProfile = BillingProfile & { isDefault: boolean };
 
 const DEFAULT_PAGE_SIZE = 20;
+
+/** The legal name as stored: a final consumer (07) always carries the canonical name. */
+function storedLegalName(idType: SriIdType | string, rawName: string): string {
+  const name = rawName.trim();
+  if (idType !== '07') return name;
+  return name.replace(/\s+/g, ' ').toUpperCase() === FINAL_CONSUMER_NAME
+    ? FINAL_CONSUMER_NAME
+    : name;
+}
 
 const profileNotFound = () =>
   new NotFoundException({
@@ -89,7 +103,7 @@ export class BillingProfilesService {
     dto: CreateBillingProfileDto,
   ): Promise<BillingProfile> {
     const idNumber = normalizeIdNumber(dto.idType, dto.idNumber);
-    const legalName = dto.legalName.trim();
+    const legalName = storedLegalName(dto.idType, dto.legalName);
     assertValidTaxIdentification(dto.idType, idNumber, legalName);
 
     try {
@@ -149,7 +163,7 @@ export class BillingProfilesService {
       // Only these fields are ever written: idType and idNumber are immutable.
       const data: Prisma.BillingProfileUpdateInput = {};
       if (dto.legalName !== undefined) {
-        const legalName = dto.legalName.trim();
+        const legalName = storedLegalName(current.idType, dto.legalName);
         assertValidTaxIdentification(current.idType, current.idNumber, legalName);
         data.legalName = legalName;
       }

@@ -499,7 +499,7 @@ revisar esta sección con estos hechos:
 
 ### Caja (`/cash`, escritorio y tablet)
 
-Visible con `billing.view` o `cash.manage`; nuevo submódulo «Caja» en el sidebar.
+Visible con `billing.view`; `cash.manage` agrega abrir y cerrar; nuevo submódulo «Caja» en el sidebar.
 
 - Cabecera: selector de sucursal, estado de la caja y Abrir o Cerrar (`cash.manage`). Cerrar abre
   el arqueo: contado, esperado, diferencia, nota obligatoria si no cuadra y resumen por forma de

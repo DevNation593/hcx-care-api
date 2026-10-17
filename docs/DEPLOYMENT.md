@@ -400,7 +400,9 @@ Right after `prisma migrate deploy` for B1, run once:
 DATABASE_URL="postgresql://..." npm run prisma:migrate-billing-profiles
 ```
 
-It turns the legacy billing fields of live patients into billing profiles linked as their default, and grants every active PROFESIONAL the `billing.view` and `billing.create` permissions (they are no longer role defaults), without touching rows that already exist. Profiles are created on behalf of each tenant's MASTER user. It prints a JSON summary (never identification numbers); patients listed in `skippedInvalid` (`EMAIL_MISSING`, `IDENTIFICATION_INVALID`) need their billing data fixed by hand. It is idempotent, but it only needs to run once, at the B1 deploy.
+It turns the legacy billing fields of live patients into billing profiles linked as their default, and grants every active PROFESIONAL the `billing.view` and `billing.create` permissions (they are no longer role defaults), without touching rows that already exist. Profiles are created on behalf of each tenant's MASTER user. It prints a JSON summary (never identification numbers); patients listed in `skippedInvalid` were not migrated, each with its reason: `EMAIL_MISSING` (no billing or patient email), `IDENTIFICATION_INVALID` (the number does not pass the SRI validation), `TAX_ID_TYPE_INVALID` (the patient has a tax id but its legacy type is missing or unknown) and `MASTER_MISSING` (the tenant has no MASTER user to own the profile; the patient is skipped until one exists and the script runs again). For each of them, create the profile in the patient's «Perfiles de facturación». It is idempotent, but it only needs to run once, at the B1 deploy.
+
+Deploy the B1 web together with or before the B1 API. The B1 API rejects the fields the previous web sends (`billing*` on patient create/edit and `faktur*` on clinic settings answer 400 under `forbidNonWhitelisted`), so an old web against the new API breaks patient create/edit and clinic settings saves until the web is updated.
 
 ### 2. Generate Prisma Client
 

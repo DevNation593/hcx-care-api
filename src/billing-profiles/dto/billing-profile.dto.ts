@@ -99,7 +99,8 @@ export class UpdateBillingProfileDto {
   phone?: string;
 
   @ApiPropertyOptional()
-  @IsOptional()
+  // Not IsOptional: null must fail validation like legalName.
+  @ValidateIf((_, value) => value !== undefined)
   @IsBoolean()
   isActive?: boolean;
 }

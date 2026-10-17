@@ -60,6 +60,20 @@ describe('BillingProfilesService', () => {
       email: 'maria@example.com',
     };
 
+    it('stores the canonical name of a final consumer on create', async () => {
+      prisma.billingProfile.findFirst.mockResolvedValue(null);
+      prisma.billingProfile.create.mockResolvedValue(profile({ idType: '07' }));
+
+      await service.create('tenant-1', 'user-1', {
+        kind: 'PERSON',
+        idType: '07',
+        idNumber: '9999999999999',
+        legalName: ' Consumidor final ',
+      });
+
+      expect(prisma.billingProfile.create.mock.calls[0][0].data.legalName).toBe('CONSUMIDOR FINAL');
+    });
+
     it('stores the normalized identification and audits without it', async () => {
       prisma.billingProfile.findFirst.mockResolvedValue(null);
       prisma.billingProfile.create.mockResolvedValue(profile());
@@ -163,6 +177,21 @@ describe('BillingProfilesService', () => {
       await service.update('tenant-1', 'user-1', 'profile-1', { address: null } as never);
 
       expect(prisma.billingProfile.update.mock.calls[0][0].data).toEqual({ address: null });
+    });
+
+    it('stores the canonical name of a final consumer whatever the input', async () => {
+      prisma.billingProfile.findFirst.mockResolvedValue(
+        profile({ idType: '07', idNumber: '9999999999999' }),
+      );
+      prisma.billingProfile.update.mockResolvedValue(profile({ idType: '07' }));
+
+      await service.update('tenant-1', 'user-1', 'profile-1', {
+        legalName: '  consumidor   Final ',
+      });
+
+      expect(prisma.billingProfile.update.mock.calls[0][0].data).toEqual({
+        legalName: 'CONSUMIDOR FINAL',
+      });
     });
 
     it('rejects clearing the e-mail of a profile that is not a final consumer', async () => {

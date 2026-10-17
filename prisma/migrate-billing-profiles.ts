@@ -113,7 +113,14 @@ async function migrateTenant(
   for (const patient of patients) {
     const idType = LEGACY_ID_TYPES[(patient.billingTaxIdType ?? '').trim().toUpperCase()];
     const legalName = (patient.billingName ?? '').trim();
-    if (!idType || !legalName) continue;
+    if (!legalName) continue;
+    if (!idType) {
+      // A tax id without a known type cannot become a profile: report it so it is fixed by hand.
+      if ((patient.billingTaxId ?? '').trim() !== '') {
+        summary.skippedInvalid.push({ patientId: patient.id, reason: 'TAX_ID_TYPE_INVALID' });
+      }
+      continue;
+    }
 
     const email = (patient.billingEmail ?? patient.email ?? '').trim();
     if (!email) {

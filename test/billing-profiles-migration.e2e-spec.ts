@@ -18,6 +18,8 @@ describe('Billing profiles deployment script (E2E)', () => {
   let patientB: string;
   let patientBadRuc: string;
   let patientNoEmail: string;
+  let patientNoType: string;
+  let patientUnknownType: string;
   let freshProfessional: string;
   let revokedProfessional: string;
 
@@ -99,6 +101,17 @@ describe('Billing profiles deployment script (E2E)', () => {
       billingTaxIdType: 'PASSPORT',
       billingTaxId: 'ab123456',
     });
+    patientNoType = await newPatient({
+      billingName: 'Sin Tipo',
+      billingTaxId: '1710034065',
+      billingEmail: 'sintipo@billing.test',
+    });
+    patientUnknownType = await newPatient({
+      billingName: 'Tipo Raro',
+      billingTaxIdType: 'DNI',
+      billingTaxId: '12345678',
+      billingEmail: 'raro@billing.test',
+    });
   });
 
   afterAll(async () => {
@@ -115,9 +128,11 @@ describe('Billing profiles deployment script (E2E)', () => {
       expect.arrayContaining([
         { patientId: patientBadRuc, reason: 'IDENTIFICATION_INVALID' },
         { patientId: patientNoEmail, reason: 'EMAIL_MISSING' },
+        { patientId: patientNoType, reason: 'TAX_ID_TYPE_INVALID' },
+        { patientId: patientUnknownType, reason: 'TAX_ID_TYPE_INVALID' },
       ]),
     );
-    expect(first.skippedInvalid).toHaveLength(2);
+    expect(first.skippedInvalid).toHaveLength(4);
     expect(first.permissionsGranted).toBe(3);
 
     const profiles = await prisma.billingProfile.findMany({ where: { tenantId } });
@@ -159,6 +174,6 @@ describe('Billing profiles deployment script (E2E)', () => {
       linksCreated: 0,
       permissionsGranted: 0,
     });
-    expect(second.skippedInvalid).toHaveLength(2);
+    expect(second.skippedInvalid).toHaveLength(4);
   });
 });

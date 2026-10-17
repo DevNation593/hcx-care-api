@@ -311,7 +311,7 @@ Files live where `STORAGE_DRIVER` says: a private bucket of Supabase Storage (`s
 
 The role still decides who may call a route. A permission can only be **withdrawn** from one user (`403 PERMISSION_DENIED` afterwards), never granted beyond the role, and the account holder cannot be restricted. The catalog is in `src/common/permissions/permission-catalog.ts`.
 
-A permission can also be **granted** to one user when the catalog lists their role in `grantable` (today `billing.view`, `billing.create`, `billing.adjust` and `cash.manage`, all held by MASTER by default and grantable to `PROFESIONAL` and `ASISTENTE`): `PUT …/permissions { "revoked": [], "granted": ["billing.view"] }`. No clinical permission is grantable. Each entry of `GET …/permissions` carries `source`: `role` (can be withdrawn) or `grant` (can be given).
+A permission can also be **granted** to one user when the catalog lists their role in `grantable` (today `billing.view`, `billing.create`, `billing.adjust`, `cash.manage` and `treatments.manage`, all held by MASTER by default and grantable to `PROFESIONAL` and `ASISTENTE`): `PUT …/permissions { "revoked": [], "granted": ["billing.view"] }`. No clinical permission is grantable. Each entry of `GET …/permissions` carries `source`: `role` (can be withdrawn) or `grant` (can be given).
 
 ```bash
 # Activity of the clinic: appointments by status and encounters by type, by branch and by
@@ -447,7 +447,7 @@ All of these routes need the section `core.billing`. Under `/tenants/{tenantId}`
 
 | Method | Path | Who | Result | Errors |
 |---|---|---|---|---|
-| POST | `/orders/{id}/payments` | `billing.create` | 201, the order; `{ method: CASH \| DEBIT_CARD \| CREDIT_CARD \| TRANSFER \| OTHER, amount, reference? }`. Optional header `Idempotency-Key` (up to 100 characters of `[A-Za-z0-9._:-]`): a retry with the same key returns the original payment | 400 `IDEMPOTENCY_KEY_INVALID`, 404 `ORDER_NOT_FOUND`, 409 `ORDER_NOT_EDITABLE`, 409 `CASH_REGISTER_CLOSED`, 409 `IDEMPOTENCY_KEY_REUSED`, 422 `PAYMENT_EXCEEDS_BALANCE` |
+| POST | `/orders/{id}/payments` | `billing.create` | 201, the order; `{ method: CASH \| DEBIT_CARD \| CREDIT_CARD \| TRANSFER \| OTHER, amount, reference? }`. Optional header `Idempotency-Key` (up to 100 characters of `[A-Za-z0-9._:-]`): a retry with the same key returns the order as it stands (not the original payment); the loser of two concurrent payments that each cover the full balance may get `409 ORDER_NOT_EDITABLE` | 400 `IDEMPOTENCY_KEY_INVALID`, 404 `ORDER_NOT_FOUND`, 409 `ORDER_NOT_EDITABLE`, 409 `CASH_REGISTER_CLOSED`, 409 `IDEMPOTENCY_KEY_REUSED`, 422 `PAYMENT_EXCEEDS_BALANCE` |
 | POST | `/payments/{id}/refund` | `billing.adjust` | 200, the order; `{ reason }` | 404 `PAYMENT_NOT_FOUND`, 409 `PAYMENT_NOT_REFUNDABLE`, 409 `CASH_REGISTER_CLOSED` |
 
 Orders, profiles, registers and payments of another clinic answer `404` (`ORDER_NOT_FOUND`, `BILLING_PROFILE_NOT_FOUND`, `CASH_REGISTER_NOT_FOUND`, `PAYMENT_NOT_FOUND`) under the caller's own tenant, and `403` under the other tenant's id.
