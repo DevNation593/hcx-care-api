@@ -1,6 +1,8 @@
 import { PrismaService } from '../prisma/prisma.service';
 import { TaskActor, TasksService } from './tasks.service';
 
+import { LEGACY_BILLING_OMIT } from '../patients/legacy-billing';
+
 describe('TasksService visibility per professional', () => {
   const tenantId = 'tenant-1';
   const admin: TaskActor = { userId: 'admin-1', role: 'MASTER' };
@@ -81,6 +83,13 @@ describe('TasksService visibility per professional', () => {
         id: 'task-1',
         tenantId,
         AND: [ownTasksOnly],
+      });
+    });
+
+    it('leaves the legacy billing columns of the patient out of the response', async () => {
+      await service.findOne(tenantId, 'task-1', admin);
+      expect(prisma.task.findFirst.mock.calls[0][0].include.patient).toEqual({
+        omit: LEGACY_BILLING_OMIT,
       });
     });
 

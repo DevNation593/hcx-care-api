@@ -6,6 +6,7 @@ const FULL = {
   informedConsent: { required: true, validityDays: 365 },
   photos: { minimumBefore: 2, minimumAfter: 3 },
   clinicalNotes: { requiredForCompletion: true },
+  billingGate: { requireClinicalCompletion: false },
 };
 
 function invalid(raw: unknown) {
@@ -31,7 +32,20 @@ describe('parseTreatmentRequirements', () => {
       informedConsent: { required: false, validityDays: null },
       photos: { minimumBefore: 0, minimumAfter: 0 },
       clinicalNotes: { requiredForCompletion: false },
+      billingGate: { requireClinicalCompletion: true },
     });
+  });
+
+  it('defaults the billing gate to requiring clinical completion', () => {
+    expect(parseTreatmentRequirements({}).billingGate).toEqual({
+      requireClinicalCompletion: true,
+    });
+  });
+
+  it('respects an explicit billing gate', () => {
+    expect(
+      parseTreatmentRequirements({ billingGate: { requireClinicalCompletion: false } }).billingGate,
+    ).toEqual({ requireClinicalCompletion: false });
   });
 
   it('round-trips a full policy', () => {
@@ -76,6 +90,12 @@ describe('parseTreatmentRequirements', () => {
       'requiredForCompletion as a number',
       { clinicalNotes: { requiredForCompletion: 1 } },
       'clinicalNotes.requiredForCompletion',
+    ],
+    ['an unknown billingGate key', { billingGate: { other: 1 } }, 'billingGate.other'],
+    [
+      'requireClinicalCompletion as a string',
+      { billingGate: { requireClinicalCompletion: 'no' } },
+      'billingGate.requireClinicalCompletion',
     ],
     ['a non-object section', { photos: 3 }, 'photos'],
     ['a prototype-named top-level key', { constructor: 1 }, 'constructor'],

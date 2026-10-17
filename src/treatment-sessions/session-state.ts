@@ -22,6 +22,16 @@ export const TERMINAL_SESSION_STATUSES: readonly TreatmentSessionStatus[] = [
   'CONSENT_REVOKED',
   'CANCELLED',
   'NO_SHOW',
+  'BILLING_PENDING',
+  'BILLED',
+  'BILLING_FAILED',
+];
+
+/** Statuses a session reaches once its order enters billing. */
+export const BILLING_SESSION_STATUSES: readonly TreatmentSessionStatus[] = [
+  'BILLING_PENDING',
+  'BILLED',
+  'BILLING_FAILED',
 ];
 
 /** Commands the session accepts in the given status; the single source of truth for transitions. */
@@ -68,6 +78,15 @@ export function assertCommandAllowed(
   command: SessionCommand,
   policy: TreatmentRequirements,
 ): void {
+  if (status === 'BILLING_PENDING' || status === 'BILLED') {
+    throw new ConflictException({
+      statusCode: 409,
+      code: 'TREATMENT_SESSION_BILLED',
+      message: 'La atención ya está facturada o en facturación.',
+      status,
+      command,
+    });
+  }
   if (!allowedCommands(status, policy).includes(command)) {
     throw new ConflictException({
       statusCode: 409,

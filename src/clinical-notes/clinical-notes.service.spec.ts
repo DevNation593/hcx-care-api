@@ -5,6 +5,7 @@ import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCipher } from '../clinical-access/clinical-cipher';
 import { PrismaService } from '../prisma/prisma.service';
+import { LEGACY_BILLING_OMIT } from '../patients/legacy-billing';
 
 describe('ClinicalNotesService', () => {
   const plain = new ClinicalCipher();
@@ -163,6 +164,13 @@ describe('ClinicalNotesService', () => {
       await service.findAll('tenant-1', colleague);
 
       expect(db.auditLog.createMany).not.toHaveBeenCalled();
+    });
+
+    it('leaves the legacy billing columns of the patient out of the note', async () => {
+      await service.findOne('tenant-1', 'note-1', colleague);
+      expect(db.clinicalNote.findFirst.mock.calls[0][0].include.patient).toEqual({
+        omit: LEGACY_BILLING_OMIT,
+      });
     });
 
     it('lets a colleague of another specialty read a note and audits it', async () => {

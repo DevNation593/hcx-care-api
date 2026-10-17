@@ -41,6 +41,7 @@ describe('SessionMediaService', () => {
     informedConsent: { required: true, validityDays: null },
     photos: { minimumBefore: 1, minimumAfter: 1 },
     clinicalNotes: { requiredForCompletion: false },
+    billingGate: { requireClinicalCompletion: true },
   };
   const loaded = (overrides = {}) => ({
     id: 'session-1',

@@ -217,7 +217,7 @@ export class TreatmentSessionsController {
   }
 
   @Get('treatment-sessions/:id/compliance')
-  @Roles('MASTER', 'PROFESIONAL')
+  @Roles('MASTER')
   @RequirePermission('billing.view')
   @ApiOperation({
     summary: 'Whether the session meets its treatment requirements',

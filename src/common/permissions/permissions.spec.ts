@@ -16,6 +16,9 @@ import { RecordDocumentsController } from '../../record-documents/record-documen
 import { SpecialtyRecordsController } from '../../specialty-records/specialty-records.controller';
 import { ConsentDocumentsController } from '../../treatment-sessions/consent-documents.controller';
 import { TreatmentSessionsController } from '../../treatment-sessions/treatment-sessions.controller';
+import { BillingProfilesController } from '../../billing-profiles/billing-profiles.controller';
+import { CashRegistersController } from '../../cash-registers/cash-registers.controller';
+import { OrdersController } from '../../orders/orders.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { UserPermissionsService } from '../../users/user-permissions.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -47,6 +50,9 @@ const controllers: Controller[] = [
   RecordDocumentsController,
   ConsentTemplatesController,
   TreatmentsController,
+  BillingProfilesController,
+  CashRegistersController,
+  OrdersController,
   TreatmentSessionsController,
   ConsentDocumentsController,
 ];
@@ -85,8 +91,16 @@ describe('permission catalog', () => {
       'billing.view',
       'billing.create',
       'treatments.manage',
+      'billing.adjust',
+      'cash.manage',
     ]);
-    expect(grantablePermissions('PROFESIONAL')).toEqual(['treatments.manage']);
+    expect(grantablePermissions('PROFESIONAL')).toEqual([
+      'billing.view',
+      'billing.create',
+      'treatments.manage',
+      'billing.adjust',
+      'cash.manage',
+    ]);
     expect(effectivePermissions('ASISTENTE', [], ['billing.view'])).toContain('billing.view');
     expect(effectivePermissions('ASISTENTE', [], ['clinical_records.view'])).not.toContain(
       'clinical_records.view',
@@ -105,6 +119,19 @@ describe('permission catalog', () => {
     expect(effectivePermissions('ASISTENTE', [])).not.toContain('treatments.manage');
   });
 
+  it('keeps billing and the cash register with the account holder unless they are granted', () => {
+    const keys = ['billing.view', 'billing.create', 'billing.adjust', 'cash.manage'];
+
+    expect(rolePermissions('MASTER')).toEqual(expect.arrayContaining(keys));
+    for (const role of ['PROFESIONAL', 'ASISTENTE']) {
+      for (const key of keys) {
+        expect(rolePermissions(role)).not.toContain(key);
+        expect(grantablePermissions(role)).toContain(key);
+        expect(effectivePermissions(role, [], [key])).toContain(key);
+      }
+    }
+  });
+
   it('removes what was withdrawn, except from the account holder', () => {
     expect(effectivePermissions('ASISTENTE', ['appointments.cancel', 'billing.view'])).toEqual([
       'patients.create',
@@ -117,7 +144,6 @@ describe('permission catalog', () => {
 
   it('is exercised by at least one route for every permission', () => {
     const used = new Set(guardedHandlers.map(({ permission }) => permission));
-
     expect([...used].sort()).toEqual(PERMISSION_CATALOG.map(({ key }) => key).sort());
   });
 
@@ -145,13 +171,16 @@ describe('permission catalog', () => {
     expect(annotated.sort()).toEqual(
       [
         'appointments.controller.ts',
+        'billing-profiles.controller.ts',
         'billing.controller.ts',
+        'cash-registers.controller.ts',
         'clinical-notes.controller.ts',
         'clinical-timeline.controller.ts',
         'consent-documents.controller.ts',
         'consent-templates.controller.ts',
         'encounters.controller.ts',
         'next-session-plans.controller.ts',
+        'orders.controller.ts',
         'patient-files.controller.ts',
         'patients.controller.ts',
         'record-documents.controller.ts',
@@ -165,8 +194,10 @@ describe('permission catalog', () => {
 
 describe('PermissionGuard', () => {
   class Routes {
-    @RequirePermission('billing.create')
+    @RequirePermission('patients.create')
     guarded() {}
+    @RequirePermission('billing.create')
+    restricted() {}
     open() {}
   }
   const db = { userPermission: { findFirst: jest.fn() } };
@@ -174,7 +205,7 @@ describe('PermissionGuard', () => {
     new Reflector(),
     new PermissionChecker(db as unknown as PrismaService),
   );
-  const context = (handler: 'guarded' | 'open', user?: object, isPublic = false) => {
+  const context = (handler: 'guarded' | 'restricted' | 'open', user?: object, isPublic = false) => {
     const fn = Routes.prototype[handler];
     Reflect.defineMetadata(IS_PUBLIC_KEY, isPublic, fn);
     return {
@@ -194,7 +225,7 @@ describe('PermissionGuard', () => {
     expect(db.userPermission.findFirst.mock.calls[0][0].where).toEqual({
       userId: 'user-1',
       tenantId: 'tenant-1',
-      permission: 'billing.create',
+      permission: 'patients.create',
       granted: false,
     });
   });
@@ -204,14 +235,14 @@ describe('PermissionGuard', () => {
 
     await expect(guard.canActivate(context('guarded', professional))).rejects.toMatchObject({
       status: 403,
-      response: { code: 'PERMISSION_DENIED', permission: 'billing.create' },
+      response: { code: 'PERMISSION_DENIED', permission: 'patients.create' },
     });
   });
 
   it('lets a role outside the route through only with the permission granted', async () => {
     const assistant = { ...professional, role: 'ASISTENTE' };
     db.userPermission.findFirst.mockResolvedValueOnce(null);
-    await expect(guard.canActivate(context('guarded', assistant))).rejects.toMatchObject({
+    await expect(guard.canActivate(context('restricted', assistant))).rejects.toMatchObject({
       status: 403,
       response: { code: 'PERMISSION_DENIED', permission: 'billing.create' },
     });
@@ -221,7 +252,7 @@ describe('PermissionGuard', () => {
     });
 
     db.userPermission.findFirst.mockResolvedValueOnce({ id: 'grant' });
-    await expect(guard.canActivate(context('guarded', assistant))).resolves.toBe(true);
+    await expect(guard.canActivate(context('restricted', assistant))).resolves.toBe(true);
   });
 
   it('never restricts the account holder and never queries for unguarded or public routes', async () => {
@@ -275,6 +306,8 @@ describe('UserPermissionsService', () => {
         ['billing.view', true, 'grant'],
         ['billing.create', false, 'grant'],
         ['treatments.manage', false, 'grant'],
+        ['billing.adjust', false, 'grant'],
+        ['cash.manage', false, 'grant'],
       ],
     );
     expect(described.effective).not.toContain('appointments.cancel');
@@ -301,10 +334,10 @@ describe('UserPermissionsService', () => {
     await expect(
       service.replace('tenant-1', 'user-1', 'master', [], ['clinical_records.view']),
     ).rejects.toMatchObject({ status: 400, response: { code: 'PERMISSION_INVALID' } });
-    // A professional already has billing by role: there is nothing to grant.
+    // A professional already has patient registration by role: there is nothing to grant.
     db.user.findFirst.mockResolvedValue({ id: 'user-1', role: 'PROFESIONAL' });
     await expect(
-      service.replace('tenant-1', 'user-1', 'master', [], ['billing.view']),
+      service.replace('tenant-1', 'user-1', 'master', [], ['patients.create']),
     ).rejects.toMatchObject({ status: 400, response: { code: 'PERMISSION_INVALID' } });
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });

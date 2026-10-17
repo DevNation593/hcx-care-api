@@ -177,33 +177,6 @@ export class CreatePatientDto {
   @IsString()
   @IsOptional()
   notes?: string;
-
-  // Billing recipient. Format and pairing rules are enforced in the service, where the
-  // stored values are known; null or an empty string clears a field.
-  @ApiPropertyOptional({ example: 'Luis Pérez', nullable: true })
-  @IsString()
-  @IsOptional()
-  billingName?: string | null;
-
-  @ApiPropertyOptional({ example: 'CEDULA', enum: ['CEDULA', 'RUC', 'PASSPORT'], nullable: true })
-  @IsString()
-  @IsOptional()
-  billingTaxIdType?: string | null;
-
-  @ApiPropertyOptional({ example: '1712345678', nullable: true })
-  @IsString()
-  @IsOptional()
-  billingTaxId?: string | null;
-
-  @ApiPropertyOptional({ example: 'luis.perez@email.com', nullable: true })
-  @IsString()
-  @IsOptional()
-  billingEmail?: string | null;
-
-  @ApiPropertyOptional({ example: 'Av. Amazonas 100', nullable: true })
-  @IsString()
-  @IsOptional()
-  billingAddress?: string | null;
 }
 
 export class UpdatePatientDto extends PartialType(CreatePatientDto) {}
