@@ -137,6 +137,11 @@ enum AuditEntity {
   TENANT
   TREATMENT_SESSION
   CONSENT_DOCUMENT
+  BILLING_PROFILE
+  ORDER
+  PAYMENT
+  CASH_REGISTER
+  INVOICE_REQUEST
 }
 
 enum EncounterType {
@@ -203,6 +208,9 @@ enum TreatmentSessionStatus {
   CONSENT_REVOKED
   CANCELLED
   NO_SHOW
+  BILLING_PENDING
+  BILLED
+  BILLING_FAILED
 }
 
 // Where in the procedure a session photo was taken.
@@ -269,6 +277,12 @@ model Tenant {
   consentSignatures       ConsentSignature[]
   consentEvents           ConsentEvent[]
   treatmentSessions       TreatmentSession[]
+  billingProfiles         BillingProfile[]
+  patientBillingProfiles  PatientBillingProfile[]
+  cashRegisterSessions    CashRegisterSession[]
+  orders                  Order[]
+  orderItems              OrderItem[]
+  payments                Payment[]
 
   @@index([isActive])
 }
@@ -296,6 +310,8 @@ model Branch {
   encounters    Encounter[]
   professionals ProfessionalBranch[]
   treatmentSessions TreatmentSession[]
+  cashRegisterSessions CashRegisterSession[]
+  orders Order[]
 
   @@unique([tenantId, name])
   @@index([tenantId, isActive])
@@ -642,6 +658,14 @@ model User {
   issuedInvoices           Invoice[]             @relation("IssuedInvoices")
   treatmentSessions        TreatmentSession[]
   consentEvents            ConsentEvent[]
+  createdBillingProfiles   BillingProfile[]      @relation("BillingProfileCreatedBy")
+  openedCashRegisters      CashRegisterSession[] @relation("CashRegisterOpenedBy")
+  closedCashRegisters      CashRegisterSession[] @relation("CashRegisterClosedBy")
+  createdOrders            Order[]               @relation("OrderCreatedBy")
+  cancelledOrders          Order[]               @relation("OrderCancelledBy")
+  createdOrderItems        OrderItem[]           @relation("OrderItemCreatedBy")
+  receivedPayments         Payment[]             @relation("PaymentReceivedBy")
+  refundedPayments         Payment[]             @relation("PaymentRefundedBy")
   consentSignaturesTaken   ConsentSignature[]
 
   @@unique([tenantId, email])
@@ -741,6 +765,8 @@ model Patient {
   encounters              Encounter[]
   files            PatientFile[]
   treatmentSessions TreatmentSession[]
+  billingProfiles PatientBillingProfile[]
+  orderItems OrderItem[]
   consentDocuments  ConsentDocument[]
 
   @@index([tenantId])
@@ -1684,6 +1710,232 @@ model TreatmentSession {
 
   presentedConsents ConsentDocument[] @relation("ConsentDocumentPresentedIn")
   files             PatientFile[]
+  orderItems        OrderItem[]
 
   @@index([tenantId, patientId, createdAt])
+}
+
+enum BillingProfileKind {
+  PERSON
+  COMPANY
+}
+
+enum CashRegisterStatus {
+  OPEN
+  CLOSED
+}
+
+enum OrderStatus {
+  OPEN
+  PAID
+  INVOICED
+  CANCELLED
+}
+
+enum OrderItemKind {
+  TREATMENT_SESSION
+  FREE
+}
+
+enum PaymentMethod {
+  CASH
+  DEBIT_CARD
+  CREDIT_CARD
+  TRANSFER
+  OTHER
+}
+
+enum PaymentStatus {
+  RECORDED
+  REFUNDED
+}
+
+// Who receives an invoice. Fiscal data, not clinical: it is not encrypted and has no relation
+// to encounters, notes or files. Creating one never creates a patient.
+model BillingProfile {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  kind BillingProfileKind
+  // SRI identification type code: 04 RUC, 05 cedula, 06 passport, 07 final consumer.
+  idType    String
+  idNumber  String
+  legalName String
+  email     String?
+  address   String?
+  phone     String?
+  isActive  Boolean @default(true)
+
+  createdById String
+  createdBy   User     @relation("BillingProfileCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  patients PatientBillingProfile[]
+  orders   Order[]
+
+  @@unique([tenantId, idType, idNumber])
+  @@index([tenantId, legalName])
+}
+
+// A billing profile linked to a patient. At most one link per patient is the default (partial
+// unique index in the migration).
+model PatientBillingProfile {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  patientId        String
+  patient          Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  billingProfileId String
+  billingProfile   BillingProfile @relation(fields: [billingProfileId], references: [id], onDelete: Cascade)
+
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@unique([patientId, billingProfileId])
+  @@index([tenantId])
+}
+
+// A cash drawer turn at one branch. At most one is OPEN per branch (partial unique index in the
+// migration).
+model CashRegisterSession {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  branchId String
+  branch   Branch             @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  status   CashRegisterStatus @default(OPEN)
+
+  openedById  String
+  openedBy    User     @relation("CashRegisterOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  openedAt    DateTime @default(now())
+  openingCash Decimal  @db.Decimal(10, 2)
+
+  closedById String?
+  closedBy   User?     @relation("CashRegisterClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  closedAt   DateTime?
+
+  // Count taken when closing, computed by the server.
+  expectedCash Decimal? @db.Decimal(10, 2)
+  countedCash  Decimal? @db.Decimal(10, 2)
+  difference   Decimal? @db.Decimal(10, 2)
+  closingNote  String?
+
+  payments         Payment[] @relation("PaymentCashRegister")
+  refundedPayments Payment[] @relation("PaymentRefundCashRegister")
+
+  @@index([tenantId, branchId, status])
+}
+
+// A charge to one billing profile, made of treatment sessions and free items.
+model Order {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  // Sequential per tenant.
+  number   Int
+  status   OrderStatus @default(OPEN)
+
+  billingProfileId String?
+  billingProfile   BillingProfile? @relation(fields: [billingProfileId], references: [id], onDelete: Restrict)
+
+  // Computed by the server.
+  subtotal      Decimal @default(0) @db.Decimal(10, 2)
+  discountTotal Decimal @default(0) @db.Decimal(10, 2)
+  taxTotal      Decimal @default(0) @db.Decimal(10, 2)
+  total         Decimal @default(0) @db.Decimal(10, 2)
+  paidTotal     Decimal @default(0) @db.Decimal(10, 2)
+
+  createdById        String
+  createdBy          User      @relation("OrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  cancelledById      String?
+  cancelledBy        User?     @relation("OrderCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  cancelledAt        DateTime?
+  cancellationReason String?
+
+  // Optimistic concurrency: every write increments it.
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items    OrderItem[]
+  payments Payment[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, branchId, status])
+  @@index([tenantId, createdAt])
+}
+
+model OrderItem {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  orderId String
+  order   Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  kind    OrderItemKind
+
+  // A session is in one live order at a time (partial unique index in the migration).
+  treatmentSessionId String?
+  treatmentSession   TreatmentSession? @relation(fields: [treatmentSessionId], references: [id], onDelete: Restrict)
+  patientId          String?
+  patient            Patient?          @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  description    String
+  quantity       Decimal @db.Decimal(12, 6)
+  unitPrice      Decimal @db.Decimal(10, 2)
+  discount       Decimal @default(0) @db.Decimal(10, 2)
+  taxRatePercent Decimal @db.Decimal(5, 2)
+  lineSubtotal   Decimal @db.Decimal(10, 2)
+  lineTax        Decimal @db.Decimal(10, 2)
+
+  // Set when the order is cancelled: the item no longer holds its session.
+  releasedAt DateTime?
+
+  createdById String
+  createdBy   User     @relation("OrderItemCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+
+  @@index([orderId])
+  @@index([treatmentSessionId])
+  @@index([patientId])
+}
+
+model Payment {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  orderId               String
+  order                 Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  cashRegisterSessionId String
+  cashRegisterSession   CashRegisterSession @relation("PaymentCashRegister", fields: [cashRegisterSessionId], references: [id], onDelete: Restrict)
+
+  method         PaymentMethod
+  amount         Decimal       @db.Decimal(10, 2)
+  reference      String?
+  status         PaymentStatus @default(RECORDED)
+  idempotencyKey String?
+
+  receivedById String
+  receivedBy   User     @relation("PaymentReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  receivedAt   DateTime @default(now())
+
+  refundedById                String?
+  refundedBy                  User?                @relation("PaymentRefundedBy", fields: [refundedById], references: [id], onDelete: Restrict)
+  refundedAt                  DateTime?
+  refundReason                String?
+  refundCashRegisterSessionId String?
+  refundCashRegisterSession   CashRegisterSession? @relation("PaymentRefundCashRegister", fields: [refundCashRegisterSessionId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([orderId])
+  @@index([cashRegisterSessionId])
+  @@index([refundCashRegisterSessionId])
 }

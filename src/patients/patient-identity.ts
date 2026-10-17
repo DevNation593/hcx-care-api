@@ -1,5 +1,4 @@
 import { BadRequestException, UnprocessableEntityException } from '@nestjs/common';
-import { isValidTaxId, normalizeTaxId } from '../billing/invoice-customer';
 
 export const IDENTIFICATION_TYPES = ['CEDULA', 'RUC', 'PASSPORT', 'OTHER'] as const;
 export type IdentificationType = (typeof IDENTIFICATION_TYPES)[number];
@@ -7,6 +6,22 @@ export type IdentificationType = (typeof IDENTIFICATION_TYPES)[number];
 export interface PatientIdentification {
   identificationType: string | null;
   identificationNumber: string | null;
+}
+
+// Format only; check digits are deliberately not verified.
+const TAX_ID_PATTERNS: Record<string, RegExp> = {
+  CEDULA: /^\d{10}$/,
+  RUC: /^\d{13}$/,
+  PASSPORT: /^[A-Z0-9]{5,20}$/,
+};
+
+/** Strips spaces and hyphens and uppercases, the form in which identifications are stored. */
+export function normalizeTaxId(value: string): string {
+  return value.replace(/[\s-]/g, '').toUpperCase();
+}
+
+function isValidTaxId(type: string, value: string): boolean {
+  return TAX_ID_PATTERNS[type]?.test(value) ?? false;
 }
 
 const OTHER_PATTERN = /^[A-Z0-9]{3,30}$/;

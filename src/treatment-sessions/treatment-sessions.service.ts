@@ -39,6 +39,7 @@ import { evaluateSession, MissingRequirement, requirementsMissing } from './sess
 import {
   allowedCommands,
   assertCommandAllowed,
+  BILLING_SESSION_STATUSES,
   SessionCommand,
   statusAfterIntake,
 } from './session-state';
@@ -477,7 +478,12 @@ export class TreatmentSessionsService {
   ): Promise<{ status: TreatmentSessionStatus; missing: MissingRequirement[] }> {
     return this.transaction(async (tx) => {
       const { session, version } = await this.findSession(tx, tenantId, sessionId);
-      if (session.status === 'CLINICAL_COMPLETE') return { status: session.status, missing: [] };
+      if (
+        session.status === 'CLINICAL_COMPLETE' ||
+        BILLING_SESSION_STATUSES.includes(session.status)
+      ) {
+        return { status: session.status, missing: [] };
+      }
       const policy = parseTreatmentRequirements(version.requirements);
       const facts = await loadSessionFacts(
         tx,

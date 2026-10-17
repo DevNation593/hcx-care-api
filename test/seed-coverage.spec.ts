@@ -161,9 +161,18 @@ describe('demo seed', () => {
     expect(values('notificationLog', 'type')).toEqual(all(NotificationType));
     expect(values('notificationLog', 'status')).toEqual(all(NotificationStatus));
     expect(values('auditLog', 'action')).toEqual(all(AuditAction));
-    // TODO(treatment-sessions): the demo seed has no treatment sessions or consent documents
+    // TODO(treatment-sessions, cash-and-billing): the demo seed has no treatment sessions,
+    // consent documents, orders, payments, cash registers, billing profiles or invoice requests
     // yet; drop this exemption when it gains them.
-    const unseededEntities = ['TREATMENT_SESSION', 'CONSENT_DOCUMENT'];
+    const unseededEntities = [
+      'TREATMENT_SESSION',
+      'CONSENT_DOCUMENT',
+      'BILLING_PROFILE',
+      'CASH_REGISTER',
+      'INVOICE_REQUEST',
+      'ORDER',
+      'PAYMENT',
+    ];
     expect(values('auditLog', 'entity')).toEqual(
       all(AuditEntity).filter((entity) => !unseededEntities.includes(entity)),
     );
@@ -692,18 +701,22 @@ describe('demo seed', () => {
       unassigned: patients.some((p) => p.isActive && teamSize(p) === 0),
       sharedByTwoProfessionals: patients.some((p) => teamSize(p) > 1),
       formerProfessional: team.some((member) => !member.isActive),
-      billingTaxIdTypes: [
-        ...new Set(patients.map((p) => p.billingTaxIdType).filter(Boolean)),
+      billingProfileIdTypes: [
+        ...new Set(rows('billingProfile').map((profile) => profile.idType)),
       ].sort(),
-      withoutBillingData: patients.some((p) => !p.billingTaxId && !p.email),
+      defaultProfileLinks: rows('patientBillingProfile').every((link) => link.isDefault),
+      withoutBillingProfile: patients.some(
+        (p) => !rows('patientBillingProfile').some((link) => link.patientId === p.id),
+      ),
     }).toEqual({
       archived: true,
       removed: true,
       unassigned: true,
       sharedByTwoProfessionals: true,
       formerProfessional: true,
-      billingTaxIdTypes: ['CEDULA', 'PASSPORT', 'RUC'],
-      withoutBillingData: true,
+      billingProfileIdTypes: ['04', '05', '06'],
+      defaultProfileLinks: true,
+      withoutBillingProfile: true,
     });
   });
 });

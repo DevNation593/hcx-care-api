@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { LEGACY_BILLING_OMIT } from '../patients/legacy-billing';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLIC_USER_SELECT } from '../common/utils/public-user-select';
@@ -176,7 +177,7 @@ export class TasksService {
     const task = await this.prisma.task.findFirst({
       where: { id: taskId, tenantId, ...this.visibilityFilter(actor) },
       include: {
-        patient: true,
+        patient: { omit: LEGACY_BILLING_OMIT },
         createdBy: { select: PUBLIC_USER_SELECT },
         assignedTo: { select: PUBLIC_USER_SELECT },
       },
@@ -215,7 +216,7 @@ export class TasksService {
       where: { id: taskId },
       data: updateData,
       include: {
-        patient: true,
+        patient: { omit: LEGACY_BILLING_OMIT },
         createdBy: { select: PUBLIC_USER_SELECT },
         assignedTo: { select: PUBLIC_USER_SELECT },
       },

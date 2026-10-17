@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { LEGACY_BILLING_OMIT } from '../patients/legacy-billing';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLIC_USER_SELECT } from '../common/utils/public-user-select';
 import { CreateNextSessionPlanDto, UpdateNextSessionPlanDto } from './dto/next-session-plan.dto';
@@ -62,7 +63,7 @@ export class NextSessionPlansService {
     const plan = await this.prisma.nextSessionPlan.findFirst({
       where: { tenantId, patientId },
       include: {
-        patient: true,
+        patient: { omit: LEGACY_BILLING_OMIT },
         psychologist: { select: PUBLIC_USER_SELECT },
       },
     });
@@ -122,7 +123,7 @@ export class NextSessionPlansService {
         psychologistId, // Update psychologist if different
       },
       include: {
-        patient: true,
+        patient: { omit: LEGACY_BILLING_OMIT },
         psychologist: { select: PUBLIC_USER_SELECT },
       },
     });

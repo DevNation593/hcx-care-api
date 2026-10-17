@@ -123,7 +123,6 @@ async function seedPersonalTrial(ctx: SeedContext): Promise<SeedTenant> {
       monthlyNotificationsSent: 8,
     },
     specialties: ['psychology'],
-    billing: { isEnabled: false },
     master: {
       email: 'admin.trial@psic.com',
       firstName: 'Carla',
@@ -245,7 +244,6 @@ async function seedPersonalPro(ctx: SeedContext): Promise<SeedTenant> {
     addOns: ['apiAccess', 'whatsAppIntegration'],
     disabledSections: ['core.billing', 'core.storage'],
     disabledModules: ['psychology.assessments'],
-    billing: { isEnabled: false },
     master: {
       email: 'titular.online@psic.com',
       firstName: 'Esteban',
@@ -319,7 +317,6 @@ async function seedClinicAtLimits(ctx: SeedContext): Promise<SeedTenant> {
       monthlyElectronicInvoicesLimit: 3,
     },
     specialties: ['psychology', 'physiotherapy'],
-    billing: { isEnabled: true, nextSequential: 4 },
     master: {
       email: 'titular.andes@psic.com',
       firstName: 'Ricardo',
@@ -509,7 +506,6 @@ async function seedScheduledDowngrade(ctx: SeedContext): Promise<SeedTenant> {
       scheduledPlanChangeAt: periodEnd,
     },
     specialties: ['psychology', 'nutrition'],
-    billing: { isEnabled: true },
     master: {
       email: 'titular.bienestar@psic.com',
       firstName: 'Mónica',
@@ -560,7 +556,7 @@ async function seedScheduledDowngrade(ctx: SeedContext): Promise<SeedTenant> {
   return clinic;
 }
 
-/** The custom plan: no price, no period to renew, its own Faktur credentials, double booking. */
+/** The custom plan: no price, no period to renew, double booking. */
 async function seedEnterprise(ctx: SeedContext): Promise<SeedTenant> {
   const { clock } = ctx;
   const clinic = await createTenant(ctx, {
@@ -590,15 +586,6 @@ async function seedEnterprise(ctx: SeedContext): Promise<SeedTenant> {
       currentPeriodEnd: null,
     },
     specialties: ['psychology', 'nutrition', 'physiotherapy', 'dentistry'],
-    // Placeholder credentials: issuing here ends as a FAILED invoice.
-    billing: {
-      isEnabled: true,
-      apiKey: 'seed-placeholder-key',
-      nextSequential: 152,
-      specialTaxpayer: true,
-      accountingRequired: true,
-      withholdingAgent: true,
-    },
     master: {
       email: 'titular.santalucia@psic.com',
       firstName: 'Fabián',
@@ -731,7 +718,6 @@ async function seedPastDue(ctx: SeedContext): Promise<SeedTenant> {
       currentPeriodEnd: periodEnd,
     },
     specialties: ['physiotherapy'],
-    billing: { isEnabled: true },
     master: {
       email: 'titular.fisio@psic.com',
       firstName: 'Bruno',
@@ -784,7 +770,6 @@ async function seedUnpaid(ctx: SeedContext): Promise<SeedTenant> {
       currentPeriodEnd: periodEnd,
     },
     specialties: ['dentistry'],
-    billing: { isEnabled: true },
     master: {
       email: 'titular.sonrisa@psic.com',
       firstName: 'Verónica',
@@ -939,7 +924,6 @@ async function seedSuspended(ctx: SeedContext): Promise<SeedTenant> {
     planType: 'CLINIC_BASIC',
     status: 'ACTIVE',
     specialties: ['psychology', 'physiotherapy'],
-    billing: { isEnabled: true },
     master: {
       email: 'titular.sanrafael@psic.com',
       firstName: 'Armando',

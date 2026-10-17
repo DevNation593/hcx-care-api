@@ -5,6 +5,7 @@ import { snapshotEncounter } from '../src/encounters/encounters.service';
 import { snapshotSpecialtyRecord } from '../src/specialty-records/specialty-records.service';
 import {
   createAppointment,
+  createBillingProfile,
   createPatient,
   createTenant,
   createUser,
@@ -127,7 +128,7 @@ async function writeRecord(
   return record;
 }
 
-/** What Faktur returns for an authorized document. The links are fictitious. */
+/** What the retired provider returned for an authorized document. The links are fictitious. */
 function issuedDocument(sequential: number, issueDate: Date) {
   const day = issueDate.toISOString().slice(0, 10).split('-').reverse().join('');
   const accessKey = `${day}011790012345001100100${String(sequential).padStart(10, '0')}1234567815`;
@@ -178,7 +179,6 @@ export async function seedMainClinic(ctx: SeedContext): Promise<SeedTenant> {
     },
     // Four specialties on a plan that includes three: the fourth is billed as an extra.
     specialties: ['psychology', 'nutrition', 'physiotherapy', 'dentistry'],
-    billing: { nextSequential: 8, isEnabled: true },
     master: {
       email: 'admin.demo@psic.com',
       firstName: 'Daniela',
@@ -343,11 +343,6 @@ export async function seedMainClinic(ctx: SeedContext): Promise<SeedTenant> {
       allergies: 'Alergia a la penicilina y a los frutos secos',
       currentMedication: 'Sertralina 50mg',
       notes: 'Atención conjunta de psicología y nutrición. La factura va a nombre de su empresa.',
-      billingName: 'Suárez & Asociados Cía. Ltda.',
-      billingTaxIdType: 'RUC',
-      billingTaxId: '1791234567001',
-      billingEmail: 'contabilidad@suarezasociados.ec',
-      billingAddress: 'Av. República 310, Quito',
     },
     { current: [ana, luis] },
   );
@@ -369,10 +364,6 @@ export async function seedMainClinic(ctx: SeedContext): Promise<SeedTenant> {
       guardianIdentification: '1712345678',
       guardianPhone: '+593999100010',
       notes: 'Menor de edad. La representante recibe las facturas y las comunicaciones.',
-      billingName: 'Verónica Jiménez',
-      billingTaxIdType: 'CEDULA',
-      billingTaxId: '1712345678',
-      billingEmail: 'veronica.jimenez@email.com',
     },
     { current: [diego] },
   );
@@ -387,12 +378,10 @@ export async function seedMainClinic(ctx: SeedContext): Promise<SeedTenant> {
       dateOfBirth: new Date('1985-12-03'),
       gender: 'OTHER',
       notes: 'Reside en el exterior; todas las sesiones son en línea.',
-      billingTaxIdType: 'PASSPORT',
-      billingTaxId: 'XDA458921',
     },
     { current: [diego] },
   );
-  // Only the required fields: an invoice for this patient answers INVOICE_CUSTOMER_INCOMPLETE.
+  // Only the required fields: this patient has no billing profile.
   const hugo = await createPatient(
     ctx,
     clinic,
@@ -428,13 +417,41 @@ export async function seedMainClinic(ctx: SeedContext): Promise<SeedTenant> {
       firstName: 'Samuel',
       lastName: 'Ortiz',
       email: 'samuel.ortiz@email.com',
-      billingTaxIdType: 'CEDULA',
-      billingTaxId: '0912345678',
       isActive: false,
       deletedAt: clock.days(-12),
     },
     { current: [ana] },
   );
+  // Billing profiles replace the legacy billing fields the patients used to carry.
+  await createBillingProfile(ctx, clinic, martina, {
+    kind: 'COMPANY',
+    idType: '04',
+    idNumber: '1791234567001',
+    legalName: 'Suárez & Asociados Cía. Ltda.',
+    email: 'contabilidad@suarezasociados.ec',
+    address: 'Av. República 310, Quito',
+  });
+  await createBillingProfile(ctx, clinic, mateo, {
+    kind: 'PERSON',
+    idType: '05',
+    idNumber: '1712345675',
+    legalName: 'Verónica Jiménez',
+    email: 'veronica.jimenez@email.com',
+  });
+  await createBillingProfile(ctx, clinic, renata, {
+    kind: 'PERSON',
+    idType: '06',
+    idNumber: 'XDA458921',
+    legalName: 'Renata Villacís',
+    email: 'renata.villacis@email.com',
+  });
+  await createBillingProfile(ctx, clinic, samuel, {
+    kind: 'PERSON',
+    idType: '05',
+    idNumber: '0912345675',
+    legalName: 'Samuel Ortiz',
+    email: 'samuel.ortiz@email.com',
+  });
   const isabel = await createPatient(
     ctx,
     clinic,

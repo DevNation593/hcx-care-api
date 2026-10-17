@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { LEGACY_BILLING_OMIT } from '../patients/legacy-billing';
 import { ClinicalNote, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertOpenEncounter } from '../encounters/encounters.service';
@@ -165,7 +166,7 @@ export class ClinicalNotesService {
     const stored = await this.prisma.clinicalNote.findFirst({
       where: { id: noteId, tenantId, deletedAt: null },
       include: {
-        patient: true,
+        patient: { omit: LEGACY_BILLING_OMIT },
         psychologist: { select: PUBLIC_USER_SELECT },
         appointment: true,
       },
@@ -203,7 +204,7 @@ export class ClinicalNotesService {
             version: { increment: 1 },
           },
           include: {
-            patient: true,
+            patient: { omit: LEGACY_BILLING_OMIT },
             psychologist: { select: PUBLIC_USER_SELECT },
           },
         }),

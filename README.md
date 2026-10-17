@@ -59,24 +59,10 @@ npm run start:dev
 - Clinical files are kept encrypted where `STORAGE_DRIVER` says: `local` (default, under
   `STORAGE_LOCAL_PATH`) or `supabase`, a private bucket of Supabase Storage (`SUPABASE_URL`,
   `SUPABASE_SECRET_KEY`, `SUPABASE_STORAGE_BUCKET`).
-- Electronic invoicing uses Faktur. The URL, path and environment are the same for every
-  clinic and are read only from these variables; each clinic stores its own API key,
-  establishment, emission point and numbering in its settings:
-  - `FAKTUR_API_URL`: base URL supplied by Faktur
-  - `FAKTUR_INVOICE_PATH`: invoice resource path, defaults to `/invoices`
-  - `FAKTUR_ENVIRONMENT`: `TEST` or `PRODUCTION`. Required: no invoice is issued without it
-  - `FAKTUR_API_KEY`: credential used only by clinics that have not stored their own
-  - `FAKTUR_TIMEOUT_MS`: request timeout, defaults to `15000`
-
-Before issuing an invoice, save `legalName`, `taxIdentificationType` and
-`taxIdentificationNumber` on the tenant. The billing endpoint sends the
-customer, totals and `X-Idempotency-Key` to Faktur and stores the provider
-response and PDF/XML links returned by the provider.
-
-Billing endpoints:
-- `POST /api/v1/tenants/:tenantId/billing/invoices`
-- `GET /api/v1/tenants/:tenantId/billing/invoices`
-- `GET /api/v1/tenants/:tenantId/billing/invoices/:invoiceId`
+- Electronic invoicing is not issued by this API. Invoices stored before it was retired stay
+  readable through these routes (read-only history):
+  - `GET /api/v1/tenants/:tenantId/billing/invoices`
+  - `GET /api/v1/tenants/:tenantId/billing/invoices/:invoiceId`
 
 After deploying the migration, apply it with `npx prisma migrate deploy`.
 

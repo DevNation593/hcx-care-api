@@ -8,22 +8,14 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PatientTeamService } from '../patient-team/patient-team.service';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
+import { LEGACY_BILLING_OMIT } from './legacy-billing';
 import { CreatePatientDto, UpdatePatientDto } from './dto/patient.dto';
-import { normalizeTaxId } from '../billing/invoice-customer';
-import { mergePatientBilling, PatientBillingFields } from './patient-billing';
 import {
   assertGuardianForMinor,
   mergePatientIdentification,
+  normalizeTaxId,
   PatientIdentification,
 } from './patient-identity';
-
-const BILLING_FIELDS = [
-  'billingName',
-  'billingTaxIdType',
-  'billingTaxId',
-  'billingEmail',
-  'billingAddress',
-] as const;
 
 const IDENTIFICATION_FIELDS = ['identificationType', 'identificationNumber'] as const;
 
@@ -42,15 +34,15 @@ const PROFILE_FIELDS = [
   'guardianPhone',
 ] as const;
 
-type MergedFields = (typeof BILLING_FIELDS)[number] | (typeof IDENTIFICATION_FIELDS)[number];
+type MergedFields = (typeof IDENTIFICATION_FIELDS)[number];
 
 /**
- * The DTO without its billing and identification keys; those are written only through
- * mergePatientBilling and mergePatientIdentification.
+ * The DTO without its identification keys; those are written only through
+ * mergePatientIdentification.
  */
 function withoutMergedFields(dto: UpdatePatientDto): Omit<UpdatePatientDto, MergedFields> {
   const copy: Record<string, unknown> = { ...dto };
-  for (const field of [...BILLING_FIELDS, ...IDENTIFICATION_FIELDS]) delete copy[field];
+  for (const field of IDENTIFICATION_FIELDS) delete copy[field];
   return copy;
 }
 
@@ -142,14 +134,7 @@ export class PatientsService {
       allergies: this.normalizeOptionalString(createPatientDto.allergies),
       currentMedication: this.normalizeOptionalString(createPatientDto.currentMedication),
       notes: this.normalizeOptionalString(createPatientDto.notes),
-      ...mergePatientBilling(null, createPatientDto),
     };
-  }
-
-  /** Billing columns to write on update, or nothing when the request does not mention them. */
-  private billingUpdate(current: PatientBillingFields, dto: UpdatePatientDto) {
-    if (!BILLING_FIELDS.some((field) => dto[field] !== undefined)) return {};
-    return mergePatientBilling(current, dto);
   }
 
   private sanitizeUpdatePayload(updatePatientDto: UpdatePatientDto) {
@@ -224,6 +209,7 @@ export class PatientsService {
         await this.assertIdentificationFree(tx, tenantId, sanitized);
 
         const patient = await tx.patient.create({
+          omit: LEGACY_BILLING_OMIT,
           data: {
             ...sanitized,
             tenantId,
@@ -331,6 +317,7 @@ export class PatientsService {
 
     const patients = await this.prisma.patient.findMany({
       where,
+      omit: LEGACY_BILLING_OMIT,
       orderBy: { lastName: 'asc' },
       include: {
         assignedPsychologist: {
@@ -351,6 +338,7 @@ export class PatientsService {
 
   async findOne(tenantId: string, patientId: string) {
     const patient = await this.prisma.patient.findFirst({
+      omit: LEGACY_BILLING_OMIT,
       where: {
         id: patientId,
         tenantId,
@@ -431,11 +419,11 @@ export class PatientsService {
         }
 
         const updated = await tx.patient.update({
+          omit: LEGACY_BILLING_OMIT,
           where: { id: patientId },
           data: {
             ...otherData,
             ...identification,
-            ...this.billingUpdate(patient, updatePatientDto),
             ...(assignedPsychologistId !== undefined ? { assignedPsychologistId } : {}),
           },
         });
