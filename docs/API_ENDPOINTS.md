@@ -58,7 +58,7 @@ acceptance receipt with `lastError:null`, including same-key and collision repla
 POST never decrypts stored errors and requires only `billing.create`. Detail additionally returns `events` with
 `{id,type,source,detail,createdAt}`. No credentials, fiscal snapshots, storage keys or
 leases are exposed. The exact typed contract and examples are in
-`../.superpowers/sdd/2026-10-17-emite-facil-b2/task-2-report.md`.
+`./superpowers/reports/2026-10-17-emite-facil-b2-backend.md`.
 
 Creation performs no provider HTTP call. Keep the same client key after a transport
 failure; reusing it for the same order returns the same request, for another order 409.
