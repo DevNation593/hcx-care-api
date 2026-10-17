@@ -25,6 +25,7 @@ import {
   STANDING_ALERT_MODULES,
   validateModuleData,
 } from '../clinical-modules/clinical-module-registry';
+import { TERMINAL_SESSION_STATUSES } from '../treatment-sessions/session-state';
 import {
   CreateSpecialtyRecordDto,
   DeleteSpecialtyRecordDto,
@@ -332,6 +333,7 @@ export class SpecialtyRecordsService {
         actor,
         'corregir',
       );
+      await this.assertNotStartedSessionForm(tx, tenantId, recordId);
       const definition = (await this.definitionsOf(tenantId, [current], tx))(current);
 
       let data: Record<string, unknown> | undefined;
@@ -393,6 +395,7 @@ export class SpecialtyRecordsService {
         actor,
         'eliminar',
       );
+      await this.assertNotStartedSessionForm(tx, tenantId, recordId);
 
       // The row stays for audit; it only stops being listed.
       await tx.specialtyRecord.update({
@@ -422,6 +425,109 @@ export class SpecialtyRecordsService {
 
       return { message: 'Registro eliminado exitosamente' };
     });
+  }
+
+  /**
+   * The answers to a form pinned by someone else (a treatment version), written inside the
+   * caller's transaction. The data is validated against that exact version, whatever the
+   * form's current version is. With `recordId` the record is corrected by its author (version
+   * bumped, both states audited); otherwise a record is created in the open encounter.
+   */
+  async writePinnedForm(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    patientId: string,
+    actor: ClinicalActor,
+    input: {
+      encounterId: string;
+      formDefinitionId: string;
+      formVersion: number;
+      data: unknown;
+      recordId?: string | null;
+    },
+  ): Promise<{ id: string }> {
+    const pinned = await tx.formDefinitionVersion.findFirst({
+      where: {
+        formDefinitionId: input.formDefinitionId,
+        version: input.formVersion,
+        formDefinition: { tenantId },
+      },
+      include: { formDefinition: { select: { name: true } } },
+    });
+    if (!pinned) throw moduleUnknown();
+    const definition: RecordDefinition = {
+      name: pinned.formDefinition.name,
+      schemaVersion: pinned.version,
+      schema: pinned.schema as unknown as FormSchema,
+    };
+    const data = validateModuleData(definition, input.data);
+    const encrypted = this.crypto.encryptJson(tenantId, data) as Prisma.InputJsonValue;
+
+    if (input.recordId) {
+      const current = await this.findOwnRecord(
+        tx,
+        tenantId,
+        patientId,
+        input.recordId,
+        actor,
+        'corregir',
+      );
+      const stored = await tx.specialtyRecord.update({
+        where: { id: current.id },
+        data: { data: encrypted, version: { increment: 1 } },
+      });
+      const record = decryptSpecialtyRecord(this.crypto, stored);
+
+      await this.audit.record(
+        tenantId,
+        actor,
+        [
+          {
+            action: 'UPDATE',
+            entity: 'SPECIALTY_RECORD',
+            entityId: record.id,
+            patientId,
+            before: snapshotSpecialtyRecord(current),
+            after: snapshotSpecialtyRecord(record),
+          },
+        ],
+        tx,
+      );
+      return { id: record.id };
+    }
+
+    await assertOpenEncounter(tx, tenantId, patientId, input.encounterId, actor);
+    const stored = await tx.specialtyRecord.create({
+      data: {
+        tenantId,
+        patientId,
+        professionalId: actor.userId,
+        specialtyId: actor.specialtyId,
+        moduleKey: `${CUSTOM_MODULE_PREFIX}${input.formDefinitionId}`,
+        schemaVersion: pinned.version,
+        verificationCode: newVerificationCode(),
+        formDefinitionId: input.formDefinitionId,
+        encounterId: input.encounterId,
+        data: encrypted,
+      },
+    });
+    const record = decryptSpecialtyRecord(this.crypto, stored);
+
+    await this.audit.record(
+      tenantId,
+      actor,
+      [
+        {
+          action: 'CREATE',
+          entity: 'SPECIALTY_RECORD',
+          entityId: record.id,
+          patientId,
+          after: snapshotSpecialtyRecord(record),
+        },
+      ],
+      tx,
+    );
+    return { id: record.id };
   }
 
   /** A module defined by the platform: the caller's specialty must own it or be allowed to use it. */
@@ -554,6 +660,29 @@ export class SpecialtyRecordsService {
 
   private alertsOf(definition: RecordDefinition | undefined, data: unknown): FormAlert[] {
     return definition ? evaluateFormAlerts(definition.schema, data) : [];
+  }
+
+  /** RN-05: the form of a treatment session is fixed once the session has started or ended. */
+  private async assertNotStartedSessionForm(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    recordId: string,
+  ) {
+    const session = await tx.treatmentSession.findFirst({
+      where: { tenantId, formRecordId: recordId },
+      select: { status: true },
+    });
+    if (
+      session &&
+      (session.status === 'IN_PROGRESS' || TERMINAL_SESSION_STATUSES.includes(session.status))
+    ) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'TREATMENT_SESSION_INVALID_TRANSITION',
+        message: 'La ficha de una atención de tratamiento ya no puede cambiar.',
+        status: session.status,
+      });
+    }
   }
 
   private async findOwnRecord(

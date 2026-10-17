@@ -5,7 +5,7 @@ import {
   NotFoundException,
   PayloadTooLargeException,
 } from '@nestjs/common';
-import { PatientFile, Prisma } from '@prisma/client';
+import { PatientFile, Prisma, SessionMediaPhase } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
@@ -36,6 +36,12 @@ const fileInclude = {
   uploadedBy: { select: { id: true, firstName: true, lastName: true } },
 } satisfies Prisma.PatientFileInclude;
 
+/** A file as the API returns it: decrypted, with its uploader, never its storage key. */
+export type PatientFileView = Omit<
+  Prisma.PatientFileGetPayload<{ include: typeof fileInclude }>,
+  'storageKey'
+>;
+
 /** What multer hands over for the uploaded part. */
 export interface UploadedFilePart {
   originalname: string;
@@ -55,6 +61,8 @@ export function snapshotPatientFile(file: PatientFile) {
     description: file.description,
     mimeType: file.mimeType,
     sizeBytes: file.sizeBytes,
+    treatmentSessionId: file.treatmentSessionId,
+    phase: file.phase,
   };
 }
 
@@ -110,7 +118,8 @@ export class PatientFilesService {
     actor: ClinicalActor,
     part: UploadedFilePart | undefined,
     dto: UploadPatientFileDto,
-  ) {
+    session?: { treatmentSessionId: string; phase: SessionMediaPhase },
+  ): Promise<PatientFileView> {
     if (!part?.buffer?.length) throw invalidFile('No se recibió ningún archivo.');
     if (part.buffer.length > MAX_PATIENT_FILE_BYTES) {
       throw new PayloadTooLargeException({
@@ -152,6 +161,8 @@ export class PatientFilesService {
             mimeType: part.mimetype,
             sizeBytes,
             storageKey,
+            treatmentSessionId: session?.treatmentSessionId,
+            phase: session?.phase,
           },
           include: fileInclude,
         });
