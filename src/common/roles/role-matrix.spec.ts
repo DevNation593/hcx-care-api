@@ -80,7 +80,6 @@ describe('role matrix', () => {
     [SpecialtiesController, 'updateModule', MASTER],
     [PatientsController, 'remove', MASTER],
     [TasksController, 'remove', MASTER],
-    [BillingController, 'createInvoice', MASTER],
     [BillingController, 'listInvoices', MASTER],
     [BillingController, 'getInvoice', MASTER],
     [TasksController, 'create', CLINICAL],

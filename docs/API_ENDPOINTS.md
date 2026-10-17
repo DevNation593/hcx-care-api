@@ -1,23 +1,8 @@
 ## Billing
 
-All billing routes require a JWT and the `MASTER` or `PROFESIONAL` role. The
-tenant must have fiscal data before an invoice can be issued.
-
-### Issue invoice
-
-`POST /api/v1/tenants/:tenantId/billing/invoices`
-
-```json
-{
-  "subtotal": 149.99,
-  "tax": 17.99,
-  "description": "Suscripción Clinic Pro - septiembre 2026",
-  "idempotencyKey": "subscription-tenant-period-2026-09"
-}
-```
-
-The API creates a `PENDING` invoice, sends it to Faktur, and stores it as
-`ISSUED` or `FAILED`. Reusing `idempotencyKey` returns the existing invoice.
+The billing routes are a read-only history of the invoices issued before electronic
+invoicing was retired; the API no longer issues invoices. They require a JWT, the `MASTER`
+role and the `billing.view` permission.
 
 ### List invoices
 

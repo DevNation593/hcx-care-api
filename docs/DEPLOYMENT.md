@@ -400,7 +400,7 @@ Right after `prisma migrate deploy` for B1, run once:
 DATABASE_URL="postgresql://..." npm run prisma:migrate-billing-profiles
 ```
 
-It turns the legacy billing fields of live patients into billing profiles linked as their default, and grants every active PROFESIONAL the `billing.view` and `billing.create` permissions (they are no longer role defaults), without touching rows that already exist. Profiles are created on behalf of each tenant's MASTER user. It prints a JSON summary (never identification numbers); patients listed in `skippedInvalid` (`EMAIL_MISSING`, `IDENTIFICATION_INVALID`) need their billing data fixed by hand. It is idempotent: run it again when deploying B2.
+It turns the legacy billing fields of live patients into billing profiles linked as their default, and grants every active PROFESIONAL the `billing.view` and `billing.create` permissions (they are no longer role defaults), without touching rows that already exist. Profiles are created on behalf of each tenant's MASTER user. It prints a JSON summary (never identification numbers); patients listed in `skippedInvalid` (`EMAIL_MISSING`, `IDENTIFICATION_INVALID`) need their billing data fixed by hand. It is idempotent, but it only needs to run once, at the B1 deploy.
 
 ### 2. Generate Prisma Client
 

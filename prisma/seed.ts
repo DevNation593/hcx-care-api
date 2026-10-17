@@ -124,6 +124,8 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   await db.diagnosisCode.deleteMany();
   await db.invoice.deleteMany();
   await db.billingSettings.deleteMany();
+  // Restricts deleting its creator; the links to patients go with it.
+  await db.billingProfile.deleteMany();
   await db.tenantModule.deleteMany();
   await db.subscriptionSpecialty.deleteMany();
   await db.planSpecialty.deleteMany();

@@ -18,7 +18,6 @@ export class TenantSettingsService {
             legalName: true,
             taxIdentificationType: true,
             taxIdentificationNumber: true,
-            billingSettings: true,
           },
         },
       },
@@ -34,18 +33,6 @@ export class TenantSettingsService {
       taxIdentificationType: settings.tenant.taxIdentificationType,
       taxIdentificationNumber: settings.tenant.taxIdentificationNumber,
       tenant: undefined,
-      fakturApiKey: settings.tenant.billingSettings?.apiKey
-        ? `********${settings.tenant.billingSettings.apiKey.slice(-4)}`
-        : '',
-      fakturEstablishment: settings.tenant.billingSettings?.establishment ?? '',
-      fakturEmissionPoint: settings.tenant.billingSettings?.emissionPoint ?? '',
-      fakturNextSequential: settings.tenant.billingSettings?.nextSequential ?? 1,
-      fakturBusinessName: settings.tenant.billingSettings?.businessName ?? '',
-      fakturBusinessAddress: settings.tenant.billingSettings?.businessAddress ?? '',
-      fakturSpecialTaxpayer: settings.tenant.billingSettings?.specialTaxpayer ?? false,
-      fakturAccountingRequired: settings.tenant.billingSettings?.accountingRequired ?? false,
-      fakturWithholdingAgent: settings.tenant.billingSettings?.withholdingAgent ?? false,
-      fakturEnabled: settings.tenant.billingSettings?.isEnabled ?? false,
     };
   }
 
@@ -89,22 +76,8 @@ export class TenantSettingsService {
       }
     }
 
-    const {
-      legalName,
-      taxIdentificationType,
-      taxIdentificationNumber,
-      fakturApiKey,
-      fakturEstablishment,
-      fakturEmissionPoint,
-      fakturNextSequential,
-      fakturBusinessName,
-      fakturBusinessAddress,
-      fakturSpecialTaxpayer,
-      fakturAccountingRequired,
-      fakturWithholdingAgent,
-      fakturEnabled,
-      ...settingsData
-    } = updateDto;
+    const { legalName, taxIdentificationType, taxIdentificationNumber, ...settingsData } =
+      updateDto;
     await this.prisma.$transaction(async (tx) => {
       await tx.tenantSettings.update({
         where: { tenantId },
@@ -114,35 +87,6 @@ export class TenantSettingsService {
       await tx.tenant.update({
         where: { id: tenantId },
         data: { legalName, taxIdentificationType, taxIdentificationNumber },
-      });
-
-      await tx.billingSettings.upsert({
-        where: { tenantId },
-        create: {
-          tenantId,
-          apiKey: fakturApiKey || null,
-          establishment: fakturEstablishment,
-          emissionPoint: fakturEmissionPoint,
-          nextSequential: fakturNextSequential ?? 1,
-          businessName: fakturBusinessName,
-          businessAddress: fakturBusinessAddress,
-          specialTaxpayer: fakturSpecialTaxpayer ?? false,
-          accountingRequired: fakturAccountingRequired ?? false,
-          withholdingAgent: fakturWithholdingAgent ?? false,
-          isEnabled: fakturEnabled ?? false,
-        },
-        update: {
-          ...(fakturApiKey && !fakturApiKey.startsWith('********') ? { apiKey: fakturApiKey } : {}),
-          establishment: fakturEstablishment,
-          emissionPoint: fakturEmissionPoint,
-          nextSequential: fakturNextSequential,
-          businessName: fakturBusinessName,
-          businessAddress: fakturBusinessAddress,
-          specialTaxpayer: fakturSpecialTaxpayer,
-          accountingRequired: fakturAccountingRequired,
-          withholdingAgent: fakturWithholdingAgent,
-          isEnabled: fakturEnabled,
-        },
       });
     });
 

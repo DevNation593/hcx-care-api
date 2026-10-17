@@ -701,18 +701,22 @@ describe('demo seed', () => {
       unassigned: patients.some((p) => p.isActive && teamSize(p) === 0),
       sharedByTwoProfessionals: patients.some((p) => teamSize(p) > 1),
       formerProfessional: team.some((member) => !member.isActive),
-      billingTaxIdTypes: [
-        ...new Set(patients.map((p) => p.billingTaxIdType).filter(Boolean)),
+      billingProfileIdTypes: [
+        ...new Set(rows('billingProfile').map((profile) => profile.idType)),
       ].sort(),
-      withoutBillingData: patients.some((p) => !p.billingTaxId && !p.email),
+      defaultProfileLinks: rows('patientBillingProfile').every((link) => link.isDefault),
+      withoutBillingProfile: patients.some(
+        (p) => !rows('patientBillingProfile').some((link) => link.patientId === p.id),
+      ),
     }).toEqual({
       archived: true,
       removed: true,
       unassigned: true,
       sharedByTwoProfessionals: true,
       formerProfessional: true,
-      billingTaxIdTypes: ['CEDULA', 'PASSPORT', 'RUC'],
-      withoutBillingData: true,
+      billingProfileIdTypes: ['04', '05', '06'],
+      defaultProfileLinks: true,
+      withoutBillingProfile: true,
     });
   });
 });

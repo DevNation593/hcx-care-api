@@ -164,7 +164,6 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
       taxIdentificationType: 'RUC',
       taxIdentificationNumber: '1791234567001',
     },
-    billing: { nextSequential: 1, isEnabled: true },
     master: {
       email: 'titular.arrayanes@psic.com',
       firstName: 'Lorena',

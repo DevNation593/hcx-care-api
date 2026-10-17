@@ -189,8 +189,6 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
     await request(server()).get(invoices).set(as('recepcion')).expect(200);
     await request(server()).get(invoices).set(as('asistente')).expect(403);
     await request(server()).get(invoices).set(as('fisio')).expect(200);
-    const refused = await request(server()).post(invoices).set(as('fisio')).send({}).expect(403);
-    expect(refused.body.code).toBe('PERMISSION_DENIED');
 
     const described = await request(server())
       .get(`${base()}/users/${users.recepcion}/permissions`)
