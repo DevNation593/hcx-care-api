@@ -1,6 +1,6 @@
 # Entrega B2: emite-facil
 
-Estado: implementación y validaciones terminadas; revisión final del conjunto pendiente.
+Estado: implementación y revisión final completadas; ramas listas para integración.
 
 La configuración está en **Administración → Facturación** (`/admin/billing`), para el
 titular MASTER. Permite probar la API key, elegir el emisor y asignar establecimiento
@@ -12,9 +12,9 @@ facturas y conserva el historial anterior de Faktur.
 
 ## Activación
 
-Los cambios están en `feat/emite-facil-b2` de API y web, en sus respectivos
-`.worktrees/emite-facil-b2`. Integrar esas ramas o ejecutar ambos worktrees permite
-usar la nueva pantalla. Los checkouts `dev` se conservan.
+Los cambios están en `feat/emite-facil-b2` de API (`d2d9d8f`) y web (`26be62b`),
+en sus respectivos `.worktrees/emite-facil-b2`. Integrar esas ramas o ejecutar
+ambos worktrees permite usar la nueva pantalla. Los checkouts `dev` se conservan.
 
 El usuario configurará manualmente `EMITE_FACIL_API_URL` con el servidor real y la
 ruta `/api/v1/`. El ejemplo permanece vacío. El backend necesita las claves de cifrado
@@ -36,6 +36,7 @@ emisión contra el servidor real quedan pendientes de su configuración manual.
 | --- | --- |
 | API, suite completa | 123 suites, 2239 aprobadas y 1 omitida |
 | API, corrección de permisos | 106 focalizadas aprobadas; 18 E2E B2 aprobadas |
+| API, concurrencia clínica/fiscal | 6 regresiones PostgreSQL en ambos órdenes; 24 E2E B2 y 11 E2E B1 aprobadas; 370 unitarias relacionadas aprobadas |
 | Caja B1 | 11 E2E aprobadas |
 | Web, suite completa | 115 suites, 1012 aprobadas y 1 omitida |
 | Web, corrección de reintentos | 93 focalizadas aprobadas |
@@ -47,6 +48,12 @@ La suite completa precedió las correcciones focalizadas; sus pruebas de regresi
 comprobaciones de tipos/lint se ejecutaron después. Los reportes
 [backend](2026-10-17-emite-facil-b2-backend.md) y
 [web](2026-10-17-emite-facil-b2-frontend.md) contienen comandos y evidencia RED/GREEN.
+La [revisión del conjunto](2026-10-17-emite-facil-b2-integration-review.md)
+detectó una carrera entre autorización y cierre clínico. La
+[corrección y sus pruebas](2026-10-17-emite-facil-b2-concurrency-fix.md) quedaron
+[aprobadas en la revisión acotada](2026-10-17-emite-facil-b2-integration-fix-review.md).
+No quedan hallazgos críticos o importantes. La prueba de desbordamiento del cuerpo
+HTTP quedó como cobertura menor pendiente; los límites de producción existen.
 
 ## Decisiones de implementación
 
@@ -62,3 +69,4 @@ comprobaciones de tipos/lint se ejecutaron después. Los reportes
 | POST confirma la solicitud sin descifrar errores | `billing.create` y `billing.view` son independientes. Las explicaciones se obtienen mediante consultas con `billing.view`. |
 | Incertidumbre local por cada intento de emisión | El rechazo anterior no resuelve una reemisión sin respuesta. Se conserva el UUID y se consulta cada cinco segundos, con permiso de lectura, hasta recuperar la solicitud. |
 | Recuperación mediante recibo de la misma clave | Una lista tardía o una solicitud de otro usuario no demuestra a qué clave pertenece el resultado. Un fallo seguro observado mantiene el UUID incierto hasta recuperar su recibo mediante el mismo POST; una autorización impide permanentemente la nueva emisión. |
+| Bloqueo común entre cierre clínico y finalización fiscal | Serializa ambos cambios sobre la solicitud de factura; si cambia mientras se completa una atención, la transacción clínica relee el resultado y evita dejarla pendiente tras la autorización o rechazo. |

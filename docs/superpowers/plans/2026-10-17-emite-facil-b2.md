@@ -82,6 +82,6 @@ expect(screen.queryByText('Autorizada')).not.toBeInTheDocument();
 ## Entrega
 
 - [x] Revisión de especificación y calidad por tarea; corregir hallazgos importantes antes de avanzar.
-- [ ] Revisión final del conjunto API/web, migración y rutas de configuración; comprobaciones finales según cambios nuevos.
+- [x] Revisión final del conjunto API/web, migración y rutas de configuración; comprobaciones finales según cambios nuevos.
 - [x] Dejar cambios revisables en ambas ramas de feature; no publicar ni desplegar ni fusionar ramas compartidas sin instrucción específica.
 
