@@ -34,6 +34,7 @@ emisión contra el servidor real quedan pendientes de su configuración manual.
 
 | Área | Resultado |
 | --- | --- |
+| Adaptador HTTP y firma | 98 pruebas aprobadas contra HTTP local |
 | API, suite completa | 123 suites, 2239 aprobadas y 1 omitida |
 | API, corrección de permisos | 106 focalizadas aprobadas; 18 E2E B2 aprobadas |
 | API, concurrencia clínica/fiscal | 6 regresiones PostgreSQL en ambos órdenes; 24 E2E B2 y 11 E2E B1 aprobadas; 370 unitarias relacionadas aprobadas |
@@ -45,7 +46,8 @@ emisión contra el servidor real quedan pendientes de su configuración manual.
 | Análisis estático | TypeScript y lint aprobados; API conserva una advertencia preexistente |
 
 La suite completa precedió las correcciones focalizadas; sus pruebas de regresión y
-comprobaciones de tipos/lint se ejecutaron después. Los reportes
+comprobaciones de tipos/lint se ejecutaron después. Los reportes del
+[adaptador](2026-10-17-emite-facil-b2-adapter.md),
 [backend](2026-10-17-emite-facil-b2-backend.md) y
 [web](2026-10-17-emite-facil-b2-frontend.md) contienen comandos y evidencia RED/GREEN.
 La [revisión del conjunto](2026-10-17-emite-facil-b2-integration-review.md)
