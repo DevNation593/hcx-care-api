@@ -26,7 +26,7 @@
 
 **Interfaces:** Exportar `EmiteFacilProvider` inyectable, `client(apiKey: string, correlationId?: string): InvoicingProvider`. El puerto ofrece `getTenant`, `listTaxpayers`, `listEstablishments(taxpayerId)`, `listEmissionPoints(taxpayerId, establishmentId)`, `listTaxRates`, `findCustomer(idType,idNumber)`, `createCustomer(profile)`, `findProduct(sku)`, `createProduct(product)`, `createInvoice(body,key)`, `getDocument(id)`, `getSriAttempts(id)`, `getArtifact(id,kind)`. Exportar tipos explícitos de opciones, perfil, producto, factura, documento y artefacto. Exportar `ProviderError` con `kind: 'transient'|'data'|'configuration'`, `code`, `retryAfterMs?`; nunca mensajes o cuerpos con secretos. Exportar `verifyWebhookSignature(rawBody: Buffer, headers, secret, now?: Date): boolean`.
 
-- [ ] Escribir y ejecutar prueba RED contra servidor HTTP local: la llamada envía X-Api-Key y clave de idempotencia y parsea el cuerpo real, sin JWT.
+- [x] Escribir y ejecutar prueba RED contra servidor HTTP local: la llamada envía X-Api-Key y clave de idempotencia y parsea el cuerpo real, sin JWT.
 
 ```ts
 expect(captured.headers['x-api-key']).toBe(apiKey);
@@ -34,9 +34,9 @@ expect(captured.headers['idempotency-key']).toBe('hcx-test');
 expect(captured.headers.authorization).toBeUndefined();
 ```
 
-- [ ] Implementar endpoints exactos, paginación completa para catálogos, filtrado exacto para identificación/SKU, timeout de quince segundos y clasificación de 401/403/404, 422, 409 en vuelo/reutilizada, 429 con Retry-After, 5xx y errores de red. Rechazar base URL inválida y redirecciones; no enviar secretos a otros orígenes.
-- [ ] Añadir pruebas de payload mínimo, errores sin filtración de claves/cuerpos, detalle y estados de documento, intentos SRI con mensajes, ETag, ausencia de PUT customers, firma múltiple válida, cuerpo modificado y timestamp vencido. Ejecutar GREEN y formato.
-- [ ] Registrar comandos RED/GREEN e interfaces reales en reporte; commit de esta tarea.
+- [x] Implementar endpoints exactos, paginación completa para catálogos, filtrado exacto para identificación/SKU, timeout de quince segundos y clasificación de 401/403/404, 422, 409 en vuelo/reutilizada, 429 con Retry-After, 5xx y errores de red. Rechazar base URL inválida y redirecciones; no enviar secretos a otros orígenes.
+- [x] Añadir pruebas de payload mínimo, errores sin filtración de claves/cuerpos, detalle y estados de documento, intentos SRI con mensajes, ETag, ausencia de PUT customers, firma múltiple válida, cuerpo modificado y timestamp vencido. Ejecutar GREEN y formato.
+- [x] Registrar comandos RED/GREEN e interfaces reales en reporte; commit de esta tarea.
 
 ### Task 2: Conexión, persistencia y flujo completo de emisión
 
@@ -46,7 +46,7 @@ expect(captured.headers.authorization).toBeUndefined();
 
 **Models:** InvoicingConnection (tenant único, API key cifrada, emisor/empresa/ambiente validados, webhook secreto cifrado, estado y revisión), BranchEmissionPoint (branch único, connection, IDs y códigos externos), InvoicingRef (connection/kind/localId único, externalId, syncedHash), InvoiceRequest (orden/clínica/conexión/perfil/actor, estados, claves cliente/proveedor, snapshot cifrado, referencia de reemplazo, datos externos, hashes/storage, reintentos y lease), InvoiceRequestEvent (solo inserción, webhookEventId único por conexión). Relaciones con tenant/order/profile/user; índices por tenant y cola e índice parcial de solicitud activa. No borrar modelos históricos. Las respuestas excluyen credenciales, snapshot y leases.
 
-- [ ] Escribir pruebas RED de guardar conexión sin revelar secretos, API key inicial/reutilizada, error en punto ajeno, facturación no configurada, creación sin proveedor HTTP, misma clave/misma orden y distinta orden, orden ya autorizada, bloqueo mensual y transacción que actualiza sesiones sin pagos.
+- [x] Escribir pruebas RED de guardar conexión sin revelar secretos, API key inicial/reutilizada, error en punto ajeno, facturación no configurada, creación sin proveedor HTTP, misma clave/misma orden y distinta orden, orden ya autorizada, bloqueo mensual y transacción que actualiza sesiones sin pagos.
 
 ```ts
 expect(result.status).toBe('REQUESTED');
@@ -55,11 +55,11 @@ expect(repeated.id).toBe(result.id);
 expect(JSON.stringify(publicConnection)).not.toContain(apiKey);
 ```
 
-- [ ] Implementar migración y Prisma generate/validate, cifrado obligatorio para credenciales/snapshots, prueba de conexión, selección de emisor/puntos y metadata sin secretos. Probar API key nueva sin persistir hasta guardar. PUT conserva clave omitida y permite desactivar; cambio de empresa/emisor prohibido mientras existan solicitudes sin resolver, conservar o invalidar puntos según identidad externa y documentarlo.
-- [ ] Implementar solicitud serializable e idempotente con índices y recuperación de colisiones, límites mensuales por raíces de reemplazo, snapshot de solo datos fiscales, elegibilidad real de conexión/sede. Validar pagos exactos agrupados `01/16/19/20`. Congelar orden INVOICED y sesiones BILLING_PENDING cuando requieren cierre, preservando posibilidad de cierre clínico si la política permite facturar antes; autorización convierte solo sesiones completadas a BILLED. Bloquear devolución mientras hay solicitud viva o autorizada, nueva emisión de orden autorizada y edición clínica prohibida en estados bloqueados.
-- [ ] Worker cada 10 s: claim `FOR UPDATE SKIP LOCKED`, lease recuperable, llamadas fuera de transacción larga, CAS al persistir con clave hcx estable, referencias externas y hash. Error transitorio usa 30 s exponencial hasta 30 min/Retry-After; límite 24 h. Un fallo ambiguo de creación sigue recuperándose con la misma clave, sin liberar la orden a una factura duplicada. Cliente remoto desactualizado produce CUSTOMER_SYNC_REQUIRED; no PUT no soportado.
-- [ ] Webhook con rawBody y firma real, aislamiento de empresa/documento, deduplicación durable y avance monotónico de estado. Reconciliación cada minuto para PROCESSING sin evento en dos minutos y artefactos autorizados pendientes. Rechazo/fallo seguro libera orden a PAID, mantiene pagos; reemplazo enlaza documento. Descargar artifacts con hash, cifrar en FILE_STORAGE, validar al leer y auditar. Reintentos no borran ni sobreescriben archivos válidos.
-- [ ] Añadir pruebas de worker/red reintentable/429/lease, callbacks duplicados y fuera de orden, aislamiento, rechazo/reemplazo, perfil modificado, XML/RIDE y hash. E2E real con Postgres independiente y proveedor HTTP simulado, cron deshabilitado en tests e invocado explícitamente. Ejecutar focused GREEN, build, formato; full suite una vez al terminar. Documentar env y migración sin ejecutarla en base real. Commit y reporte.
+- [x] Implementar migración y Prisma generate/validate, cifrado obligatorio para credenciales/snapshots, prueba de conexión, selección de emisor/puntos y metadata sin secretos. Probar API key nueva sin persistir hasta guardar. PUT conserva clave omitida y permite desactivar; cambio de empresa/emisor prohibido mientras existan solicitudes sin resolver, conservar o invalidar puntos según identidad externa y documentarlo.
+- [x] Implementar solicitud serializable e idempotente con índices y recuperación de colisiones, límites mensuales por raíces de reemplazo, snapshot de solo datos fiscales, elegibilidad real de conexión/sede. Validar pagos exactos agrupados `01/16/19/20`. Congelar orden INVOICED y sesiones BILLING_PENDING cuando requieren cierre, preservando posibilidad de cierre clínico si la política permite facturar antes; autorización convierte solo sesiones completadas a BILLED. Bloquear devolución mientras hay solicitud viva o autorizada, nueva emisión de orden autorizada y edición clínica prohibida en estados bloqueados.
+- [x] Worker cada 10 s: claim `FOR UPDATE SKIP LOCKED`, lease recuperable, llamadas fuera de transacción larga, CAS al persistir con clave hcx estable, referencias externas y hash. Error transitorio usa 30 s exponencial hasta 30 min/Retry-After; límite 24 h. Un fallo ambiguo de creación sigue recuperándose con la misma clave, sin liberar la orden a una factura duplicada. Cliente remoto desactualizado produce CUSTOMER_SYNC_REQUIRED; no PUT no soportado.
+- [x] Webhook con rawBody y firma real, aislamiento de empresa/documento, deduplicación durable y avance monotónico de estado. Reconciliación cada minuto para PROCESSING sin evento en dos minutos y artefactos autorizados pendientes. Rechazo/fallo seguro libera orden a PAID, mantiene pagos; reemplazo enlaza documento. Descargar artifacts con hash, cifrar en FILE_STORAGE, validar al leer y auditar. Reintentos no borran ni sobreescriben archivos válidos.
+- [x] Añadir pruebas de worker/red reintentable/429/lease, callbacks duplicados y fuera de orden, aislamiento, rechazo/reemplazo, perfil modificado, XML/RIDE y hash. E2E real con Postgres independiente y proveedor HTTP simulado, cron deshabilitado en tests e invocado explícitamente. Ejecutar focused GREEN, build, formato; full suite una vez al terminar. Documentar env y migración sin ejecutarla en base real. Commit y reporte.
 
 ### Task 3: Configuración y emisión en la web
 
@@ -67,21 +67,21 @@ expect(JSON.stringify(publicConnection)).not.toContain(apiKey);
 
 **Interfaces:** Usar JSON/endpoints publicados por Task 2. Header Idempotency-Key por solicitud; descargas autenticadas por apiClient Blob y URL temporal revocada. React Query con invalidación de orden, elegibilidad, listas y sesión. `InvoiceRequestPanel({order,eligibility})`, `InvoicesTab({branchId,patientId?})`, `InvoicingSettings()`.
 
-- [ ] Prueba RED: MASTER puede probar key y guardar emisor sin devolver credenciales, selección y guardado de puntos, modo sin webhook. Otro rol no carga secretos ni endpoints MASTER. Mantener historial Faktur visible solo a roles autorizados y conservar pruebas existentes adaptándolas a B2.
-- [ ] Formulario con key vacía/no rellenada, Probar conexión, selector de emisor/ambiente y Guardar; preservar key omitida, estado/error/reintentar, puntos por sede, URL copiable y secreto webhook opcional. No datos ficticios. Quitar aviso próximamente.
-- [ ] Prueba RED: emisión deshabilitada sin elegibilidad, mismo UUID tras fallo de red y reintento, 422 mostrado con missing/items, refresco cada cinco segundos hasta estado final, descarga solo disponible si existe artefacto. Implementar sin éxito optimista ni perder clave en refetch fallido.
+- [x] Prueba RED: MASTER puede probar key y guardar emisor sin devolver credenciales, selección y guardado de puntos, modo sin webhook. Otro rol no carga secretos ni endpoints MASTER. Mantener historial Faktur visible solo a roles autorizados y conservar pruebas existentes adaptándolas a B2.
+- [x] Formulario con key vacía/no rellenada, Probar conexión, selector de emisor/ambiente y Guardar; preservar key omitida, estado/error/reintentar, puntos por sede, URL copiable y secreto webhook opcional. No datos ficticios. Quitar aviso próximamente.
+- [x] Prueba RED: emisión deshabilitada sin elegibilidad, mismo UUID tras fallo de red y reintento, 422 mostrado con missing/items, refresco cada cinco segundos hasta estado final, descarga solo disponible si existe artefacto. Implementar sin éxito optimista ni perder clave en refetch fallido.
 
 ```ts
 expect(secondHeaders['Idempotency-Key']).toBe(firstHeaders['Idempotency-Key']);
 expect(screen.queryByText('Autorizada')).not.toBeInTheDocument();
 ```
 
-- [ ] Añadir pestaña Facturas con filtros, paginación, estados y descargas. En orden mostrar progreso/datos finales, aviso de autorizada sin anulación, rechazo y volver a emitir con nueva clave después de respuesta final. Integrar nuevas facturas de paciente mediante filtro de servidor, sin depender de snapshots públicos.
-- [ ] Ejecutar focused GREEN y luego Vitest completo, lint, type-check, build y diff self-review. Commit y reporte.
+- [x] Añadir pestaña Facturas con filtros, paginación, estados y descargas. En orden mostrar progreso/datos finales, aviso de autorizada sin anulación, rechazo y volver a emitir con nueva clave después de respuesta final. Integrar nuevas facturas de paciente mediante filtro de servidor, sin depender de snapshots públicos.
+- [x] Ejecutar focused GREEN y luego Vitest completo, lint, type-check, build y diff self-review. Commit y reporte.
 
 ## Entrega
 
-- [ ] Revisión de especificación y calidad por tarea; corregir hallazgos importantes antes de avanzar.
+- [x] Revisión de especificación y calidad por tarea; corregir hallazgos importantes antes de avanzar.
 - [ ] Revisión final del conjunto API/web, migración y rutas de configuración; comprobaciones finales según cambios nuevos.
-- [ ] Dejar cambios revisables en ambas ramas de feature; no publicar ni desplegar ni fusionar ramas compartidas sin instrucción específica.
+- [x] Dejar cambios revisables en ambas ramas de feature; no publicar ni desplegar ni fusionar ramas compartidas sin instrucción específica.
 
