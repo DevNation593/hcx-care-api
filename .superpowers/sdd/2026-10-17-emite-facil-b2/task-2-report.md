@@ -61,6 +61,9 @@ interface InvoiceRequest {
   lastError:null|{code:string;message:string;attempts?:SriAttempt[]};
   requestedAt:string; finishedAt:string|null; events?:InvoiceEvent[];
 }
+// Every POST response, including idempotent/collision replays, is a receipt.
+// It never decrypts stored lastError/SRI content; use billing.view-protected GET for it.
+type InvoiceReceipt = Omit<InvoiceRequest, 'lastError'> & {lastError:null};
 ```
 
 | Method | Tenant-relative path | Input / response |
@@ -70,7 +73,7 @@ interface InvoiceRequest {
 | POST | `/invoicing/test` |`{apiKey?:string}` ->200 `{tenant:ProviderTenant,taxpayers:Taxpayer[]}` |
 | GET | `/invoicing/options` |200 `{tenant:ProviderTenant,taxpayers:(Taxpayer & {establishments:Establishment[]})[]}` |
 | PUT | `/branches/:branchId/emission-point` |`{establishmentId:string,emissionPointId:string}` ->200 Point |
-| POST | `/orders/:id/invoice-requests` |No body; header `Idempotency-Key` ->202 InvoiceRequest |
+| POST | `/orders/:id/invoice-requests` |No body; header `Idempotency-Key` ->202 InvoiceReceipt |
 | GET | `/invoice-requests` |200 `{items:InvoiceRequest[],total:number,page:number,pageSize:number}` |
 | GET | `/invoice-requests/:id` |200 InvoiceRequest including events |
 | GET | `/invoice-requests/:id/xml` |200 binary XML |
@@ -210,3 +213,38 @@ Authorization marks only completed sessions BILLED; early care remains completab
 Pending authorized artifacts retry independently without revoking authorization. Files
 are hashed, encrypted in existing FILE_STORAGE, CAS stored without overwriting valid
 files, verified again on read, and downloads audited. Keep encryption/storage backups.
+
+## Task2 review fix round1/5 — Important I1
+
+Base: c7c1cce. The review reproduced a permission-boundary defect: a caller granted
+billing.create without billing.view could replay an already-rejected request and receive
+its decrypted lastError/SRI explanation in POST202. GET/list correctly denied that caller.
+
+All three POST paths now select an acceptance receipt with lastError:null and short-circuit
+before any stored-error decryption: new request, initial same-key replay, and P2002 unique
+collision recovery. The existing billing.create/billing.view grants stay independent.
+GET/list/detail continue returning protected explanations. The public contract above and
+API_ENDPOINTS document the receipt explicitly; other response fields/endpoints are unchanged.
+
+RED evidence before the production change:
+
+- New focused service tests:2failed/2passed. Normal same-key replay and P2002 recovery
+  exposed PRIVATE_SRI_EXPLANATION instead of lastError:null. The initial receipt and
+  protected detail cases passed, isolating the disclosure to stored-error projection.
+- Real PostgreSQL/provider-simulator E2E:1failed/17passed. An ASISTENTE with only
+  billing.create created a request and received403 from both GET/list after rejection,
+  yet its POST replay returned EXPLICACION_FISCAL_REAL.
+
+GREEN evidence:
+
+- `npx jest --runInBand src/invoicing/invoice-requests.service.spec.ts src/invoicing/invoice-errors.spec.ts src/common/permissions/permissions.spec.ts`:
+  3suites/106tests passed. The four new service tests cover every POST path, assert
+  replay does not invoke crypto.decrypt, and preserve decryption for protected GET.
+- `npx jest --config test/jest-e2e.json --runInBand test/invoicing.e2e-spec.ts`:
+  18/18passed on the same disposable PostgreSQL and local simulator. Create-only
+  replay returns lastError:null; protected master detail still exposes the actual SRI
+  explanation. The suite exited0. No real provider or data was accessed.
+- `npx tsc --noEmit`: exit0. Scoped `prettier --check`: pass. Scoped ESLint: exit0,
+  no errors/warnings. `git diff --check`: exit0 (Windows line-ending notice only).
+  No full unit suite rerun was needed for this response-projection-only change; its prior result
+  remains123suites/2239passed/1skipped.

@@ -49,7 +49,7 @@ export class InvoiceRequestsService {
         });
         if (repeated) {
           if (repeated.orderId !== orderId) throw invoiceError('IDEMPOTENCY_KEY_REUSED');
-          return invoiceView(repeated, this.crypto);
+          return invoiceView(repeated, this.crypto, { includeError: false });
         }
         const order = await tx.order.findFirst({
           where: { id: orderId, tenantId },
@@ -176,7 +176,7 @@ export class InvoiceRequestsService {
             changes: { orderId },
           },
         });
-        return invoiceView(row, this.crypto);
+        return invoiceView(row, this.crypto, { includeError: false });
       });
     } catch (e) {
       if ((e as { code?: string }).code === 'P2002') {
@@ -185,7 +185,7 @@ export class InvoiceRequestsService {
         });
         if (repeated) {
           if (repeated.orderId !== orderId) throw invoiceError('IDEMPOTENCY_KEY_REUSED');
-          return invoiceView(repeated, this.crypto);
+          return invoiceView(repeated, this.crypto, { includeError: false });
         }
         throw invoiceError('INVOICE_REQUEST_IN_PROGRESS');
       }

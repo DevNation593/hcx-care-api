@@ -53,7 +53,9 @@ requiresReconciliation,replacesInvoiceRequestId,externalDocumentId,externalState
 accessKey,authorizationNumber,authorizedAt,artifacts:{xml,ride},attempts,lastError,
 requestedAt,finishedAt}`. Nullable fiscal values remain null until known. `lastError`
 is null or `{code,message,attempts?}`; attempts contain actual SRI explanations, visible
-only through the protected billing endpoints. Detail additionally returns `events` with
+only through GET/list/detail guarded by `billing.view`. Every POST response is an
+acceptance receipt with `lastError:null`, including same-key and collision replays;
+POST never decrypts stored errors and requires only `billing.create`. Detail additionally returns `events` with
 `{id,type,source,detail,createdAt}`. No credentials, fiscal snapshots, storage keys or
 leases are exposed. The exact typed contract and examples are in
 `../.superpowers/sdd/2026-10-17-emite-facil-b2/task-2-report.md`.

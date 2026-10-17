@@ -10,6 +10,7 @@ import { join } from 'path';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { PlatformTenantsService } from '../src/platform/platform-tenants.service';
+import { UsersService } from '../src/users/users.service';
 import { createTestTenant, TEST_PASSWORD } from './helpers/create-test-tenant';
 
 jest.setTimeout(120000);
@@ -574,6 +575,55 @@ describe('durable invoicing HTTP / PostgreSQL / provider simulator', () => {
     expect(result.requiresReconciliation).toBe(false);
     expect(posts.length).toBe(count);
     expect((await prisma.order.findUniqueOrThrow({ where: { id: o.id } })).status).toBe('PAID');
+  });
+  it('keeps SRI explanations behind billing.view when a create-only assistant replays a rejected request', async () => {
+    const assistant = await app.get(UsersService).create(
+      {
+        tenantId,
+        email: 'b2-create-only@tenant.test',
+        password: TEST_PASSWORD,
+        firstName: 'Assistant',
+        lastName: 'Billing',
+        role: 'ASISTENTE',
+      },
+      actorId,
+    );
+    await prisma.userPermission.create({
+      data: { tenantId, userId: assistant.id, permission: 'billing.create', granted: true },
+    });
+    const assistantToken = (
+      await request(server())
+        .post('/api/v1/auth/login')
+        .send({ email: 'b2-create-only@tenant.test', password: TEST_PASSWORD })
+        .expect(200)
+    ).body.accessToken;
+    const asAssistant = { Authorization: `Bearer ${assistantToken}` };
+    const o = await order();
+    const key = randomUUID();
+    const post = () =>
+      request(server())
+        .post(`${base()}/orders/${o.id}/invoice-requests`)
+        .set(asAssistant)
+        .set('Idempotency-Key', key);
+    const accepted = (await post().expect(202)).body;
+    expect(accepted.lastError).toBeNull();
+    await dispatch();
+    const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: accepted.id } });
+    docs.get(row.externalDocumentId!).state = 'RETURNED';
+    await reconcile();
+    await request(server())
+      .get(`${base()}/invoice-requests/${row.id}`)
+      .set(asAssistant)
+      .expect(403);
+    await request(server()).get(`${base()}/invoice-requests`).set(asAssistant).expect(403);
+    const replay = (await post().expect(202)).body;
+    expect(replay.status).toBe('REJECTED');
+    expect(replay.lastError).toBeNull();
+    expect(JSON.stringify(replay)).not.toContain('EXPLICACION_FISCAL_REAL');
+    const detail = (
+      await request(server()).get(`${base()}/invoice-requests/${row.id}`).set(auth()).expect(200)
+    ).body;
+    expect(detail.lastError.attempts[0].messages[0].message).toBe('EXPLICACION_FISCAL_REAL');
   });
   it('preserves the rejected provider document across a safe preflight failure in its replacement chain', async () => {
     const o = await order();

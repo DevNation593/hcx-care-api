@@ -7,6 +7,7 @@ export function invoiceView(
     order?: { number: number; branchId: string };
   },
   crypto: ClinicalCryptoService,
+  options: { includeError?: boolean } = {},
 ) {
   return {
     id: row.id,
@@ -25,7 +26,8 @@ export function invoiceView(
     authorizedAt: row.authorizedAt,
     artifacts: { xml: !!row.xmlStorageKey, ride: !!row.rideStorageKey },
     attempts: row.attempts,
-    lastError: row.lastErrorEncrypted ? publicError(row, crypto) : null,
+    lastError:
+      options.includeError !== false && row.lastErrorEncrypted ? publicError(row, crypto) : null,
     requestedAt: row.requestedAt,
     finishedAt: row.finishedAt,
     ...(row.events
