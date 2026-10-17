@@ -1,5 +1,58 @@
 # Deployment Guide
 
+## emite-facil electronic invoicing (B2)
+
+Configure `EMITE_FACIL_API_URL` manually with the real provider host and full `/api/v1`
+path. `.env.example` intentionally leaves it blank. It is global server configuration;
+never accept a provider URL or expose an API key in the web client. No live provider
+host was inferred or tested during implementation.
+
+`CLINICAL_ENCRYPTION_KEYS` is required before saving a connection or invoice intent,
+including development. It encrypts API keys, optional webhook secrets, immutable fiscal
+intent, resolved provider JSON, SRI explanations and downloaded artifacts. Preserve all
+decryption keys during rotation. Use the existing `FILE_STORAGE` driver with persistent,
+backed-up storage; authorized invoices remain authorized while missing artifacts retry.
+
+Deployment order: back up the intended database, run `npx prisma migrate deploy`, then
+`npm run build` and restart API processes. New migration:
+`20261017000000_emite_facil_b2`. It adds five models and a partial unique index blocking
+duplicate live/authorized/uncertain requests per order; historical Faktur tables remain.
+The migration was validated only on a disposable local PostgreSQL test database. No
+production migration was executed by the implementation session.
+
+The API scheduler dispatches every10 seconds and reconciles every minute, using durable
+120-second recoverable leases and CAS. Multiple API replicas may run it concurrently.
+Outbound calls occur outside long transactions. Retries use exponential30 seconds to
+30 minutes, honoring Retry-After. After24h a pre-document request may show FAILED;
+an uncertain result remains blocked and keeps recovering its identical body/key.
+Do not manually clear `requiresReconciliation` or generate a new provider key for it.
+
+MASTER tests/saves the API key in HCX and chooses issuer and branch emission points.
+Company/issuer cannot change after first use. Key rotation is allowed for that identity.
+Switching issuer environment1->2 requires no active/uncertain request and no authorized
+artifacts pending. Save the same issuer again to refresh its provider environment.
+Old rejected documents cannot be replaced across environments. Pending documents keep
+their original environment snapshot and are rechecked before invoice POST.
+
+Optional webhook: set `BACKEND_PUBLIC_URL` to the absolute public API root without
+`API_PREFIX` (default `api/v1`). Missing/invalid base yields `webhookUrl:null`. Register
+the returned callback URL in emite-facil using an authorized owner/admin session, then
+paste its one-time `whsec_...` secret into HCX. The static API key cannot manage provider
+webhook subscriptions. Raw body preservation is enabled; proxies must preserve bytes
+and signature headers. Reconciliation works without webhook. Callback rate limit300/min;
+protected list/detail polling120/min. No SRI certificates/retry management is added to HCX.
+
+SIGNATURE_FAILED is recoverable on the same provider document. Correct its signing
+configuration and use emite-facil's retry there; keep HCX PROCESSING and payment/reissue
+locks until the same document reaches a known result. SRI explanations remain encrypted
+and are shown only to authorized billing viewers, never copied into audit events/logs.
+
+For local verification set both DATABASE_URL and DATABASE_URL_TEST to a dedicated test
+database, JWT_ACCESS_SECRET/JWT_REFRESH_SECRET to disposable values, REDIS_URL empty,
+and run `npx jest --config test/jest-e2e.json --runInBand test/invoicing.e2e-spec.ts`.
+That suite uses a local HTTP simulator and explicit worker calls; worker cron wrappers
+are disabled when NODE_ENV=test. Never point it at a real clinic database.
+
 ## Pre-Deployment Checklist
 
 ### Security
