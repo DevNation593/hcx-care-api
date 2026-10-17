@@ -24,7 +24,7 @@
 
 **Files:** Crear `api/src/invoicing/provider/{invoicing-provider.ts,emite-facil.provider.ts,emite-facil.provider.spec.ts,webhook-signature.ts,webhook-signature.spec.ts}`. Leer `docs/superpowers/emite-facil-contract-audit.md` y los controladores Java que cita.
 
-**Interfaces:** Exportar `EmiteFacilProvider` inyectable, `client(apiKey: string, correlationId?: string): InvoicingProvider`. El puerto ofrece `getTenant`, `listTaxpayers`, `listEstablishments(taxpayerId)`, `listEmissionPoints(taxpayerId, establishmentId)`, `listTaxRates`, `findCustomer(idType,idNumber)`, `createCustomer(profile)`, `findProduct(sku)`, `createProduct(product)`, `createInvoice(body,key)`, `getDocument(id)`, `getArtifact(id,kind)`. Exportar tipos explícitos de opciones, perfil, producto, factura, documento y artefacto. Exportar `ProviderError` con `kind: 'transient'|'data'|'configuration'`, `code`, `retryAfterMs?`; nunca mensajes o cuerpos con secretos. Exportar `verifyWebhookSignature(rawBody: Buffer, headers, secret, now?: Date): boolean`.
+**Interfaces:** Exportar `EmiteFacilProvider` inyectable, `client(apiKey: string, correlationId?: string): InvoicingProvider`. El puerto ofrece `getTenant`, `listTaxpayers`, `listEstablishments(taxpayerId)`, `listEmissionPoints(taxpayerId, establishmentId)`, `listTaxRates`, `findCustomer(idType,idNumber)`, `createCustomer(profile)`, `findProduct(sku)`, `createProduct(product)`, `createInvoice(body,key)`, `getDocument(id)`, `getSriAttempts(id)`, `getArtifact(id,kind)`. Exportar tipos explícitos de opciones, perfil, producto, factura, documento y artefacto. Exportar `ProviderError` con `kind: 'transient'|'data'|'configuration'`, `code`, `retryAfterMs?`; nunca mensajes o cuerpos con secretos. Exportar `verifyWebhookSignature(rawBody: Buffer, headers, secret, now?: Date): boolean`.
 
 - [ ] Escribir y ejecutar prueba RED contra servidor HTTP local: la llamada envía X-Api-Key y clave de idempotencia y parsea el cuerpo real, sin JWT.
 
@@ -35,7 +35,7 @@ expect(captured.headers.authorization).toBeUndefined();
 ```
 
 - [ ] Implementar endpoints exactos, paginación completa para catálogos, filtrado exacto para identificación/SKU, timeout de quince segundos y clasificación de 401/403/404, 422, 409 en vuelo/reutilizada, 429 con Retry-After, 5xx y errores de red. Rechazar base URL inválida y redirecciones; no enviar secretos a otros orígenes.
-- [ ] Añadir pruebas de payload mínimo, errores sin filtración de claves/cuerpos, detalle y estados de documento, ETag, ausencia de PUT customers, firma múltiple válida, cuerpo modificado y timestamp vencido. Ejecutar GREEN y formato.
+- [ ] Añadir pruebas de payload mínimo, errores sin filtración de claves/cuerpos, detalle y estados de documento, intentos SRI con mensajes, ETag, ausencia de PUT customers, firma múltiple válida, cuerpo modificado y timestamp vencido. Ejecutar GREEN y formato.
 - [ ] Registrar comandos RED/GREEN e interfaces reales en reporte; commit de esta tarea.
 
 ### Task 2: Conexión, persistencia y flujo completo de emisión
@@ -84,3 +84,4 @@ expect(screen.queryByText('Autorizada')).not.toBeInTheDocument();
 - [ ] Revisión de especificación y calidad por tarea; corregir hallazgos importantes antes de avanzar.
 - [ ] Revisión final del conjunto API/web, migración y rutas de configuración; comprobaciones finales según cambios nuevos.
 - [ ] Dejar cambios revisables en ambas ramas de feature; no publicar ni desplegar ni fusionar ramas compartidas sin instrucción específica.
+

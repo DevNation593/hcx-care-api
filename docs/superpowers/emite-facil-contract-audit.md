@@ -276,3 +276,41 @@ Webhook shape example (accessKey/authorizationNumber synthetic 49-digit values):
 ```
 
 Implementation decision requiring explicit treatment: existing customers with changed name/email cannot be synchronized through this audited API. Model and surface that limitation; do not fabricate PUT support or claim a duplicate POST updates upstream data.
+
+## Focused follow-up: rejection details and concurrent idempotency
+
+Additional source inspection: `sri/SriAttemptController.java`, `sri/SriAttemptLog.java`, `billing/DocumentController.java`, `billing/FiscalDocumentRepository.java`, `billing/IdempotencyStore.java`, and relevant controller route declarations. No provider or HCX application code was changed; this section is an audit addendum.
+
+**Use `GET /api/v1/documents/{id}/sri-attempts` to obtain SRI rejection messages.** It accepts the same X-Api-Key authentication and tenant scope as document GET, resolves `TenantAccess`, checks document existence through `documents.processingState(tenantId,id)`, and has no `requireWrite`/owner-only restriction. Missing or other-tenant document returns 404. Success is HTTP 200 and a **bare array**, not a page. Attempts sort by `started_at DESC, id`; messages within each attempt retain source position order. A valid document with no SRI attempts returns `[]`.
+
+Exact response fields and adapter extension:
+
+```ts
+export interface SriMessage {
+  identifier: string | null;
+  message: string | null;
+  additionalInfo: string | null;
+  type: string | null;
+}
+export interface SriAttempt {
+  id: UUID;
+  operation: 'RECEPTION' | 'AUTHORIZATION';
+  outcome: string | null;
+  sriStatus: string | null;
+  httpStatus: number | null;
+  startedAt: Instant;
+  completedAt: Instant | null;
+  messages: SriMessage[];
+}
+export interface EmiteFacilAdapterWithSriAttempts extends EmiteFacilAdapter {
+  sriAttempts(documentId: UUID): Promise<SriAttempt[]>;
+}
+```
+
+Nullable message properties are handled conservatively because the Java wire record uses unconstrained String values from the SRI. Keep outcome extensible: processing logs may include interpreted outcomes beyond gateway enums, including UNCERTAIN, ALREADY_REGISTERED, MISMATCH and ABANDONED. A still-running attempt has nullable outcome/completedAt. Distinguish attempt outcome from the fiscal document state.
+
+For B2 UI, use returned message `identifier`, `message`, `additionalInfo`, and `type` from the newest relevant completed rejected attempt, with `sriStatus`/outcome as fallback. For a document currently RETURNED select the relevant RECEPTION/RETURNED attempt; for NOT_AUTHORIZED select AUTHORIZATION/NOT_AUTHORIZED. Display upstream text as escaped text, never trusted HTML. Do not indiscriminately replace a current status with an old attempt's outcome.
+
+**Limit:** `SriAttemptLog` stores `error_detail` and raw response internally, but its list SELECT/response deliberately excludes both. Network/parser errors can therefore have no human-readable messages. `FiscalDocumentRepository.recordStateChange` also stores a state-event `reason`; `lastReason(...)` reads it internally, but `DocumentController` does not expose that value. There is no `GET /api/v1/documents/{id}/events` route declared by the inspected billing/orchestration/SRI controllers. Local XSD_INVALID/SIGNATURE_FAILED reasons are not available from these public response records merely because they exist in `state_events`; UI must use a truthful generic state explanation when no API-exposed reason exists. Do not fabricate an events endpoint or promise arbitrary internal processing-error text.
+
+**Concurrent invoice idempotency has no dedicated transient 409 error code.** `IdempotencyStore.begin` executes `INSERT ... ON CONFLICT (tenant_id,idempotency_key) DO NOTHING` inside the same transaction as invoice creation/completion. With the documented normal PostgreSQL transaction behavior, a second call waits for the first transaction: after commit it finds and returns the existing document for matching requestHash; after rollback it can insert/process itself. The only explicit 409 from this store is **`IDEMPOTENCY_KEY_REUSED`**, whose branch is `!existing.requestHash().equals(requestHash) || existing.documentId() == null`. Thus even an unexpected visible incomplete row uses that same code; there is no `IDEMPOTENCY_IN_PROGRESS`, `IDEMPOTENCY_KEY_IN_USE`, or separate retryable in-flight 409. Do not classify `IDEMPOTENCY_KEY_REUSED` as a transient retry by inventing a more specific code. A lock wait/transport timeout remains an unknown outcome: reconcile/replay the same intended body and same key through the normal retry policy.
