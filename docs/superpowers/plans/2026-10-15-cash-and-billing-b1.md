@@ -541,3 +541,52 @@ Behavior: en la ficha del paciente, encima de la pestaña de facturas actual (Fa
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Verify the whole web**: `npm run lint && npm run type-check && npx vitest run` — Expected: PASS.
 - [ ] **Step 5: Commit** `feat(web): billing profiles of the patient, the billing gate of a treatment and billing states`.
+
+---
+
+## Retiro de Faktur (agregado el 2026-10-16)
+
+Decisión del usuario: el proyecto ya no usa Faktur; se retira en B1 (spec, «Retiro de Faktur (en B1)»). Entre B1 y B2 HCX no emite comprobantes.
+
+### Task 15: API — retirar Faktur y los campos de facturación del paciente
+
+**Files:**
+- Delete: `src/billing/faktur.client.ts`, `src/billing/faktur.client.spec.ts`, `src/billing/invoice-customer.ts`, `src/billing/invoice-customer.spec.ts`, `src/billing/dto/create-invoice.dto.ts`
+- Modify: `src/billing/billing.controller.ts`, `billing.service.ts`, `billing.service.spec.ts`, `billing.module.ts`
+- Modify: `src/tenant-settings/dto/tenant-settings.dto.ts`, `tenant-settings.service.ts`, `tenant-settings.service.spec.ts`
+- Modify: `src/patients/dto/patient.dto.ts`, `src/patients/patients.service.ts` (+ spec), `src/patients/patient-billing.ts` (delete if nothing else uses it)
+- Modify: `prisma/seed-main-clinic.ts`, `prisma/seed-tenant-states.ts`, `test/seed-coverage.spec.ts` if affected
+- Modify: `test/patient-invoicing.e2e-spec.ts`
+- Modify: `.env.example`, `docs/API_ENDPOINTS.md`, `docs/DEPLOYMENT.md`, `README.md` (mentions of Faktur)
+
+**Interfaces:**
+- Produces: `GET /billing/invoices` and `GET /billing/invoices/:invoiceId` unchanged (read-only history, `billing.view`); `POST /billing/invoices` no longer exists (404). `BillingService` keeps only its read methods.
+- Produces: tenant settings responses and DTOs without any `faktur*` field; the service no longer reads or writes `BillingSettings`.
+- Produces: patient create/update DTOs without `billingName`, `billingTaxIdType`, `billingTaxId`, `billingEmail`, `billingAddress` (sending them answers 400 like any unknown property under the global `ValidationPipe`); patient responses no longer include them. The columns stay in the database; `prisma/migrate-billing-profiles.ts` keeps reading them.
+- Seeds: patients that had `billing*` get a `BillingProfile` linked as default instead (same data); historical Faktur `Invoice` rows stay; no `BillingSettings` with a Faktur key.
+
+- [ ] **Step 1: Write failing tests**: `billing.service.spec.ts` keeps only list/get tests; `test/patient-invoicing.e2e-spec.ts` asserts `POST /billing/invoices` → 404, `GET /billing/invoices` lists an `Invoice` row created directly with Prisma, and a patient created or updated with `billingTaxId` → 400; `tenant-settings.service.spec.ts` asserts the response has no key starting with `faktur`; `patients.service` spec asserts responses have no `billing*` key.
+- [ ] **Step 2: Run** the focused unit specs and the e2e — Expected: FAIL.
+- [ ] **Step 3: Implement** the removals.
+- [ ] **Step 4: Verify** `grep -rni faktur src .env.example` finds nothing (comments included), `npx tsc --noEmit -p tsconfig.json`, `npx jest`, the full e2e suite (the two stage suites on `psic_clinic_specialty_stage_test`), `npm run build`, `npx prettier --check` on touched files — Expected: all PASS.
+- [ ] **Step 5: Commit** `feat(api): retire Faktur; invoices stay as read-only history and patients no longer carry billing fields`.
+
+### Task 16: Web — retirar Faktur y los campos de facturación del paciente
+
+**Files:**
+- Delete: `src/features/billing/billing-customer-fields.tsx`, `billing-customer.ts`, `billing-customer.test.ts`
+- Modify: `src/app/(dashboard)/patients/new/page.tsx`, `src/app/(dashboard)/patients/[id]/edit/page.tsx`, `src/lib/validations/schemas.ts`, `src/types/index.ts`, `src/app/(dashboard)/patients/patient-forms.test.tsx`
+- Modify: `src/app/(dashboard)/patients/[id]/page.tsx`, `src/features/billing/patient-invoices-tab.tsx` (+ test), `src/app/(dashboard)/patients/patient-detail-team.test.tsx`
+- Modify: `src/app/(dashboard)/admin/billing/page.tsx`, `src/features/billing/billing-page.test.tsx`
+- Modify: `src/app/(dashboard)/admin/settings/page.tsx`, `src/features/admin/settings/settings-page.test.tsx`
+- Modify: `src/lib/api/endpoints.ts` (`billingApi` without `create`), `src/lib/api/patient-team-api.test.ts` if affected
+
+**Interfaces:**
+- Consumes: API of Task 15 (`billingApi.list/get` only; patients without `billing*`; settings without `faktur*`).
+- Produces: the patient forms have no billing section (the payer is chosen in caja; the patient's profiles are managed in «Perfiles de facturación» of Task 14); the patient's invoices tab lists the historical invoices read-only and its «Facturar» action becomes a link «Cobrar en caja» to `/cash`; `/admin/billing` shows the historical invoices read-only with the note «La facturación electrónica se conectará con emite-facil próximamente.» and no Faktur configuration or emission form; `/admin/settings` has no Faktur fields.
+
+- [ ] **Step 1: Write failing tests**: patient forms render no billing fields and submit no `billing*`; the invoices tab has no emission form and links to `/cash`; `/admin/billing` shows the note and no «Configurar Faktur» / emission controls; settings page has no Faktur fields.
+- [ ] **Step 2: Run** `npx vitest run src/features/billing src/features/admin/settings "src/app/(dashboard)/patients"` — Expected: FAIL.
+- [ ] **Step 3: Implement** the removals.
+- [ ] **Step 4: Verify** `grep -rni "faktur\|billingTaxId\|billingName" src` finds nothing; `npm run lint && npm run type-check && npx vitest run` — Expected: PASS.
+- [ ] **Step 5: Commit** `feat(web): retire Faktur; invoices are read-only history and patients no longer carry billing fields`.

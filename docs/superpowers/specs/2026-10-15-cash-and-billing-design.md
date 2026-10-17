@@ -38,7 +38,7 @@ quedan `BILLED`. Al cerrar la caja, el arqueo muestra lo esperado frente a lo co
 | Momento de la factura | Solo con saldo cero. Se admiten abonos parciales; la factura se pide con la orden pagada por completo y sus formas de pago salen de los pagos registrados |
 | Ítems | Sesión de tratamiento (precio e IVA de su `TreatmentVersion`; es el único ítem al que se aplica RN-10) o concepto libre (consulta sin sesión, producto) con permiso propio |
 | Pacientes por orden | Varios. Cada ítem de sesión trae su paciente; un concepto libre puede ir sin paciente |
-| Faktur | Se retira al activar B2: sin cliente de Faktur ni emisión directa. Las facturas Faktur emitidas se siguen viendo como historial de solo lectura |
+| Faktur | Se retira en B1 (decisión del 2026-10-16: el proyecto ya no lo usa): sin cliente de Faktur ni emisión directa. Las facturas Faktur emitidas se siguen viendo como historial de solo lectura |
 | Caja | A lo sumo una caja abierta por sucursal. Todo pago va a la caja abierta de la sucursal de la orden. Arqueo mínimo de efectivo al cerrar |
 | Permisos | `billing.view` y `billing.create` se reusan; nuevos `cash.manage` y `billing.adjust`. Todos por defecto en MASTER y concedibles a PROFESIONAL y ASISTENTE. PROFESIONAL deja de tener `billing.*` por defecto (matriz §4) |
 | Gate de cierre clínico | Nueva clave `billingGate.requireClinicalCompletion` en los requisitos de la versión del tratamiento; por defecto `true`, y las versiones existentes sin la clave se leen como `true` |
@@ -85,9 +85,9 @@ si la identificación ya existe en el tenant) un `BillingProfile` y se vincula c
 si el paciente aún no tiene uno. `billingTaxIdType` se traduce `RUC → 04`, `CEDULA → 05`,
 `PASSPORT → 06`; una identificación inválida para su tipo se salta y se informa. Lo hace un
 script idempotente (`npm run prisma:migrate-billing-profiles`), no la migración SQL, para poder
-probarlo y repetirlo: se ejecuta al desplegar B1 y otra vez al desplegar B2. Mientras Faktur
-siga activo (hasta B2), los campos `billing*` de `Patient` se siguen usando para sus facturas;
-B2 los quita de la API y de la web. No se borran de la base.
+probarlo y repetirlo: se ejecuta al desplegar B1. Con Faktur retirado en B1, la API deja de
+aceptar y devolver los campos `billing*` de `Patient` y la web deja de mostrarlos; no se borran
+de la base.
 
 ### Caja
 
@@ -469,12 +469,31 @@ La pantalla lo dice.
 | `GET /invoice-requests/:id/xml`, `GET /invoice-requests/:id/ride` | `billing.view` | Copia local; `404 INVOICE_ARTIFACT_NOT_READY`; descarga auditada |
 | `POST /integrations/emite-facil/webhook/:connectionId` | firma | 204 |
 
-### Retiro de Faktur
+### Retiro de Faktur (en B1)
 
-Al terminar B2: se eliminan `FakturClient`, `POST /invoices` y las variables de Faktur;
-`GET /invoices` y `GET /invoices/:id` quedan como historial de solo lectura (`billing.view`).
-`BillingSettings` y `Invoice` no se borran. El límite mensual del plan pasa a contar
-`InvoiceRequest` en vez de `Invoice`.
+Decidido el 2026-10-16: el proyecto ya no usa Faktur, así que se retira en B1 sin esperar a B2.
+Se eliminan `FakturClient`, `POST /billing/invoices`, la configuración de Faktur en los ajustes
+de la clínica (`fakturApiKey`, `fakturEstablishment`… sobre `BillingSettings`) y las variables
+`FAKTUR_*`; `GET /billing/invoices` y `GET /billing/invoices/:id` quedan como historial de solo
+lectura (`billing.view`). `BillingSettings` e `Invoice` no se borran de la base. Entre el
+despliegue de B1 y el de B2, HCX no emite comprobantes electrónicos. El límite mensual del plan
+pasa a contar `InvoiceRequest` en B2.
+
+### Ajustes pendientes para B2 (emite-facil cambió después de esta spec)
+
+`api-emite-facil` publicó en `dev` (2026-10-16, rama `p11-api-keys`) su autenticación para otros
+sistemas, distinta de lo supuesto en «Lo que se supone de B0». Antes de planificar B2 hay que
+revisar esta sección con estos hechos:
+
+- Es una **API key estática** en `X-Api-Key: efk_<publicId>_<secreto>`, creada por un `OWNER` o
+  `ADMIN` en emite-facil, sin caducidad y con rol `BILLER` (crea clientes, productos y facturas,
+  consulta comprobantes, descarga XML y RIDE, lee emisores, establecimientos y puntos). No hay
+  canje de token ni scopes.
+- Una API key **no gestiona webhooks** (`403 ROLE_FORBIDDEN`): HCX no puede crear su suscripción;
+  la crea el `OWNER` en emite-facil y pega su secreto `whsec_` en HCX, o B2 depende solo del
+  reconciliador.
+- Sigue sin existir **`PUT /customers/{id}`**: un perfil fiscal editado no se puede actualizar en
+  emite-facil.
 
 ## Web
 
