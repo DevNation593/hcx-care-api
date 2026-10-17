@@ -11,6 +11,9 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { PlatformTenantsService } from '../src/platform/platform-tenants.service';
 import { UsersService } from '../src/users/users.service';
+import { Prisma } from '@prisma/client';
+import { InvoiceWorkerService } from '../src/invoicing/invoice-worker.service';
+import { TreatmentSessionsService } from '../src/treatment-sessions/treatment-sessions.service';
 import { createTestTenant, TEST_PASSWORD } from './helpers/create-test-tenant';
 
 jest.setTimeout(120000);
@@ -160,6 +163,34 @@ describe('durable invoicing HTTP / PostgreSQL / provider simulator', () => {
       },
       include: { versions: true },
     });
+  }
+  async function concurrentCompletionFixture(outcome: string) {
+    const t = await treatment(true);
+    const fixture = await sessionOrder(t.versions[0].id, false);
+    const receipt = (await submit(fixture.order.id).expect(202)).body;
+    const worker = app.get(InvoiceWorkerService);
+    let finalize: () => Promise<void>;
+    if (outcome === 'FAILED') {
+      const claimed = (await worker.claim()).find((row) => row.id === receipt.id)!;
+      // A definitive pre-POST customer mismatch safely releases this order.
+      finalize = async () => {
+        customerName = 'Outdated';
+        try {
+          await worker.process(claimed);
+        } finally {
+          customerName = 'Fiscal buyer';
+        }
+      };
+    } else {
+      await dispatch();
+      const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: receipt.id } });
+      const document = {
+        ...docs.get(row.externalDocumentId!),
+        state: outcome === 'REJECTED' ? 'NOT_AUTHORIZED' : 'AUTHORIZED',
+      };
+      finalize = () => worker.applyDocument(row.id, document, 'RECONCILER');
+    }
+    return { ...fixture, receipt, finalize };
   }
   const submit = (id: string, key = randomUUID()) =>
     request(server())
@@ -816,6 +847,145 @@ describe('durable invoicing HTTP / PostgreSQL / provider simulator', () => {
       payments,
     );
   });
+  it.each([
+    ['AUTHORIZED', 'BILLED'],
+    ['REJECTED', 'CLINICAL_COMPLETE'],
+    ['FAILED', 'CLINICAL_COMPLETE'],
+  ])(
+    'serializes early invoice %s committed after the clinical invoice read',
+    async (outcome, expectedStatus) => {
+      const fixture = await concurrentCompletionFixture(outcome);
+      const { receipt, finalize } = fixture;
+
+      let reached!: () => void;
+      const invoiceRead = new Promise<void>((resolve) => (reached = resolve));
+      let release!: () => void;
+      const resumeCompletion = new Promise<void>((resolve) => (release = resolve));
+      let pause = true;
+      const transaction = prisma.$transaction.bind(prisma);
+      // Keep every query and transaction real; pause only after the first invoice read.
+      const transactionSpy = jest.spyOn(prisma, '$transaction').mockImplementation(((
+        operation: any,
+        options: any,
+      ) => {
+        if (options?.isolationLevel !== Prisma.TransactionIsolationLevel.Serializable)
+          return transaction(operation, options);
+        return transaction(async (tx) => {
+          const invoiceRequest = new Proxy(tx.invoiceRequest, {
+            get(target, property) {
+              if (property !== 'findFirst') return Reflect.get(target, property);
+              return async (args: Prisma.InvoiceRequestFindFirstArgs) => {
+                const row = await target.findFirst(args);
+                if (pause && row?.id === receipt.id) {
+                  pause = false;
+                  reached();
+                  await resumeCompletion;
+                }
+                return row;
+              };
+            },
+          });
+          return operation(
+            new Proxy(tx, {
+              get(target, property) {
+                return property === 'invoiceRequest'
+                  ? invoiceRequest
+                  : Reflect.get(target, property);
+              },
+            }),
+          );
+        }, options);
+      }) as typeof prisma.$transaction);
+      const completion = request(server())
+        .post(`${base()}/treatment-sessions/${fixture.session.id}/complete`)
+        .set(auth())
+        .send({ procedureNotes: 'Completed concurrent care' })
+        .then((response) => response);
+      try {
+        await invoiceRead;
+        await finalize();
+        expect(
+          (await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: receipt.id } })).status,
+        ).toBe(outcome);
+        expect(
+          (await prisma.treatmentSession.findUniqueOrThrow({ where: { id: fixture.session.id } }))
+            .completedAt,
+        ).toBeNull();
+      } finally {
+        release();
+        transactionSpy.mockRestore();
+        await completion;
+      }
+      expect((await completion).status).toBe(201);
+      const completed = await prisma.treatmentSession.findUniqueOrThrow({
+        where: { id: fixture.session.id },
+      });
+      expect(completed.completedAt).not.toBeNull();
+      expect(completed.status).toBe(expectedStatus);
+    },
+  );
+  it.each([
+    ['AUTHORIZED', 'BILLED'],
+    ['REJECTED', 'BILLING_FAILED'],
+    ['FAILED', 'BILLING_FAILED'],
+  ])(
+    'waits for clinical completion holding the invoice lock before applying %s',
+    async (outcome, expectedStatus) => {
+      const fixture = await concurrentCompletionFixture(outcome);
+      const sessions = app.get(TreatmentSessionsService);
+      const transition = sessions.transition.bind(sessions);
+      let reached!: (pid: number) => void;
+      const beforeTransition = new Promise<number>((resolve) => (reached = resolve));
+      let release!: () => void;
+      const resumeCompletion = new Promise<void>((resolve) => (release = resolve));
+      const transitionSpy = jest
+        .spyOn(sessions, 'transition')
+        .mockImplementation(async (tx, session, data) => {
+          if (session.id === fixture.session.id) {
+            const [{ pid }] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+            reached(pid);
+            await resumeCompletion;
+          }
+          return transition(tx, session, data);
+        });
+      const completion = request(server())
+        .post(`${base()}/treatment-sessions/${fixture.session.id}/complete`)
+        .set(auth())
+        .send({ procedureNotes: 'Completed while fiscal worker waits' })
+        .then((response) => response);
+      let finalization: Promise<void> | undefined;
+      try {
+        const completionPid = await beforeTransition;
+        finalization = fixture.finalize();
+        // Observe an actual PostgreSQL lock wait, rather than assuming one after a delay.
+        const deadline = Date.now() + 2000;
+        let waiting = false;
+        do {
+          [{ waiting }] = await prisma.$queryRaw<{ waiting: boolean }[]>`
+            SELECT EXISTS (
+              SELECT 1 FROM pg_stat_activity
+              WHERE ${completionPid} = ANY(pg_blocking_pids(pid))
+            ) AS waiting`;
+          if (!waiting) await new Promise((resolve) => setTimeout(resolve, 10));
+        } while (!waiting && Date.now() < deadline);
+        expect(waiting).toBe(true);
+      } finally {
+        release();
+        transitionSpy.mockRestore();
+        await Promise.all([completion, finalization]);
+      }
+      expect((await completion).status).toBe(201);
+      const completed = await prisma.treatmentSession.findUniqueOrThrow({
+        where: { id: fixture.session.id },
+      });
+      expect(completed.completedAt).not.toBeNull();
+      expect(completed.status).toBe(expectedStatus);
+      expect(
+        (await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: fixture.receipt.id } }))
+          .status,
+      ).toBe(outcome);
+    },
+  );
   it('serializes concurrent identical submissions into one request', async () => {
     const o = await order();
     const key = randomUUID();

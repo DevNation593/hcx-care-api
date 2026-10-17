@@ -577,6 +577,11 @@ export class TreatmentSessionsService {
             orderBy: { requestedAt: 'desc' },
           })
         : null;
+      if (invoice) {
+        // Fiscal finalization takes this lock before updating completed sessions. Lock in the
+        // same order so it sees this completion, or Serializable retries our stale invoice read.
+        await tx.$queryRaw`SELECT "id" FROM "InvoiceRequest" WHERE "id"=${invoice.id} AND "tenantId"=${tenantId} FOR UPDATE`;
+      }
       const completed = await this.transition(tx, session, {
         status: statusAfterClinicalCompletion(
           invoice?.requiresReconciliation ? 'PROCESSING' : invoice?.status,
