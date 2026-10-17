@@ -301,6 +301,53 @@ describe('EmiteFacilProvider HTTP contract', () => {
     );
   });
 
+  it.each([
+    ['customer', 0],
+    ['customer', 1],
+    ['product', 0],
+    ['product', 1],
+    ['options', 0],
+    ['options', 1],
+  ] as const)('rejects a nonempty truncated terminal %s page %s', async (kind, terminalPage) => {
+    const item =
+      kind === 'customer'
+        ? { ...customer, idNumber: 'PA12345678' }
+        : kind === 'product'
+          ? { ...product, sku: 'HCX.TEST.extra' }
+          : { taxCode: '2', rateCode: '0', description: 'Zero rate', rate: '0.00' };
+    respond = (path, response) => {
+      const page = Number(path.searchParams.get('page') || 0);
+      json(response, {
+        items: page < terminalPage ? Array.from({ length: 100 }, () => item) : [item],
+        page,
+        size: 100,
+        total: terminalPage === 0 ? 2 : 150,
+      });
+    };
+    const client = factory().client('test');
+    const lookup =
+      kind === 'customer'
+        ? client.findCustomer('06', 'PA1234567')
+        : kind === 'product'
+          ? client.findProduct('HCX.TEST')
+          : client.listTaxRates();
+    await expect(lookup).rejects.toMatchObject({
+      kind: 'transient',
+      code: 'INCOMPLETE_PAGINATION',
+      message: 'Invoicing provider: INCOMPLETE_PAGINATION',
+    });
+    expect(captured).toHaveLength(terminalPage + 1);
+  });
+
+  it('rejects a truncated terminal page before accepting an exact customer match', async () => {
+    respond = (_path, response) =>
+      json(response, { items: [customer], page: 0, size: 100, total: 2 });
+    await expect(factory().client('test').findCustomer('06', 'PA1234567')).rejects.toMatchObject({
+      kind: 'transient',
+      code: 'INCOMPLETE_PAGINATION',
+    });
+  });
+
   it('creates customers and products only with the current POST contract', async () => {
     respond = (path, response) =>
       json(response, path.pathname.endsWith('/customers') ? customer : product, 201);

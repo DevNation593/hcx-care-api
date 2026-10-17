@@ -497,13 +497,11 @@ class HttpInvoicingClient implements InvoicingProvider {
       )
         return invalidResponse();
       if (total > 100000) throw new ProviderError('transient', 'PAGINATION_LIMIT');
-      const more = (page + 1) * responseSize < total;
-      if (
-        (more && items.length !== responseSize) ||
-        (!items.length && total > page * responseSize)
-      ) {
+      const expectedLength = Math.min(responseSize, total - page * responseSize);
+      if (items.length !== expectedLength) {
         throw new ProviderError('transient', 'INCOMPLETE_PAGINATION');
       }
+      const more = (page + 1) * responseSize < total;
       seen += items.length;
       if (seen > 100000) throw new ProviderError('transient', 'PAGINATION_LIMIT');
       if (visit(items) || !more) return;
