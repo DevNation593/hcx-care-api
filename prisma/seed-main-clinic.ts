@@ -434,7 +434,7 @@ export async function seedMainClinic(ctx: SeedContext): Promise<SeedTenant> {
   await createBillingProfile(ctx, clinic, mateo, {
     kind: 'PERSON',
     idType: '05',
-    idNumber: '1712345678',
+    idNumber: '1712345675',
     legalName: 'Verónica Jiménez',
     email: 'veronica.jimenez@email.com',
   });
@@ -448,7 +448,7 @@ export async function seedMainClinic(ctx: SeedContext): Promise<SeedTenant> {
   await createBillingProfile(ctx, clinic, samuel, {
     kind: 'PERSON',
     idType: '05',
-    idNumber: '0912345678',
+    idNumber: '0912345675',
     legalName: 'Samuel Ortiz',
     email: 'samuel.ortiz@email.com',
   });

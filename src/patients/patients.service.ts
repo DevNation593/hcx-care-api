@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PatientTeamService } from '../patient-team/patient-team.service';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
+import { LEGACY_BILLING_OMIT } from './legacy-billing';
 import { CreatePatientDto, UpdatePatientDto } from './dto/patient.dto';
 import {
   assertGuardianForMinor,
@@ -15,16 +16,6 @@ import {
   normalizeTaxId,
   PatientIdentification,
 } from './patient-identity';
-
-// Legacy billing columns stay in the database (billing profiles migrate from them) but are
-// never part of a patient response.
-const LEGACY_BILLING_OMIT = {
-  billingName: true,
-  billingTaxIdType: true,
-  billingTaxId: true,
-  billingEmail: true,
-  billingAddress: true,
-} as const;
 
 const IDENTIFICATION_FIELDS = ['identificationType', 'identificationNumber'] as const;
 

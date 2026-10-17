@@ -27,7 +27,11 @@ import {
   getPlanLimits,
   moduleToDbKey,
 } from '../src/subscription/subscription-pricing';
-import { normalizeIdNumber, SriIdType } from '../src/billing-profiles/tax-identification';
+import {
+  assertValidTaxIdentification,
+  normalizeIdNumber,
+  SriIdType,
+} from '../src/billing-profiles/tax-identification';
 import { MAIN_BRANCH_NAME } from '../src/branches/branches.service';
 import { specialtyModuleKeys } from '../src/clinical-modules/clinical-module-registry';
 import type { DemoSpecialtyKey } from './demo-specialty-scenarios';
@@ -445,12 +449,15 @@ export async function createBillingProfile(
     address?: string;
   },
 ): Promise<BillingProfile> {
+  const idNumber = normalizeIdNumber(input.idType, input.idNumber);
+  // A seeded identification the API would refuse must fail loudly here.
+  assertValidTaxIdentification(input.idType, idNumber, input.legalName);
   const profile = await ctx.db.billingProfile.create({
     data: {
       tenantId: clinic.tenant.id,
       kind: input.kind,
       idType: input.idType,
-      idNumber: normalizeIdNumber(input.idType, input.idNumber),
+      idNumber,
       legalName: input.legalName,
       email: input.email,
       address: input.address,
