@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AppointmentStatus, Encounter, Prisma } from '@prisma/client';
+import { AppointmentStatus, Encounter, EncounterType, Prisma } from '@prisma/client';
 import { assertBranchAvailable } from '../branches/branches.service';
 import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
@@ -55,6 +55,17 @@ export function snapshotEncounter(encounter: Encounter) {
 
 const conflict = (code: string, message: string, extra: Record<string, unknown> = {}) =>
   new ConflictException({ statusCode: 409, code, message, ...extra });
+
+/** The encounter of a treatment session follows the session; the encounters routes leave it alone. */
+function assertNotManagedBySession(encounter: { treatmentSession?: { id: string } | null }) {
+  if (encounter.treatmentSession) {
+    throw conflict(
+      'ENCOUNTER_MANAGED_BY_SESSION',
+      'Esta atención pertenece a una sesión de tratamiento y se gestiona desde ella.',
+      { treatmentSessionId: encounter.treatmentSession.id },
+    );
+  }
+}
 
 /**
  * A record can be written into an encounter only while it is open and by the professional
@@ -122,68 +133,99 @@ export class EncountersService {
     if (dto.branchId) await assertBranchAvailable(this.prisma, tenantId, dto.branchId);
 
     return this.transaction(async (tx) => {
-      const open = await tx.encounter.findFirst({
-        where: {
-          tenantId,
-          patientId,
-          professionalId: actor.userId,
-          status: 'OPEN',
-          deletedAt: null,
-        },
-        select: { id: true },
-      });
-      if (open) {
-        throw conflict(
-          'ENCOUNTER_ALREADY_OPEN',
-          'Ya tienes una atención abierta con este paciente. Ciérrala antes de iniciar otra.',
-          { encounterId: open.id },
-        );
-      }
-
-      const appointment = dto.appointmentId
-        ? await this.findAttendableAppointment(tx, tenantId, patientId, dto.appointmentId, actor)
-        : null;
-
-      const stored = await tx.encounter.create({
-        data: {
-          tenantId,
-          patientId,
-          professionalId: actor.userId,
-          specialtyId: actor.specialtyId,
-          appointmentId: appointment?.id,
-          branchId: dto.branchId ?? appointment?.branchId ?? undefined,
-          encounterType: dto.encounterType,
-          reason: this.crypto.encrypt(tenantId, dto.reason.trim()),
-          startedAt: dto.startedAt ? new Date(dto.startedAt) : undefined,
-        },
-        include: encounterInclude,
-      });
-      const encounter = this.decrypt(stored);
-
-      if (appointment) {
-        await tx.appointment.updateMany({
-          where: { id: appointment.id, tenantId, status: { in: UNATTENDED } },
-          data: { status: AppointmentStatus.IN_PROGRESS },
-        });
-      }
-
-      await this.audit.record(
-        tenantId,
-        actor,
-        [
-          {
-            action: 'CREATE',
-            entity: 'ENCOUNTER',
-            entityId: encounter.id,
-            patientId,
-            after: snapshotEncounter(encounter),
-          },
-        ],
-        tx,
-      );
-
+      const encounter = await this.openEncounter(tx, tenantId, patientId, actor, dto);
       return { ...encounter, recordCount: 0 };
     });
+  }
+
+  /**
+   * Opens an encounter of the caller with the patient inside the caller's transaction and
+   * audits it. One open encounter per professional and patient (409 ENCOUNTER_ALREADY_OPEN);
+   * with an appointment, only its professional attends it and it is marked in progress.
+   * `startedAt` is only accepted from the encounters routes; every other caller gets the
+   * server time.
+   */
+  async openEncounter(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    patientId: string,
+    actor: ClinicalActor,
+    input: {
+      encounterType: EncounterType;
+      reason: string;
+      appointmentId?: string;
+      branchId?: string;
+      startedAt?: string;
+    },
+  ): Promise<Encounter> {
+    const patient = await tx.patient.findFirst({
+      where: { id: patientId, tenantId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!patient) throw new NotFoundException('Paciente no encontrado');
+    if (input.branchId) await assertBranchAvailable(tx, tenantId, input.branchId);
+
+    const open = await tx.encounter.findFirst({
+      where: {
+        tenantId,
+        patientId,
+        professionalId: actor.userId,
+        status: 'OPEN',
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    if (open) {
+      throw conflict(
+        'ENCOUNTER_ALREADY_OPEN',
+        'Ya tienes una atención abierta con este paciente. Ciérrala antes de iniciar otra.',
+        { encounterId: open.id },
+      );
+    }
+
+    const appointment = input.appointmentId
+      ? await this.findAttendableAppointment(tx, tenantId, patientId, input.appointmentId, actor)
+      : null;
+
+    const stored = await tx.encounter.create({
+      data: {
+        tenantId,
+        patientId,
+        professionalId: actor.userId,
+        specialtyId: actor.specialtyId,
+        appointmentId: appointment?.id,
+        branchId: input.branchId ?? appointment?.branchId ?? undefined,
+        encounterType: input.encounterType,
+        reason: this.crypto.encrypt(tenantId, input.reason.trim()),
+        startedAt: input.startedAt ? new Date(input.startedAt) : undefined,
+      },
+      include: encounterInclude,
+    });
+    const encounter = this.decrypt(stored);
+
+    if (appointment) {
+      await tx.appointment.updateMany({
+        where: { id: appointment.id, tenantId, status: { in: UNATTENDED } },
+        data: { status: AppointmentStatus.IN_PROGRESS },
+      });
+    }
+
+    await this.audit.record(
+      tenantId,
+      actor,
+      [
+        {
+          action: 'CREATE',
+          entity: 'ENCOUNTER',
+          entityId: encounter.id,
+          patientId,
+          after: snapshotEncounter(encounter),
+        },
+      ],
+      tx,
+    );
+
+    return encounter;
   }
 
   /** Type and reason can change while the encounter is open; a closed one is final. */
@@ -196,6 +238,7 @@ export class EncountersService {
   ) {
     return this.transaction(async (tx) => {
       const current = await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'editar');
+      assertNotManagedBySession(current);
 
       const stored = await tx.encounter.update({
         where: { id: encounterId },
@@ -240,50 +283,76 @@ export class EncountersService {
   ) {
     return this.transaction(async (tx) => {
       const current = await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'cerrar');
-      const summary = dto.summary?.trim();
-
-      const stored = await tx.encounter.update({
-        where: { id: encounterId },
-        data: {
-          status: 'CLOSED',
-          closedAt: new Date(),
-          ...(summary ? { summary: this.crypto.encrypt(tenantId, summary) } : {}),
-          version: { increment: 1 },
-        },
-        include: encounterInclude,
-      });
-      const encounter = this.decrypt(stored);
-
-      if (current.appointmentId) {
-        await tx.appointment.updateMany({
-          where: {
-            id: current.appointmentId,
-            tenantId,
-            status: { in: [...UNATTENDED, AppointmentStatus.IN_PROGRESS] },
-          },
-          data: { status: AppointmentStatus.COMPLETED },
-        });
-      }
-
-      await this.audit.record(
-        tenantId,
-        actor,
-        [
-          {
-            action: 'UPDATE',
-            entity: 'ENCOUNTER',
-            entityId: encounterId,
-            patientId,
-            before: snapshotEncounter(current),
-            after: snapshotEncounter(encounter),
-            reason: 'Cierre de la atención',
-          },
-        ],
-        tx,
-      );
-
-      return encounter;
+      assertNotManagedBySession(current);
+      return this.closeEncounter(tx, tenantId, encounterId, actor, dto.summary);
     });
+  }
+
+  /**
+   * Closes an open encounter of the caller inside the caller's transaction, completes its
+   * appointment and audits it. Treatment sessions close their own encounter through it.
+   * `anyAuthor` lets a caller that already authorized the actor close another professional's
+   * encounter (the tenant MASTER revoking a consent); the audit still names the actor.
+   */
+  async closeEncounter(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    encounterId: string,
+    actor: ClinicalActor,
+    summary?: string,
+    options: { anyAuthor?: boolean } = {},
+  ): Promise<Encounter> {
+    const current = await this.findOwnOpen(
+      tx,
+      tenantId,
+      null,
+      encounterId,
+      options.anyAuthor ? null : actor,
+      'cerrar',
+    );
+    const trimmed = summary?.trim();
+
+    const stored = await tx.encounter.update({
+      where: { id: encounterId },
+      data: {
+        status: 'CLOSED',
+        closedAt: new Date(),
+        ...(trimmed ? { summary: this.crypto.encrypt(tenantId, trimmed) } : {}),
+        version: { increment: 1 },
+      },
+      include: encounterInclude,
+    });
+    const encounter = this.decrypt(stored);
+
+    if (current.appointmentId) {
+      await tx.appointment.updateMany({
+        where: {
+          id: current.appointmentId,
+          tenantId,
+          status: { in: [...UNATTENDED, AppointmentStatus.IN_PROGRESS] },
+        },
+        data: { status: AppointmentStatus.COMPLETED },
+      });
+    }
+
+    await this.audit.record(
+      tenantId,
+      actor,
+      [
+        {
+          action: 'UPDATE',
+          entity: 'ENCOUNTER',
+          entityId: encounterId,
+          patientId: current.patientId,
+          before: snapshotEncounter(current),
+          after: snapshotEncounter(encounter),
+          reason: 'Cierre de la atención',
+        },
+      ],
+      tx,
+    );
+
+    return encounter;
   }
 
   /** An encounter started by mistake. It must hold no records; the row stays for audit. */
@@ -296,6 +365,7 @@ export class EncountersService {
   ) {
     return this.transaction(async (tx) => {
       const current = await this.findOwn(tx, tenantId, patientId, encounterId, actor, 'eliminar');
+      assertNotManagedBySession(current);
 
       const records = await tx.specialtyRecord.count({ where: { encounterId, deletedAt: null } });
       if (records > 0) {
@@ -383,19 +453,22 @@ export class EncountersService {
     return appointment;
   }
 
+  /** `patientId` null: the encounter is looked up by its id alone, within the tenant. */
   private async findOwn(
     tx: Prisma.TransactionClient,
     tenantId: string,
-    patientId: string,
+    patientId: string | null,
     encounterId: string,
-    actor: ClinicalActor,
+    actor: ClinicalActor | null,
     verb: string,
   ) {
     const stored = await tx.encounter.findFirst({
-      where: { id: encounterId, tenantId, patientId, deletedAt: null },
+      where: { id: encounterId, tenantId, ...(patientId ? { patientId } : {}), deletedAt: null },
+      include: { treatmentSession: { select: { id: true } } },
     });
     if (!stored) throw clinicalRecordNotFound('Atención no encontrada');
-    if (stored.professionalId !== actor.userId) {
+    // A null actor means the caller already decided who may act on this encounter.
+    if (actor && stored.professionalId !== actor.userId) {
       throw clinicalRecordForbidden(`Solo puedes ${verb} tus propias atenciones`);
     }
     return this.decrypt(stored);
@@ -404,9 +477,9 @@ export class EncountersService {
   private async findOwnOpen(
     tx: Prisma.TransactionClient,
     tenantId: string,
-    patientId: string,
+    patientId: string | null,
     encounterId: string,
-    actor: ClinicalActor,
+    actor: ClinicalActor | null,
     verb: string,
   ) {
     const encounter = await this.findOwn(tx, tenantId, patientId, encounterId, actor, verb);

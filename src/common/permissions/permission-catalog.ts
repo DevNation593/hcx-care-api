@@ -70,6 +70,13 @@ export const PERMISSION_CATALOG = [
     roles: ['MASTER', 'PROFESIONAL'],
     grantable: ['ASISTENTE'],
   },
+  {
+    key: 'treatments.manage',
+    group: 'Tratamientos',
+    label: 'Gestionar tratamientos y consentimientos',
+    roles: ['MASTER'],
+    grantable: ['PROFESIONAL', 'ASISTENTE'],
+  },
 ] as const satisfies readonly {
   key: string;
   group: string;

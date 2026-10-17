@@ -10,7 +10,7 @@ export interface PatientIdentification {
 }
 
 const OTHER_PATTERN = /^[A-Z0-9]{3,30}$/;
-const ADULT_AGE = 18;
+export const ADULT_AGE = 18;
 
 function invalid(message: string): never {
   throw new BadRequestException({

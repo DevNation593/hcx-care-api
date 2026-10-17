@@ -14,6 +14,6 @@ import { PatientFilesService } from './patient-files.service';
     PatientFilesService,
     { provide: FILE_STORAGE, useFactory: createFileStorage, inject: [ConfigService] },
   ],
-  exports: [PatientFilesService],
+  exports: [PatientFilesService, FILE_STORAGE],
 })
 export class PatientFilesModule {}
