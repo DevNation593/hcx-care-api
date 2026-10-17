@@ -55,6 +55,9 @@ const WITH_CONSENT: Record<TreatmentSessionStatus, SessionCommand[]> = {
   CONSENT_REVOKED: [],
   CANCELLED: [],
   NO_SHOW: [],
+  BILLING_PENDING: [],
+  BILLED: [],
+  BILLING_FAILED: [],
 };
 
 const WITHOUT_CONSENT: Record<TreatmentSessionStatus, SessionCommand[]> = {
@@ -105,6 +108,9 @@ describe('allowedCommands', () => {
 
   it('has no command in any terminal status', () => {
     expect([...TERMINAL_SESSION_STATUSES].sort()).toEqual([
+      'BILLED',
+      'BILLING_FAILED',
+      'BILLING_PENDING',
       'CANCELLED',
       'CLINICAL_COMPLETE',
       'CONSENT_REFUSED',
@@ -133,6 +139,36 @@ describe('assertCommandAllowed', () => {
         code: 'TREATMENT_SESSION_INVALID_TRANSITION',
         status: 'CLINICAL_COMPLETE',
         command: 'START',
+      });
+    }
+  });
+
+  it.each([
+    ['BILLED', 'CANCEL'],
+    ['BILLING_PENDING', 'SAVE_FORM'],
+  ] as const)('throws TREATMENT_SESSION_BILLED for %s + %s', (status, command) => {
+    try {
+      assertCommandAllowed(status, command, withConsent);
+      throw new Error('expected to throw');
+    } catch (e) {
+      expect((e as { getStatus(): number }).getStatus()).toBe(409);
+      expect((e as { getResponse(): unknown }).getResponse()).toEqual({
+        statusCode: 409,
+        code: 'TREATMENT_SESSION_BILLED',
+        message: 'La atención ya está facturada o en facturación.',
+        status,
+        command,
+      });
+    }
+  });
+
+  it('keeps BILLING_FAILED as an invalid transition', () => {
+    try {
+      assertCommandAllowed('BILLING_FAILED', 'CANCEL', withConsent);
+      throw new Error('expected to throw');
+    } catch (e) {
+      expect((e as { getResponse(): unknown }).getResponse()).toMatchObject({
+        code: 'TREATMENT_SESSION_INVALID_TRANSITION',
       });
     }
   });

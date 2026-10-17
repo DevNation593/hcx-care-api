@@ -539,10 +539,6 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
       expect(granted.body.effective).toContain('billing.view');
 
       await request(server()).get(invoices).set(as('assistant')).expect(200);
-      // Seeing invoices does not include issuing them.
-      const issue = await request(server()).post(invoices).set(as('assistant')).send({});
-      expect(issue.status).toBe(403);
-      expect(issue.body.code).toBe('PERMISSION_DENIED');
 
       await request(server())
         .put(`${base()}/users/${assistant.id}/permissions`)

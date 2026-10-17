@@ -12,60 +12,6 @@ import {
 } from 'class-validator';
 
 export class UpdateTenantSettingsDto {
-  @ApiPropertyOptional({
-    example: 'sk_test_xxx',
-    description: 'API key de Faktur. Se almacena en el servidor.',
-  })
-  @IsString()
-  @IsOptional()
-  fakturApiKey?: string;
-
-  @ApiPropertyOptional({ example: '001' })
-  @IsString()
-  @IsOptional()
-  fakturEstablishment?: string;
-
-  @ApiPropertyOptional({ example: '001' })
-  @IsString()
-  @IsOptional()
-  fakturEmissionPoint?: string;
-
-  @ApiPropertyOptional({ example: 1 })
-  @IsInt()
-  @IsOptional()
-  @Min(1)
-  fakturNextSequential?: number;
-
-  @ApiPropertyOptional({ example: 'Clínica Integral S.A.' })
-  @IsString()
-  @IsOptional()
-  fakturBusinessName?: string;
-
-  @ApiPropertyOptional({ example: 'Av. Principal 123, Quito' })
-  @IsString()
-  @IsOptional()
-  fakturBusinessAddress?: string;
-
-  @ApiPropertyOptional({ default: false })
-  @IsBoolean()
-  @IsOptional()
-  fakturSpecialTaxpayer?: boolean;
-
-  @ApiPropertyOptional({ default: false })
-  @IsBoolean()
-  @IsOptional()
-  fakturAccountingRequired?: boolean;
-
-  @ApiPropertyOptional({ default: false })
-  @IsBoolean()
-  @IsOptional()
-  fakturWithholdingAgent?: boolean;
-
-  @ApiPropertyOptional({ default: false })
-  @IsBoolean()
-  @IsOptional()
-  fakturEnabled?: boolean;
-
   @ApiPropertyOptional({ example: 'Clínica Integral S.A.' })
   @IsString()
   @IsOptional()

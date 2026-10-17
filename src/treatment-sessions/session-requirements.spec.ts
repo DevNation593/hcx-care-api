@@ -13,6 +13,7 @@ const ALL_REQUIRED: TreatmentRequirements = {
   informedConsent: { required: true, validityDays: 30 },
   photos: { minimumBefore: 2, minimumAfter: 1 },
   clinicalNotes: { requiredForCompletion: true },
+  billingGate: { requireClinicalCompletion: true },
 };
 const SATISFIED: SessionFacts = {
   hasForm: true,

@@ -2,7 +2,9 @@ import { Prisma } from '@prisma/client';
 import { ForbiddenException } from '@nestjs/common';
 import { PatientTeamService } from '../patient-team/patient-team.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreatePatientDto } from './dto/patient.dto';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { CreatePatientDto, UpdatePatientDto } from './dto/patient.dto';
 import { PatientsService } from './patients.service';
 
 describe('PatientsService legacy assignment compatibility', () => {
@@ -85,6 +87,7 @@ describe('PatientsService legacy assignment compatibility', () => {
       role: 'MASTER',
     });
     expect(tx.patient.create).toHaveBeenCalledWith({
+      omit: expect.any(Object),
       data: expect.objectContaining({
         tenantId: 'tenant-1',
         assignedPsychologistId: 'professional-1',
@@ -155,6 +158,7 @@ describe('PatientsService legacy assignment compatibility', () => {
     );
 
     expect(tx.patient.update).toHaveBeenCalledWith({
+      omit: expect.any(Object),
       where: { id: 'patient-1' },
       data: expect.objectContaining({ assignedPsychologistId: null }),
     });
@@ -197,6 +201,7 @@ describe('PatientsService legacy assignment compatibility', () => {
       where: { id: 'patient-1', tenantId: 'tenant-1', deletedAt: null },
     });
     expect(tx.patient.update).toHaveBeenCalledWith({
+      omit: expect.any(Object),
       where: { id: 'patient-1' },
       data: expect.objectContaining({ assignedPsychologistId: 'professional-2' }),
     });
@@ -272,66 +277,50 @@ describe('PatientsService legacy assignment compatibility', () => {
     },
   );
 
-  describe('billing data', () => {
-    const storedBilling = {
-      billingName: 'Luis Vega',
-      billingTaxIdType: 'CEDULA',
-      billingTaxId: '1712345678',
-      billingEmail: 'luis@example.com',
-      billingAddress: null,
-    };
+  describe('legacy billing fields', () => {
+    const BILLING_KEYS = [
+      'billingName',
+      'billingTaxIdType',
+      'billingTaxId',
+      'billingEmail',
+      'billingAddress',
+    ];
+    const omitted = (call: { omit?: Record<string, boolean> }) =>
+      expect(Object.keys(call.omit ?? {}).sort()).toEqual([...BILLING_KEYS].sort());
 
-    it('stores normalized billing data when creating a patient', async () => {
-      await service.create(
-        'tenant-1',
-        createInput({ billingTaxIdType: 'CEDULA', billingTaxId: '171 234 5678' }),
-        'admin-1',
-        'MASTER',
-      );
-      expect(tx.patient.create.mock.calls[0][0].data).toMatchObject({
-        billingTaxIdType: 'CEDULA',
-        billingTaxId: '1712345678',
-        billingName: null,
-      });
-    });
-
-    it('rejects a billing type without a number before writing', async () => {
-      await expect(
-        service.create('tenant-1', createInput({ billingTaxIdType: 'RUC' }), 'admin-1', 'MASTER'),
-      ).rejects.toMatchObject({ status: 400, response: { code: 'PATIENT_BILLING_INVALID' } });
-      expect(tx.patient.create).not.toHaveBeenCalled();
-    });
-
-    it('merges billing changes over the stored values on update', async () => {
-      tx.patient.findFirst.mockResolvedValue({ ...patient, ...storedBilling });
-      await service.update(
-        'tenant-1',
-        'patient-1',
-        { billingAddress: 'Av. 1' },
-        'admin-1',
-        'MASTER',
-      );
-      expect(tx.patient.update.mock.calls[0][0].data).toMatchObject({
-        billingName: 'Luis Vega',
-        billingTaxId: '1712345678',
-        billingAddress: 'Av. 1',
-      });
-    });
-
-    it('rejects an update that leaves the stored number without its type', async () => {
-      tx.patient.findFirst.mockResolvedValue({ ...patient, ...storedBilling });
-      await expect(
-        service.update('tenant-1', 'patient-1', { billingTaxIdType: '' }, 'admin-1', 'MASTER'),
-      ).rejects.toMatchObject({ status: 400, response: { code: 'PATIENT_BILLING_INVALID' } });
-      expect(tx.patient.update).not.toHaveBeenCalled();
-    });
-
-    it('does not touch billing columns when an update omits them', async () => {
-      await service.update('tenant-1', 'patient-1', { firstName: 'Anabel' }, 'admin-1', 'MASTER');
-      const data = tx.patient.update.mock.calls[0][0].data;
-      for (const key of Object.keys(storedBilling)) {
-        expect(data).not.toHaveProperty(key);
+    it.each(BILLING_KEYS)('rejects %s in the create and update DTOs', async (field) => {
+      for (const Dto of [CreatePatientDto, UpdatePatientDto]) {
+        const dto = plainToInstance(Dto, { firstName: 'Ana', lastName: 'Paz', [field]: 'x' });
+        // Same options as the global ValidationPipe of main.ts.
+        const errors = await validate(dto, { whitelist: true, forbidNonWhitelisted: true });
+        expect(errors.map((error) => error.property)).toEqual([field]);
       }
+    });
+
+    it('leaves the billing columns out of create and update responses', async () => {
+      await service.create('tenant-1', createInput(), 'admin-1', 'MASTER');
+      omitted(tx.patient.create.mock.calls[0][0]);
+
+      await service.update('tenant-1', 'patient-1', { firstName: 'Anabel' }, 'admin-1', 'MASTER');
+      omitted(tx.patient.update.mock.calls[0][0]);
+      const data = tx.patient.update.mock.calls[0][0].data;
+      for (const key of BILLING_KEYS) expect(data).not.toHaveProperty(key);
+    });
+
+    it('leaves the billing columns out of list and detail responses', async () => {
+      const reads = {
+        patient: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
+      };
+      reads.patient.findFirst.mockResolvedValue(patient);
+      const reader = new PatientsService(
+        reads as unknown as PrismaService,
+        team as unknown as PatientTeamService,
+      );
+
+      await reader.findAll('tenant-1');
+      omitted(reads.patient.findMany.mock.calls[0][0]);
+      await reader.findOne('tenant-1', 'patient-1');
+      omitted(reads.patient.findFirst.mock.calls[0][0]);
     });
   });
 });

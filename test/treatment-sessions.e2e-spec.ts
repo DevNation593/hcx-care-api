@@ -870,7 +870,13 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     expect(bodyText).not.toContain(CONSENT_TITLE);
     expect(bodyText).not.toContain('pregnant');
 
-    // The professional reaches it with the permission of the role.
+    // A professional has no billing permission by default: the account holder grants it.
+    await request(server()).get(url).set(as('pro')).expect(403);
+    await request(server())
+      .put(`${base()}/users/${professionalId}/permissions`)
+      .set(as('master'))
+      .send({ revoked: [], granted: ['billing.view'] })
+      .expect(200);
     await request(server()).get(url).set(as('pro')).expect(200);
 
     await request(server())

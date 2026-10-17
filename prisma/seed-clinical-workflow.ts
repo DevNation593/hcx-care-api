@@ -164,7 +164,6 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
       taxIdentificationType: 'RUC',
       taxIdentificationNumber: '1791234567001',
     },
-    billing: { nextSequential: 1, isEnabled: true },
     master: {
       email: 'titular.arrayanes@psic.com',
       firstName: 'Lorena',
@@ -205,7 +204,7 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     firstName: 'Hugo',
     lastName: 'Salas',
     role: 'PROFESIONAL',
-    note: 'Fisioterapeuta en ambas sedes; el titular le retiró «Emitir facturas»',
+    note: 'Fisioterapeuta en ambas sedes; el titular le dejó ver facturas, sin «Emitir facturas»',
     profile: { specialty: 'physiotherapy', title: 'Fisioterapeuta', licenseNumber: 'FIS-EC-313' },
   });
   const marta = await createUser(ctx, clinic, {
@@ -228,7 +227,8 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
       { userId: marta.id, permission: 'billing.view', granted: true },
       { userId: marta.id, permission: 'billing.create', granted: true },
       { userId: pablo.id, permission: 'appointments.cancel', granted: false },
-      { userId: hugo.id, permission: 'billing.create', granted: false },
+      // Professionals have no billing access by default: Hugo can see invoices but not issue them.
+      { userId: hugo.id, permission: 'billing.view', granted: true },
     ].map((row) => ({ tenantId, createdById: clinic.master.id, ...row })),
   });
 

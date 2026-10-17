@@ -5,6 +5,8 @@ import type {
   AppointmentStatus,
   AuditAction,
   AuditEntity,
+  BillingProfile,
+  BillingProfileKind,
   Patient,
   PlanType,
   Prisma,
@@ -25,6 +27,11 @@ import {
   getPlanLimits,
   moduleToDbKey,
 } from '../src/subscription/subscription-pricing';
+import {
+  assertValidTaxIdentification,
+  normalizeIdNumber,
+  SriIdType,
+} from '../src/billing-profiles/tax-identification';
 import { MAIN_BRANCH_NAME } from '../src/branches/branches.service';
 import { specialtyModuleKeys } from '../src/clinical-modules/clinical-module-registry';
 import type { DemoSpecialtyKey } from './demo-specialty-scenarios';
@@ -208,8 +215,6 @@ export interface SeedTenantSpec {
   addOns?: ModuleName[];
   disabledSections?: SectionKey[];
   disabledModules?: string[];
-  /** Omit for a clinic that never opened the electronic invoicing settings. */
-  billing?: Partial<Prisma.BillingSettingsUncheckedCreateInput>;
   master: Omit<SeedUserSpec, 'role'>;
 }
 
@@ -341,19 +346,6 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
     },
   });
 
-  if (spec.billing) {
-    await db.billingSettings.create({
-      data: {
-        tenantId: tenant.id,
-        establishment: '001',
-        emissionPoint: '001',
-        businessName: spec.fiscal?.legalName,
-        businessAddress: spec.address,
-        ...spec.billing,
-      },
-    });
-  }
-
   const specialtyIds = spec.specialties.map((key) => ctx.catalog[key].id);
   await db.tenantSpecialty.createMany({
     data: specialtyIds.map((specialtyId) => ({ tenantId: tenant.id, specialtyId })),
@@ -438,6 +430,49 @@ export async function createPatient(
 
   if (data.isActive !== false && !data.deletedAt) clinic.usage.patients += 1;
   return patient;
+}
+
+/**
+ * A billing profile linked to the patient as its default one. The identification is stored
+ * normalized, the way the billing profiles service stores it.
+ */
+export async function createBillingProfile(
+  ctx: SeedContext,
+  clinic: SeedTenant,
+  patient: Patient,
+  input: {
+    kind: BillingProfileKind;
+    idType: SriIdType;
+    idNumber: string;
+    legalName: string;
+    email?: string;
+    address?: string;
+  },
+): Promise<BillingProfile> {
+  const idNumber = normalizeIdNumber(input.idType, input.idNumber);
+  // A seeded identification the API would refuse must fail loudly here.
+  assertValidTaxIdentification(input.idType, idNumber, input.legalName);
+  const profile = await ctx.db.billingProfile.create({
+    data: {
+      tenantId: clinic.tenant.id,
+      kind: input.kind,
+      idType: input.idType,
+      idNumber,
+      legalName: input.legalName,
+      email: input.email,
+      address: input.address,
+      createdById: clinic.master.id,
+    },
+  });
+  await ctx.db.patientBillingProfile.create({
+    data: {
+      tenantId: clinic.tenant.id,
+      patientId: patient.id,
+      billingProfileId: profile.id,
+      isDefault: true,
+    },
+  });
+  return profile;
 }
 
 export async function createAppointment(

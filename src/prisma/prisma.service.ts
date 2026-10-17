@@ -78,6 +78,12 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       'consentSignature',
       'consentEvent',
       'treatmentSession',
+      'billingProfile',
+      'patientBillingProfile',
+      'cashRegisterSession',
+      'order',
+      'orderItem',
+      'payment',
       'professionalProfile',
       'user',
       'refreshToken',
@@ -138,6 +144,13 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     const orderedModels = [
       'auditLog',
+      // Payments restrict deleting their order and cash register; items restrict their session.
+      'payment',
+      'orderItem',
+      'order',
+      'cashRegisterSession',
+      'patientBillingProfile',
+      'billingProfile',
       // Consent evidence restricts deleting its document, so it goes first.
       'consentEvent',
       'consentSignature',
