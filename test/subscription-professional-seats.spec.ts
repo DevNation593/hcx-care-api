@@ -26,6 +26,7 @@ describe('Subscription professional seats', () => {
       notificationLog: { count: jest.fn().mockResolvedValue(0) },
       appointment: { count: jest.fn().mockResolvedValue(0) },
       clinicalNote: { count: jest.fn().mockResolvedValue(0) },
+      invoiceRequest: { findMany: jest.fn().mockResolvedValue([]) },
     };
     service = new SubscriptionService(db as PrismaService);
   });

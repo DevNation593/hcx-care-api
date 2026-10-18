@@ -123,6 +123,8 @@ export async function loadOrderBillingFacts(
     total: new Prisma.Decimal(order.total),
     paidTotal: new Prisma.Decimal(order.paidTotal),
     profile: order.billingProfile,
-    invoicingConfigured: null,
+    invoicingConfigured: !!(await tx.branchEmissionPoint.findFirst({
+      where: { branchId: order.branchId, connection: { tenantId, active: true } },
+    })),
   };
 }

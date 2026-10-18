@@ -277,6 +277,29 @@ describe('Cash register, orders, payments and billing eligibility (E2E)', () => 
     specialtyId = (await prisma.specialty.findUniqueOrThrow({ where: { code: 'PSYCHOLOGY' } })).id;
     branchId = (await prisma.branch.findFirstOrThrow({ where: { tenantId, isActive: true } })).id;
 
+    const billingConnection = await prisma.invoicingConnection.create({
+      data: {
+        tenantId,
+        apiKeyEncrypted: 'fixture-not-used',
+        externalTenantId: 'fixture-tenant',
+        taxpayerId: 'fixture-taxpayer',
+        taxpayerName: 'Fixture',
+        taxpayerRuc: '1790012345001',
+        environment: '1',
+        validatedAt: new Date(),
+      },
+    });
+    await prisma.branchEmissionPoint.create({
+      data: {
+        branchId,
+        connectionId: billingConnection.id,
+        establishmentId: 'fixture-establishment',
+        emissionPointId: 'fixture-point',
+        establishmentCode: '001',
+        emissionPointCode: '001',
+      },
+    });
+
     professionalId = (await member(tenantId, 'pro@tenant.test', 'PROFESIONAL')).id;
     assistantId = (await member(tenantId, 'assistant@tenant.test', 'ASISTENTE')).id;
 

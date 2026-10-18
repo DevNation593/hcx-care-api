@@ -11,6 +11,7 @@ const D = (value: string) => new Prisma.Decimal(value);
 
 describe('OrdersService', () => {
   const prisma = {
+    branchEmissionPoint: { findFirst: jest.fn() },
     $transaction: jest.fn(),
     applyRlsContext: jest.fn(),
     auditLog: { create: jest.fn() },
@@ -595,6 +596,7 @@ describe('OrdersService', () => {
     });
 
     beforeEach(() => {
+      prisma.branchEmissionPoint.findFirst.mockResolvedValue({ id: 'point' });
       prisma.patientFile.count.mockResolvedValue(0);
       prisma.specialtyRecord.count.mockResolvedValue(0);
     });

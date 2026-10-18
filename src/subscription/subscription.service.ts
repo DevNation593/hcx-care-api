@@ -1,3 +1,4 @@
+import { invoiceMonthlyUsage } from '../invoicing/invoice-requests.service';
 import { Injectable, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PlanType, TenantType } from '@prisma/client';
@@ -74,7 +75,7 @@ export class SubscriptionService {
         includedSpecialties: subscription.includedSpecialties,
         specialtyPrice: subscription.specialtyPrice,
         monthlyElectronicInvoicesLimit: subscription.monthlyElectronicInvoicesLimit,
-        monthlyElectronicInvoicesUsed: subscription.monthlyElectronicInvoicesUsed,
+        monthlyElectronicInvoicesUsed: await invoiceMonthlyUsage(this.prisma, tenantId),
 
         // Dates
         startDate: subscription.startDate,

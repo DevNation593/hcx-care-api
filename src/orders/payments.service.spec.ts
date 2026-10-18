@@ -6,6 +6,7 @@ const D = (value: string) => new Prisma.Decimal(value);
 
 describe('PaymentsService', () => {
   const prisma = {
+    invoiceRequest: { findFirst: jest.fn() },
     $transaction: jest.fn(),
     applyRlsContext: jest.fn(),
     auditLog: { create: jest.fn() },
