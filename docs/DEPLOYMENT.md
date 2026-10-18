@@ -1,5 +1,24 @@
 # Deployment Guide
 
+## Vercel and Supabase database connections
+
+The shared Supabase pooler's session endpoint (port `5432`) limits concurrent clients
+to its backend pool size. With serverless instances this can produce
+`EMAXCONNSESSION: max clients reached in session mode` and HTTP 500 responses across
+clinical modules, encounters and other database-backed routes.
+
+When `VERCEL=1`, `PrismaService` uses the shared Supabase pooler's transaction endpoint
+(port `6543`) with `pgbouncer=true`. It defaults the Prisma pool to
+`connection_limit=1`, preserving an explicit connection limit, credentials and all
+other URL parameters. For other PostgreSQL hosts, it only supplies the default pool
+limit. The override is local to the runtime client: Prisma CLI and local processes
+continue using the configured `DATABASE_URL` for migrations and development.
+
+Deploy the API after this change so new Vercel instances use the runtime settings.
+The clinical web change also requires deploying the web. No new schema migration is
+needed for this connection fix. See the
+[Supabase Prisma troubleshooting guide](https://supabase.com/docs/guides/database/prisma/prisma-troubleshooting#max-client-connections-reached).
+
 ## emite-facil electronic invoicing (B2)
 
 Configure `EMITE_FACIL_API_URL` manually with the real provider host and full `/api/v1`
