@@ -19,6 +19,7 @@ import { TreatmentSessionsController } from '../../treatment-sessions/treatment-
 import { BillingProfilesController } from '../../billing-profiles/billing-profiles.controller';
 import { CashRegistersController } from '../../cash-registers/cash-registers.controller';
 import { OrdersController } from '../../orders/orders.controller';
+import { InvoicingController } from '../../invoicing/invoicing.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { UserPermissionsService } from '../../users/user-permissions.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -53,6 +54,7 @@ const controllers: Controller[] = [
   BillingProfilesController,
   CashRegistersController,
   OrdersController,
+  InvoicingController,
   TreatmentSessionsController,
   ConsentDocumentsController,
 ];
@@ -179,6 +181,7 @@ describe('permission catalog', () => {
         'consent-documents.controller.ts',
         'consent-templates.controller.ts',
         'encounters.controller.ts',
+        'invoicing.controller.ts',
         'next-session-plans.controller.ts',
         'orders.controller.ts',
         'patient-files.controller.ts',
