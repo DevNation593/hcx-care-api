@@ -2,13 +2,14 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { RlsContext, RlsContextService } from './rls-context.service';
 import { assertTestDatabaseSafety } from './test-database-safety';
+import { prismaRuntimeOptions } from './prisma-runtime-options';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private rlsClient: PrismaClient | null = null;
 
   constructor(private readonly rlsContext: RlsContextService) {
-    super();
+    super(prismaRuntimeOptions());
   }
 
   async onModuleInit() {
