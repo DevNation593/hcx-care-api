@@ -40,7 +40,38 @@ export class TenantSpecialtiesService {
       const specialties = await this.catalog.resolveActiveCodes(specialtyCodes, tx);
       const subscription = await tx.tenantSubscription.findUnique({ where: { tenantId } });
       if (!subscription) throw new NotFoundException('Suscripción no encontrada');
-      return this.applySelection(tx, { tenantId, subscription, specialties });
+      const [previousSpecialties, previousModules] = await Promise.all([
+        tx.tenantSpecialty.findMany({ where: { tenantId }, select: { specialtyId: true } }),
+        tx.tenantModule.findMany({
+          where: { tenantId },
+          select: { moduleKey: true, enabled: true },
+          orderBy: { moduleKey: 'asc' },
+        }),
+      ]);
+      const previousMonthlyPrice = Number(subscription.basePrice);
+      const result = await this.applySelection(tx, { tenantId, subscription, specialties });
+      await tx.auditLog.create({
+        data: {
+          tenantId,
+          userId: actorId,
+          action: 'UPDATE',
+          entity: 'TENANT',
+          entityId: tenantId,
+          changes: {
+            before: {
+              specialtyIds: previousSpecialties.map(({ specialtyId }) => specialtyId).sort(),
+              modules: previousModules,
+              monthlyPrice: previousMonthlyPrice,
+            },
+            after: {
+              specialtyIds: result.specialties.map(({ id }) => id).sort(),
+              modules: result.modules,
+              monthlyPrice: result.pricing.totalMonthly,
+            },
+          },
+        },
+      });
+      return result;
     });
   }
 
@@ -188,9 +219,26 @@ export class TenantSpecialtiesService {
       if (!module) {
         if (!enabled)
           throw new NotFoundException('El módulo no está configurado para este consultorio');
-        return tx.tenantModule.create({ data: { tenantId, moduleKey, enabled: true } });
+      } else if (module.enabled === enabled) {
+        return module;
       }
-      return tx.tenantModule.update({ where: { id: module.id }, data: { enabled } });
+      const updated = module
+        ? await tx.tenantModule.update({ where: { id: module.id }, data: { enabled } })
+        : await tx.tenantModule.create({ data: { tenantId, moduleKey, enabled: true } });
+      await tx.auditLog.create({
+        data: {
+          tenantId,
+          userId: actorId,
+          action: 'UPDATE',
+          entity: 'TENANT',
+          entityId: tenantId,
+          changes: {
+            before: { module: { key: moduleKey, enabled: module?.enabled ?? null } },
+            after: { module: { key: moduleKey, enabled } },
+          },
+        },
+      });
+      return updated;
     });
   }
 }

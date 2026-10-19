@@ -170,13 +170,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .send({ ...input, branchId: idOf('Sede Norte') })
       .expect(201);
 
-    // One assistant had «Cancelar citas» withdrawn; the other still has it.
-    const denied = await request(server())
-      .post(`${base()}/appointments/${booked.body.id}/cancel`)
-      .set(as('asistente'))
-      .send({ reason: 'El paciente avisó' })
-      .expect(403);
-    expect(denied.body.code).toBe('PERMISSION_DENIED');
+    // Both assistants have the same permissions because the platform assigns them by role.
     await request(server())
       .post(`${base()}/appointments/${booked.body.id}/cancel`)
       .set(as('recepcion'))
@@ -184,15 +178,15 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .expect(201);
   });
 
-  it('applies the permissions granted and withdrawn user by user', async () => {
+  it('applies the same permissions to every user of a clinic role', async () => {
     const invoices = `${base()}/billing/invoices`;
     await request(server()).get(invoices).set(as('recepcion')).expect(200);
-    await request(server()).get(invoices).set(as('asistente')).expect(403);
+    await request(server()).get(invoices).set(as('asistente')).expect(200);
     await request(server()).get(invoices).set(as('fisio')).expect(200);
 
     const described = await request(server())
-      .get(`${base()}/users/${users.recepcion}/permissions`)
-      .set(as('titular'))
+      .get(`${base()}/users/me/permissions`)
+      .set(as('recepcion'))
       .expect(200);
     expect(described.body.effective).toEqual(
       expect.arrayContaining(['billing.view', 'billing.create', 'appointments.cancel']),

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { assertSpecialtyStageDatabaseSafety } from '../test/helpers/assert-e2e-database';
 import { auditMasterRoles, hasBlockingIssues } from './audit-master-roles';
@@ -55,7 +55,9 @@ function copyMigrations(destination: string, includeTargets: boolean): void {
   for (const name of readdirSync(source)
     .filter((item) => /^\d+_/.test(item))
     .sort()) {
-    if (targetMigrations.includes(name) && !includeTargets) continue;
+    // Seed legacy roles in the real pre-MASTER schema. Later migrations may already
+    // reference MASTER and must be applied only after the role migration itself.
+    if (!includeTargets && name >= targetMigrations[0]) continue;
     cpSync(join(source, name), join(target, name), { recursive: true });
   }
 }
@@ -94,9 +96,11 @@ export async function verifyMasterRoleMigration(
   const schema = `master_role_${randomBytes(8).toString('hex')}`;
   if (!schemaPattern.test(schema)) throw new Error('Invalid generated schema');
   const client = clientFor(urlForSchema(baseUrl, schema));
+  let schemaCreated = false;
 
   try {
     await administrator.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);
+    schemaCreated = true;
     copyMigrations(schemaDir, false);
     deploy(schemaPath, urlForSchema(baseUrl, schema));
 
@@ -116,7 +120,6 @@ export async function verifyMasterRoleMigration(
     await addUser(client, 'b_admin_inactive_old', 'tenant_b', 'ADMIN', '2026-01-01', false);
     await addUser(client, 'b_admin_active_new', 'tenant_b', 'ADMIN', '2026-03-01');
 
-    rmSync(join(schemaDir, 'migrations'), { recursive: true, force: true });
     copyMigrations(schemaDir, true);
     deploy(schemaPath, urlForSchema(baseUrl, schema));
 
@@ -156,11 +159,29 @@ export async function verifyMasterRoleMigration(
     }
     return { migratedUsers: rows.length, rejectedSecondMaster: true };
   } finally {
-    await client.$disconnect();
-    if (!schemaPattern.test(schema)) throw new Error('Invalid generated schema on cleanup');
-    await administrator.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
-    await administrator.$disconnect();
-    rmSync(temporary, { recursive: true, force: true });
+    try {
+      await client.$disconnect();
+    } finally {
+      try {
+        if (schemaCreated) {
+          if (!schemaPattern.test(schema)) throw new Error('Invalid generated schema on cleanup');
+          await administrator.$executeRawUnsafe(`DROP SCHEMA "${schema}" CASCADE`);
+        }
+      } finally {
+        try {
+          await administrator.$disconnect();
+        } finally {
+          const resolvedTemporary = resolve(temporary);
+          if (
+            dirname(resolvedTemporary) !== resolve(tmpdir()) ||
+            !basename(resolvedTemporary).startsWith('master-role-migration-')
+          ) {
+            throw new Error('Refusing to remove an unexpected temporary directory');
+          }
+          rmSync(resolvedTemporary, { recursive: true, force: true });
+        }
+      }
+    }
   }
 }
 

@@ -1,6 +1,5 @@
 import { Decimal } from '@prisma/client/runtime/library';
 import { Prisma } from '@prisma/client';
-import { SpecialtiesService } from '../src/specialties/specialties.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { SpecialtyCatalogService } from '../src/specialties/specialty-catalog.service';
 import { TenantSpecialtiesService } from '../src/specialties/tenant-specialties.service';
@@ -11,6 +10,7 @@ describe('Specialty selection pricing', () => {
       planType: 'CLINIC_BASIC',
       includedSpecialties: 2,
       specialtyPrice: new Decimal(15),
+      basePrice: new Decimal(99),
       featureClinicalNotes: true,
       featureAdvancedAnalytics: true,
     };
@@ -41,6 +41,7 @@ describe('Specialty selection pricing', () => {
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      auditLog: { create: jest.fn() },
     };
     const db: any = {
       applyRlsContext: jest.fn().mockResolvedValue(undefined),
@@ -53,9 +54,7 @@ describe('Specialty selection pricing', () => {
       db as PrismaService,
       new SpecialtyCatalogService(db as PrismaService),
     );
-    const service = new SpecialtiesService(db as PrismaService, selection);
-
-    await service.setForTenant('clinic-1', ['A', 'B', 'C', 'D'], 'user-1');
+    await selection.replace('clinic-1', ['A', 'B', 'C', 'D'], 'user-1');
 
     expect(tx.tenantSubscription.update).toHaveBeenCalledWith({
       where: { tenantId: 'clinic-1' },
@@ -68,5 +67,10 @@ describe('Specialty selection pricing', () => {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     });
     expect(db.$transaction).toHaveBeenCalledTimes(2);
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ tenantId: 'clinic-1', userId: 'user-1' }),
+      }),
+    );
   });
 });

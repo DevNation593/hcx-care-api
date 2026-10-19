@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import request from 'supertest';
 import { reconcilePatientTeamAppointments } from '../prisma/reconcile-patient-team-appointments';
 import { AppModule } from '../src/app.module';
+import { createPlatformAdmin } from '../prisma/create-platform-admin';
 import { PlatformTenantsService } from '../src/platform/platform-tenants.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { assertSpecialtyStageDatabaseSafety } from './helpers/assert-e2e-database';
@@ -23,6 +24,7 @@ describe('Patient team and appointments (E2E)', () => {
   let nutritionProfessionalId: string;
   let otherProfessionalId: string;
   let adminToken: string;
+  let platformToken: string;
   let otherAdminToken: string;
   let assistantToken: string;
   let psychologyToken: string;
@@ -118,6 +120,13 @@ describe('Patient team and appointments (E2E)', () => {
     await app.init();
     prisma = app.get(PrismaService);
     await prisma.cleanDatabase();
+    await createPlatformAdmin(prisma, {
+      email: 'platform-team-e2e@example.test',
+      password,
+      firstName: 'Platform',
+      lastName: 'Admin',
+    });
+    platformToken = await login('platform-team-e2e@example.test');
 
     const psychology = await prisma.specialty.upsert({
       where: { code: 'PSYCHOLOGY' },
@@ -142,8 +151,8 @@ describe('Patient team and appointments (E2E)', () => {
     otherAdminToken = await login(other.master!.email);
 
     await request(app.getHttpServer())
-      .put(`/api/v1/tenants/${tenantId}/specialties`)
-      .set('Authorization', bearer(adminToken))
+      .put(`/api/v1/platform/tenants/${tenantId}/specialties`)
+      .set('Authorization', bearer(platformToken))
       .send({ specialtyCodes: ['PSYCHOLOGY', 'NUTRITION'] })
       .expect(200);
     await prisma.tenantSubscription.update({

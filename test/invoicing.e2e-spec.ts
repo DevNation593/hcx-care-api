@@ -608,7 +608,7 @@ describe('durable invoicing HTTP / PostgreSQL / provider simulator', () => {
     expect((await prisma.order.findUniqueOrThrow({ where: { id: o.id } })).status).toBe('PAID');
   });
   it('keeps SRI explanations behind billing.view when a create-only assistant replays a rejected request', async () => {
-    const assistant = await app.get(UsersService).create(
+    await app.get(UsersService).create(
       {
         tenantId,
         email: 'b2-create-only@tenant.test',
@@ -619,8 +619,8 @@ describe('durable invoicing HTTP / PostgreSQL / provider simulator', () => {
       },
       actorId,
     );
-    await prisma.userPermission.create({
-      data: { tenantId, userId: assistant.id, permission: 'billing.create', granted: true },
+    await prisma.tenantRolePermission.create({
+      data: { tenantId, role: 'ASISTENTE', permission: 'billing.create', granted: true },
     });
     const assistantToken = (
       await request(server())

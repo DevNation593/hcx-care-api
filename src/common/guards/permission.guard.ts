@@ -5,8 +5,8 @@ import { Permission, REQUIRE_PERMISSION_KEY } from '../permissions/permission-ca
 import { PermissionChecker } from '../permissions/permission-checker.service';
 
 /**
- * Refuses a route to a user from whom its permission was withdrawn, and to a user of a role
- * the route does not list unless the permission was given to them: the role guard lets that
+ * Refuses a route when the platform withdrew its permission from this clinic role, and to a
+ * role the route does not list unless the platform granted it: the role guard lets that
  * role through only so that this guard can decide.
  */
 @Injectable()

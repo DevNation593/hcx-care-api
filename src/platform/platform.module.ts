@@ -7,6 +7,7 @@ import { UsersModule } from '../users/users.module';
 import { PlatformAuditService } from './platform-audit.service';
 import { PlatformLegacyAccessController } from './platform-legacy-access.controller';
 import { PlatformPaymentsController } from './platform-payments.controller';
+import { PlatformRolePermissionsService } from './platform-role-permissions.service';
 import { PlatformSubscriptionService } from './platform-subscription.service';
 import { PlatformSummaryController } from './platform-summary.controller';
 import { PlatformSummaryService } from './platform-summary.service';
@@ -26,6 +27,7 @@ import { PlatformTenantsService } from './platform-tenants.service';
     PlatformSubscriptionService,
     PlatformAuditService,
     PlatformSummaryService,
+    PlatformRolePermissionsService,
   ],
   exports: [PlatformTenantsService, PlatformAuditService],
 })

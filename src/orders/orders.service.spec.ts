@@ -21,8 +21,8 @@ describe('OrdersService', () => {
     patientFile: { count: jest.fn() },
     treatmentVersion: { findUnique: jest.fn() },
     consentDocument: { findMany: jest.fn() },
-    billingProfile: { findFirst: jest.fn() },
-    patientBillingProfile: { findFirst: jest.fn() },
+    billingProfile: { findFirst: jest.fn(), upsert: jest.fn() },
+    patientBillingProfile: { findFirst: jest.fn(), upsert: jest.fn() },
     treatmentSession: { findMany: jest.fn(), findFirst: jest.fn() },
     order: {
       aggregate: jest.fn(),
@@ -55,6 +55,21 @@ describe('OrdersService', () => {
   };
 
   const person = (id: string) => ({ id, firstName: 'Ana', lastName: 'Paz' });
+
+  const patientBillingData = (extra: Record<string, unknown> = {}) => ({
+    ...person('patient-1'),
+    identificationType: 'CEDULA',
+    identificationNumber: '1710034065',
+    email: 'ana@example.com',
+    phone: '0991234567',
+    address: 'Quito',
+    billingName: null,
+    billingTaxIdType: null,
+    billingTaxId: null,
+    billingEmail: null,
+    billingAddress: null,
+    ...extra,
+  });
 
   const item = (extra: Record<string, unknown> = {}) => ({
     id: 'item-1',
@@ -147,7 +162,12 @@ describe('OrdersService', () => {
       Promise.resolve({ id: 'item-new', ...data }),
     );
     prisma.patientBillingProfile.findFirst.mockResolvedValue(null);
+    prisma.patient.findFirst.mockResolvedValue(null);
     prisma.billingProfile.findFirst.mockResolvedValue({ id: 'profile-1', isActive: true });
+    prisma.billingProfile.upsert.mockImplementation(
+      ({ create }: { create: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'patient-profile', isActive: true, ...create }),
+    );
     prisma.order.findFirst.mockResolvedValue(order());
   });
 
@@ -205,6 +225,199 @@ describe('OrdersService', () => {
         }),
       );
       expect(prisma.order.create.mock.calls[0][0].data.billingProfileId).toBe('profile-9');
+      expect(prisma.patient.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('uses the registered patient identity and contact data without requiring a separate billing profile', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([session()]);
+      prisma.patient.findFirst.mockResolvedValue(
+        patientBillingData({
+          identificationNumber: '171-0034065',
+          firstName: ' Ana ',
+          lastName: ' Paz ',
+          email: ' ana@example.com ',
+        }),
+      );
+      prisma.billingProfile.findFirst.mockResolvedValue(null);
+
+      await service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] });
+
+      expect(prisma.patient.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'patient-1', tenantId: 'tenant-1', deletedAt: null },
+        }),
+      );
+      expect(prisma.billingProfile.upsert).toHaveBeenCalledWith({
+        where: {
+          tenantId_idType_idNumber: { tenantId: 'tenant-1', idType: '05', idNumber: '1710034065' },
+        },
+        update: {},
+        create: {
+          tenantId: 'tenant-1',
+          kind: 'PERSON',
+          idType: '05',
+          idNumber: '1710034065',
+          legalName: 'Ana Paz',
+          email: 'ana@example.com',
+          phone: '0991234567',
+          address: 'Quito',
+          createdById: 'user-1',
+        },
+      });
+      expect(prisma.patientBillingProfile.upsert).toHaveBeenCalledWith({
+        where: {
+          patientId_billingProfileId: {
+            patientId: 'patient-1',
+            billingProfileId: 'patient-profile',
+          },
+        },
+        update: {},
+        create: {
+          tenantId: 'tenant-1',
+          patientId: 'patient-1',
+          billingProfileId: 'patient-profile',
+        },
+      });
+      expect(prisma.order.create.mock.calls[0][0].data.billingProfileId).toBe('patient-profile');
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'CREATE',
+            entity: 'BILLING_PROFILE',
+            entityId: 'patient-profile',
+          }),
+        }),
+      );
+    });
+
+    it.each([
+      ['RUC', '1710034065001', '04', 'PERSON'],
+      ['RUC', '1790016919001', '04', 'COMPANY'],
+      ['PASSPORT', 'ab-1234', '06', 'PERSON'],
+    ])(
+      'maps a registered %s identification %s to its billing type',
+      async (identificationType, identificationNumber, idType, kind) => {
+        prisma.treatmentSession.findMany.mockResolvedValue([session()]);
+        prisma.patient.findFirst.mockResolvedValue(
+          patientBillingData({ identificationType, identificationNumber }),
+        );
+        prisma.billingProfile.findFirst.mockResolvedValue(null);
+
+        await service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] });
+
+        expect(prisma.billingProfile.upsert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            create: expect.objectContaining({
+              idType,
+              kind,
+              idNumber: identificationNumber.replace(/-/g, '').toUpperCase(),
+            }),
+          }),
+        );
+        expect(prisma.order.create.mock.calls[0][0].data.billingProfileId).toBe('patient-profile');
+      },
+    );
+
+    it('preserves separately registered fiscal recipient data', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([session()]);
+      prisma.patient.findFirst.mockResolvedValue(
+        patientBillingData({
+          billingName: 'Empresa cliente',
+          billingTaxIdType: 'RUC',
+          billingTaxId: '1790016919001',
+          billingEmail: 'facturas@example.com',
+          billingAddress: 'Cuenca',
+        }),
+      );
+      prisma.billingProfile.findFirst.mockResolvedValue(null);
+
+      await service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] });
+
+      expect(prisma.billingProfile.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({
+            kind: 'COMPANY',
+            idType: '04',
+            idNumber: '1790016919001',
+            legalName: 'Empresa cliente',
+            email: 'facturas@example.com',
+            address: 'Cuenca',
+          }),
+        }),
+      );
+    });
+
+    it('reuses an active profile with the same identification without overwriting its data', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([session()]);
+      prisma.patient.findFirst.mockResolvedValue(patientBillingData());
+      prisma.billingProfile.findFirst.mockResolvedValue({ id: 'existing-profile', isActive: true });
+
+      await service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] });
+
+      expect(prisma.billingProfile.findFirst).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1', idType: '05', idNumber: '1710034065' },
+      });
+      expect(prisma.billingProfile.upsert).not.toHaveBeenCalled();
+      expect(prisma.order.create.mock.calls[0][0].data.billingProfileId).toBe('existing-profile');
+      expect(prisma.patientBillingProfile.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ billingProfileId: 'existing-profile' }),
+        }),
+      );
+    });
+
+    it.each([
+      { email: null },
+      { email: 'invalid' },
+      { identificationNumber: null },
+      { identificationType: 'OTHER' },
+      { identificationNumber: '1710034066' },
+      { firstName: ' ', lastName: ' ' },
+      { billingTaxId: '1790016919001', billingTaxIdType: 'RUC', billingName: null },
+    ])(
+      'keeps manual recipient selection available when registered data is incomplete or invalid: %j',
+      async (extra) => {
+        prisma.treatmentSession.findMany.mockResolvedValue([session()]);
+        prisma.patient.findFirst.mockResolvedValue(patientBillingData(extra));
+        prisma.billingProfile.findFirst.mockResolvedValue(null);
+
+        await service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] });
+
+        expect(prisma.order.create.mock.calls[0][0].data.billingProfileId).toBeNull();
+        expect(prisma.billingProfile.upsert).not.toHaveBeenCalled();
+        expect(prisma.patientBillingProfile.upsert).not.toHaveBeenCalled();
+      },
+    );
+
+    it('does not reactivate an inactive profile automatically', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([session()]);
+      prisma.patient.findFirst.mockResolvedValue(patientBillingData());
+      prisma.billingProfile.findFirst.mockResolvedValue({
+        id: 'inactive-profile',
+        isActive: false,
+      });
+
+      await service.create('tenant-1', actor, { treatmentSessionIds: ['session-1'] });
+
+      expect(prisma.order.create.mock.calls[0][0].data.billingProfileId).toBeNull();
+      expect(prisma.billingProfile.upsert).not.toHaveBeenCalled();
+      expect(prisma.patientBillingProfile.upsert).not.toHaveBeenCalled();
+    });
+
+    it('respects another recipient explicitly chosen for the order', async () => {
+      prisma.treatmentSession.findMany.mockResolvedValue([session()]);
+      prisma.patient.findFirst.mockResolvedValue(patientBillingData());
+      prisma.billingProfile.findFirst.mockResolvedValue({ id: 'chosen-profile', isActive: true });
+
+      await service.create('tenant-1', actor, {
+        treatmentSessionIds: ['session-1'],
+        billingProfileId: 'chosen-profile',
+      });
+
+      expect(prisma.order.create.mock.calls[0][0].data.billingProfileId).toBe('chosen-profile');
+      expect(prisma.patient.findFirst).not.toHaveBeenCalled();
+      expect(prisma.patientBillingProfile.findFirst).not.toHaveBeenCalled();
+      expect(prisma.billingProfile.upsert).not.toHaveBeenCalled();
     });
 
     it('rejects sessions of different branches', async () => {

@@ -21,7 +21,6 @@ import { CashRegistersController } from '../../cash-registers/cash-registers.con
 import { OrdersController } from '../../orders/orders.controller';
 import { InvoicingController } from '../../invoicing/invoicing.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
-import { UserPermissionsService } from '../../users/user-permissions.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { PermissionGuard } from '../guards/permission.guard';
@@ -134,14 +133,14 @@ describe('permission catalog', () => {
     }
   });
 
-  it('removes what was withdrawn, except from the account holder', () => {
+  it('removes what the platform withdrew from a clinic role, including MASTER', () => {
     expect(effectivePermissions('ASISTENTE', ['appointments.cancel', 'billing.view'])).toEqual([
       'patients.create',
       'patients.update',
       'appointments.create',
       'appointments.update',
     ]);
-    expect(effectivePermissions('MASTER', ['billing.create'])).toContain('billing.create');
+    expect(effectivePermissions('MASTER', ['billing.create'])).not.toContain('billing.create');
   });
 
   it('is exercised by at least one route for every permission', () => {
@@ -203,7 +202,7 @@ describe('PermissionGuard', () => {
     restricted() {}
     open() {}
   }
-  const db = { userPermission: { findFirst: jest.fn() } };
+  const db = { tenantRolePermission: { findFirst: jest.fn() } };
   const guard = new PermissionGuard(
     new Reflector(),
     new PermissionChecker(db as unknown as PrismaService),
@@ -222,19 +221,19 @@ describe('PermissionGuard', () => {
   beforeEach(() => jest.resetAllMocks());
 
   it('lets a user through when nothing was withdrawn', async () => {
-    db.userPermission.findFirst.mockResolvedValue(null);
+    db.tenantRolePermission.findFirst.mockResolvedValue(null);
 
     await expect(guard.canActivate(context('guarded', professional))).resolves.toBe(true);
-    expect(db.userPermission.findFirst.mock.calls[0][0].where).toEqual({
-      userId: 'user-1',
+    expect(db.tenantRolePermission.findFirst.mock.calls[0][0].where).toEqual({
       tenantId: 'tenant-1',
+      role: 'PROFESIONAL',
       permission: 'patients.create',
       granted: false,
     });
   });
 
   it('refuses a user whose permission was withdrawn', async () => {
-    db.userPermission.findFirst.mockResolvedValue({ id: 'row' });
+    db.tenantRolePermission.findFirst.mockResolvedValue({ id: 'row' });
 
     await expect(guard.canActivate(context('guarded', professional))).rejects.toMatchObject({
       status: 403,
@@ -244,155 +243,24 @@ describe('PermissionGuard', () => {
 
   it('lets a role outside the route through only with the permission granted', async () => {
     const assistant = { ...professional, role: 'ASISTENTE' };
-    db.userPermission.findFirst.mockResolvedValueOnce(null);
+    db.tenantRolePermission.findFirst.mockResolvedValueOnce(null);
     await expect(guard.canActivate(context('restricted', assistant))).rejects.toMatchObject({
       status: 403,
       response: { code: 'PERMISSION_DENIED', permission: 'billing.create' },
     });
-    expect(db.userPermission.findFirst.mock.calls[0][0].where).toMatchObject({
+    expect(db.tenantRolePermission.findFirst.mock.calls[0][0].where).toMatchObject({
       permission: 'billing.create',
       granted: true,
     });
 
-    db.userPermission.findFirst.mockResolvedValueOnce({ id: 'grant' });
+    db.tenantRolePermission.findFirst.mockResolvedValueOnce({ id: 'grant' });
     await expect(guard.canActivate(context('restricted', assistant))).resolves.toBe(true);
   });
 
-  it('never restricts the account holder and never queries for unguarded or public routes', async () => {
-    await expect(
-      guard.canActivate(context('guarded', { ...professional, role: 'MASTER' })),
-    ).resolves.toBe(true);
+  it('does not query for unguarded or public routes', async () => {
     await expect(guard.canActivate(context('open', professional))).resolves.toBe(true);
     await expect(guard.canActivate(context('guarded', undefined, true))).resolves.toBe(true);
 
-    expect(db.userPermission.findFirst).not.toHaveBeenCalled();
-  });
-});
-
-describe('UserPermissionsService', () => {
-  const db = {
-    user: { findFirst: jest.fn() },
-    userPermission: { findMany: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn() },
-  };
-  const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
-  const service = new UserPermissionsService(prisma as unknown as PrismaService);
-
-  beforeEach(() => {
-    jest.resetAllMocks();
-    prisma.$transaction.mockImplementation((callback: (tx: unknown) => unknown) => callback(db));
-    db.user.findFirst.mockResolvedValue({ id: 'user-1', role: 'ASISTENTE' });
-    db.userPermission.findMany.mockResolvedValue([]);
-  });
-
-  it('describes the permissions of the role and which ones the user still has', async () => {
-    db.userPermission.findMany.mockResolvedValue([
-      { permission: 'appointments.cancel', granted: false },
-      { permission: 'billing.view', granted: true },
-      // A grant the role cannot receive is ignored, whatever the table holds.
-      { permission: 'clinical_records.view', granted: true },
-    ]);
-
-    const described = await service.describe('tenant-1', 'user-1');
-
-    expect(db.user.findFirst.mock.calls[0][0].where).toEqual({
-      id: 'user-1',
-      tenantId: 'tenant-1',
-    });
-    expect(described.restrictable).toBe(true);
-    expect(described.permissions.map(({ key, allowed, source }) => [key, allowed, source])).toEqual(
-      [
-        ['patients.create', true, 'role'],
-        ['patients.update', true, 'role'],
-        ['appointments.create', true, 'role'],
-        ['appointments.update', true, 'role'],
-        ['appointments.cancel', false, 'role'],
-        ['billing.view', true, 'grant'],
-        ['billing.create', false, 'grant'],
-        ['treatments.manage', false, 'grant'],
-        ['billing.adjust', false, 'grant'],
-        ['cash.manage', false, 'grant'],
-      ],
-    );
-    expect(described.effective).not.toContain('appointments.cancel');
-    expect(described.effective).toContain('billing.view');
-    expect(described.effective).not.toContain('clinical_records.view');
-  });
-
-  it('gives a user permissions their role can receive', async () => {
-    await service.replace(
-      'tenant-1',
-      'user-1',
-      'master',
-      ['appointments.cancel'],
-      ['billing.view'],
-    );
-
-    expect(db.userPermission.createMany.mock.calls[0][0].data).toEqual([
-      expect.objectContaining({ permission: 'appointments.cancel', granted: false }),
-      expect.objectContaining({ permission: 'billing.view', granted: true, createdById: 'master' }),
-    ]);
-  });
-
-  it('refuses to grant what the role cannot receive', async () => {
-    await expect(
-      service.replace('tenant-1', 'user-1', 'master', [], ['clinical_records.view']),
-    ).rejects.toMatchObject({ status: 400, response: { code: 'PERMISSION_INVALID' } });
-    // A professional already has patient registration by role: there is nothing to grant.
-    db.user.findFirst.mockResolvedValue({ id: 'user-1', role: 'PROFESIONAL' });
-    await expect(
-      service.replace('tenant-1', 'user-1', 'master', [], ['patients.create']),
-    ).rejects.toMatchObject({ status: 400, response: { code: 'PERMISSION_INVALID' } });
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-  });
-
-  it('replaces the withdrawn permissions of the user', async () => {
-    await service.replace('tenant-1', 'user-1', 'master', [
-      'appointments.cancel',
-      'appointments.cancel',
-    ]);
-
-    expect(db.userPermission.deleteMany).toHaveBeenCalledWith({
-      where: { tenantId: 'tenant-1', userId: 'user-1' },
-    });
-    expect(db.userPermission.createMany).toHaveBeenCalledWith({
-      data: [
-        {
-          tenantId: 'tenant-1',
-          userId: 'user-1',
-          permission: 'appointments.cancel',
-          granted: false,
-          createdById: 'master',
-        },
-      ],
-    });
-  });
-
-  it('restores every permission with an empty list', async () => {
-    await service.replace('tenant-1', 'user-1', 'master', []);
-
-    expect(db.userPermission.deleteMany).toHaveBeenCalled();
-    expect(db.userPermission.createMany).not.toHaveBeenCalled();
-  });
-
-  it('refuses unknown permissions and ones the role does not have', async () => {
-    await expect(
-      service.replace('tenant-1', 'user-1', 'master', ['patients.destroy']),
-    ).rejects.toMatchObject({ status: 400, response: { code: 'PERMISSION_INVALID' } });
-    await expect(
-      service.replace('tenant-1', 'user-1', 'master', ['billing.create']),
-    ).rejects.toMatchObject({ status: 400, response: { code: 'PERMISSION_INVALID' } });
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-  });
-
-  it('never restricts the account holder nor a user of another tenant', async () => {
-    db.user.findFirst.mockResolvedValueOnce({ id: 'master', role: 'MASTER' });
-    await expect(
-      service.replace('tenant-1', 'master', 'master', ['billing.create']),
-    ).rejects.toMatchObject({ status: 409, response: { code: 'PERMISSIONS_NOT_RESTRICTABLE' } });
-
-    db.user.findFirst.mockResolvedValueOnce(null);
-    await expect(service.replace('tenant-1', 'foreign', 'master', [])).rejects.toMatchObject({
-      status: 404,
-    });
+    expect(db.tenantRolePermission.findFirst).not.toHaveBeenCalled();
   });
 });

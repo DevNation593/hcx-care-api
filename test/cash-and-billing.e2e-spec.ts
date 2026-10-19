@@ -12,6 +12,7 @@ process.env.STORAGE_LOCAL_PATH = storageRoot;
 import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { PlatformTenantsService } from './../src/platform/platform-tenants.service';
+import { createPlatformAdmin } from './../prisma/create-platform-admin';
 import { UsersService } from './../src/users/users.service';
 import { createTestTenant, TEST_PASSWORD } from './helpers/create-test-tenant';
 
@@ -54,7 +55,6 @@ describe('Cash register, orders, payments and billing eligibility (E2E)', () => 
   let otherTenantId: string;
   let specialtyId: string;
   let professionalId: string;
-  let assistantId: string;
   let branchId: string;
   let formId: string;
   let simpleTreatmentId: string;
@@ -259,6 +259,12 @@ describe('Cash register, orders, payments and billing eligibility (E2E)', () => 
     users = app.get<UsersService>(UsersService);
 
     await prisma.cleanDatabase();
+    await createPlatformAdmin(prisma, {
+      email: 'platform-cash-e2e@example.test',
+      password: TEST_PASSWORD,
+      firstName: 'Platform',
+      lastName: 'Admin',
+    });
     const deps = { tenants: app.get(PlatformTenantsService), prisma };
     tenantId = (await createTestTenant(deps, 1)).id;
     otherTenantId = (await createTestTenant(deps, 2)).id;
@@ -301,18 +307,22 @@ describe('Cash register, orders, payments and billing eligibility (E2E)', () => 
     });
 
     professionalId = (await member(tenantId, 'pro@tenant.test', 'PROFESIONAL')).id;
-    assistantId = (await member(tenantId, 'assistant@tenant.test', 'ASISTENTE')).id;
+    await member(tenantId, 'assistant@tenant.test', 'ASISTENTE');
 
     tokens.master = await login('admin+1@tenant.test');
+    tokens.platform = await login('platform-cash-e2e@example.test');
     tokens.otherMaster = await login('admin+2@tenant.test');
     tokens.pro = await login('pro@tenant.test');
     tokens.assistant = await login('assistant@tenant.test');
 
     // The assistant runs the cash desk but may not adjust: no billing.adjust.
+    const assistantRoleUrl = `/api/v1/platform/tenants/${tenantId}/roles/ASISTENTE/permissions`;
+    const allowed = (await request(server()).get(assistantRoleUrl).set(as('platform')).expect(200))
+      .body.effective as string[];
     await request(server())
-      .put(`${base()}/users/${assistantId}/permissions`)
-      .set(as('master'))
-      .send({ revoked: [], granted: ['billing.view', 'billing.create', 'cash.manage'] })
+      .put(assistantRoleUrl)
+      .set(as('platform'))
+      .send({ allowed: [...allowed, 'billing.view', 'billing.create', 'cash.manage'] })
       .expect(200);
 
     const form = await request(server())

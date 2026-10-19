@@ -13,6 +13,7 @@ process.env.STORAGE_LOCAL_PATH = storageRoot;
 import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { PlatformTenantsService } from './../src/platform/platform-tenants.service';
+import { createPlatformAdmin } from './../prisma/create-platform-admin';
 import { UsersService } from './../src/users/users.service';
 import { createTestTenant, TEST_PASSWORD } from './helpers/create-test-tenant';
 
@@ -118,7 +119,6 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
   let otherTenantId: string;
   let specialtyId: string;
   let professionalId: string;
-  let assistantId: string;
   let formId: string;
   let counter = 0;
   const tokens: Record<string, string> = {};
@@ -352,6 +352,12 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     users = app.get<UsersService>(UsersService);
 
     await prisma.cleanDatabase();
+    await createPlatformAdmin(prisma, {
+      email: 'platform-sessions-e2e@example.test',
+      password: TEST_PASSWORD,
+      firstName: 'Platform',
+      lastName: 'Admin',
+    });
     const deps = { tenants: app.get(PlatformTenantsService), prisma };
     tenantId = (await createTestTenant(deps, 1)).id;
     otherTenantId = (await createTestTenant(deps, 2)).id;
@@ -370,10 +376,11 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     specialtyId = (await prisma.specialty.findUniqueOrThrow({ where: { code: 'PSYCHOLOGY' } })).id;
 
     professionalId = (await member(tenantId, 'pro@tenant.test', 'PROFESIONAL')).id;
-    assistantId = (await member(tenantId, 'assistant@tenant.test', 'ASISTENTE')).id;
+    await member(tenantId, 'assistant@tenant.test', 'ASISTENTE');
     await member(otherTenantId, 'outsider@tenant.test', 'PROFESIONAL');
 
     tokens.master = await login('admin+1@tenant.test');
+    tokens.platform = await login('platform-sessions-e2e@example.test');
     tokens.pro = await login('pro@tenant.test');
     tokens.assistant = await login('assistant@tenant.test');
     tokens.outsider = await login('outsider@tenant.test');
@@ -851,14 +858,17 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
   it('compliance: only status and missing, for an assistant once billing.view is granted', async () => {
     const { session } = await presentedSession();
     const url = sessionUrl(session.id, '/compliance');
+    const roleUrl = (role: string) =>
+      `/api/v1/platform/tenants/${tenantId}/roles/${role}/permissions`;
+    const allowedFor = async (role: string): Promise<string[]> =>
+      (await request(server()).get(roleUrl(role)).set(as('platform')).expect(200)).body.effective;
+    const setAllowed = (role: string, allowed: string[]) =>
+      request(server()).put(roleUrl(role)).set(as('platform')).send({ allowed }).expect(200);
 
     await request(server()).get(url).set(as('assistant')).expect(403);
 
-    await request(server())
-      .put(`${base()}/users/${assistantId}/permissions`)
-      .set(as('master'))
-      .send({ revoked: [], granted: ['billing.view'] })
-      .expect(200);
+    const assistantAllowed = await allowedFor('ASISTENTE');
+    await setAllowed('ASISTENTE', [...assistantAllowed, 'billing.view']);
 
     const response = await request(server()).get(url).set(as('assistant')).expect(200);
     expect(Object.keys(response.body).sort()).toEqual(['missing', 'status']);
@@ -870,20 +880,14 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     expect(bodyText).not.toContain(CONSENT_TITLE);
     expect(bodyText).not.toContain('pregnant');
 
-    // A professional has no billing permission by default: the account holder grants it.
+    // A professional has no billing permission by default: the platform owner grants it.
     await request(server()).get(url).set(as('pro')).expect(403);
-    await request(server())
-      .put(`${base()}/users/${professionalId}/permissions`)
-      .set(as('master'))
-      .send({ revoked: [], granted: ['billing.view'] })
-      .expect(200);
+    const professionalAllowed = await allowedFor('PROFESIONAL');
+    await setAllowed('PROFESIONAL', [...professionalAllowed, 'billing.view']);
     await request(server()).get(url).set(as('pro')).expect(200);
 
-    await request(server())
-      .put(`${base()}/users/${assistantId}/permissions`)
-      .set(as('master'))
-      .send({ revoked: [] })
-      .expect(200);
+    await setAllowed('ASISTENTE', assistantAllowed);
+    await setAllowed('PROFESIONAL', professionalAllowed);
     await request(server()).get(url).set(as('assistant')).expect(403);
   });
 });
