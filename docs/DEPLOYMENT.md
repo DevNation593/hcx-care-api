@@ -164,7 +164,8 @@ CLINICAL_ENCRYPTION_KEYS=<key-id>:<base64 of 32 random bytes>
 
 # Required: where the clinical files are kept (already encrypted by the API).
 # Create one private bucket in Supabase Storage, without policies. The secret key is in
-# Project Settings > API Keys; it skips every policy, so it never leaves the server.
+# Project Settings > API Keys: use an sb_secret_ key or legacy service_role JWT, not an S3
+# access secret or JWT signing secret. It skips every policy, so it never leaves the server.
 # The API does not start when a value is missing. Without STORAGE_DRIVER the files go to
 # the disk of the server (STORAGE_LOCAL_PATH), which then needs a persistent, backed-up volume.
 STORAGE_DRIVER=supabase
@@ -180,6 +181,43 @@ Generate strong secrets:
 ```bash
 openssl rand -base64 32
 ```
+
+### Moving existing clinical files to Supabase Storage
+
+Keep `STORAGE_DRIVER=local` (or unset) until the copy has finished. The bucket must already
+exist in the **same Supabase project as `DATABASE_URL`** and be private. `SUPABASE_URL` can use
+the project's usual `https://<ref>.supabase.co` host or its direct
+`https://<ref>.storage.supabase.co` host. Configure
+`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_STORAGE_BUCKET`, and the same
+`CLINICAL_ENCRYPTION_KEYS` used by the production API in the migration environment.
+Keep the secret key and clinical key outside version control.
+Check `storage.objects` policies before copying: any `SELECT` or `ALL` policy that includes
+the clinical bucket can allow reads despite `public=false`. A dedicated clinical bucket
+should have no such policies.
+
+```sql
+SELECT policyname, roles, cmd, qual
+FROM pg_policies
+WHERE schemaname = 'storage' AND tablename = 'objects';
+```
+
+From the API directory, point the script at the existing, backed-up local storage directory:
+
+```bash
+STORAGE_MIGRATION_SOURCE_DIR=/absolute/path/to/storage npm run prisma:migrate-local-storage
+STORAGE_MIGRATION_SOURCE_DIR=/absolute/path/to/storage npm run prisma:migrate-local-storage -- --execute
+```
+
+The first command is a dry run. It checks every database-referenced object, including
+soft-deleted clinical files, and reports missing files and how many sources still contain
+plaintext. The second command encrypts legacy plaintext files with the active clinical key,
+uploads encrypted bytes, downloads each object to verify it, and can be rerun if interrupted.
+It never deletes local files. Deploy the Storage API key fix while the API still uses local
+storage. For the final copy, stop every API and worker process that can write local files;
+keep writes paused until the new driver starts. Run `--execute` again during that pause and
+require `verified` to equal `planned`. Then set `STORAGE_DRIVER=supabase` in the API's private
+environment and restart the API and workers. Check a download through the API before resuming
+writes. Keep the local volume until the new storage path is included in your backups.
 
 ## Deployment Options
 
