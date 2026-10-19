@@ -12,6 +12,8 @@ import { PatientFilesService } from './patient-files.service';
 import { SupabaseFileStorage } from './supabase-file-storage';
 
 const SECRET_KEY = 'sb_secret_test-key';
+const LEGACY_SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.signature';
+const LEGACY_ANON_KEY = 'eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.signature';
 const BUCKET = 'clinical-files';
 // Not valid UTF-8: the bytes must arrive as they were sent.
 const ENCRYPTED = Buffer.from([0x00, 0xff, 0x10, 0x80, 0x0a, 0x0d, 0xfe, 0x00]);
@@ -43,10 +45,15 @@ function fakeSupabaseStorage() {
     const failure = (status: number, statusCode: string, error: string, message: string) =>
       answer(status, { statusCode, error, message });
 
-    if (
-      request.headers.apikey !== SECRET_KEY ||
-      request.headers.authorization !== `Bearer ${SECRET_KEY}`
-    ) {
+    // New opaque keys belong only in apikey. A Bearer opaque key is not a JWT.
+    if (request.headers.apikey === SECRET_KEY && request.headers.authorization) {
+      return failure(401, '401', 'Unauthorized', 'Invalid JWT');
+    }
+    const authenticated =
+      (request.headers.apikey === SECRET_KEY && !request.headers.authorization) ||
+      (request.headers.apikey === LEGACY_SERVICE_ROLE_KEY &&
+        request.headers.authorization === `Bearer ${LEGACY_SERVICE_ROLE_KEY}`);
+    if (!authenticated) {
       return failure(403, '403', 'Unauthorized', 'Invalid API key');
     }
 
@@ -111,6 +118,18 @@ describe('SupabaseFileStorage', () => {
   beforeEach(() => {
     supabase.objects.clear();
     supabase.requests.length = 0;
+  });
+
+  it('uses an opaque secret key without sending it as a Bearer JWT', async () => {
+    const storage = storageWith();
+    await storage.put('tenant-1/patient-1/secret-key-file', ENCRYPTED);
+    expect(await storage.get('tenant-1/patient-1/secret-key-file')).toEqual(ENCRYPTED);
+  });
+
+  it('keeps the Authorization Bearer header for a legacy service_role JWT', async () => {
+    const storage = storageWith({ SUPABASE_SECRET_KEY: LEGACY_SERVICE_ROLE_KEY });
+    await storage.put('tenant-1/patient-1/legacy-key-file', ENCRYPTED);
+    expect(await storage.get('tenant-1/patient-1/legacy-key-file')).toEqual(ENCRYPTED);
   });
 
   it('writes, reads and removes a file under its key in the bucket', async () => {
@@ -274,6 +293,42 @@ describe('createFileStorage', () => {
     expect(() =>
       createFileStorage(configOf({ ...supabaseSettings, SUPABASE_STORAGE_BUCKET: undefined })),
     ).toThrow('SUPABASE_STORAGE_BUCKET');
+  });
+
+  it('rejects a key that cannot authenticate to the Storage REST API', () => {
+    expect(() =>
+      createFileStorage(configOf({ ...supabaseSettings, SUPABASE_SECRET_KEY: 'a'.repeat(64) })),
+    ).toThrow('SUPABASE_SECRET_KEY');
+    expect(() =>
+      createFileStorage(
+        configOf({ ...supabaseSettings, SUPABASE_SECRET_KEY: 'sb_publishable_test' }),
+      ),
+    ).toThrow('SUPABASE_SECRET_KEY');
+    expect(() =>
+      createFileStorage(configOf({ ...supabaseSettings, SUPABASE_SECRET_KEY: LEGACY_ANON_KEY })),
+    ).toThrow('SUPABASE_SECRET_KEY');
+  });
+
+  it('rejects a non-HTTPS hosted Supabase URL', () => {
+    expect(() =>
+      createFileStorage(
+        configOf({ ...supabaseSettings, SUPABASE_URL: 'http://project.supabase.co' }),
+      ),
+    ).toThrow('SUPABASE_URL');
+    expect(() =>
+      createFileStorage(
+        configOf({ ...supabaseSettings, SUPABASE_URL: 'https://other.example.com' }),
+      ),
+    ).toThrow('SUPABASE_URL');
+    expect(() =>
+      createFileStorage(
+        configOf({
+          ...supabaseSettings,
+          NODE_ENV: 'production',
+          SUPABASE_URL: 'http://127.0.0.1:54321',
+        }),
+      ),
+    ).toThrow('SUPABASE_URL');
   });
 
   it('refuses a driver it does not know', () => {
