@@ -11,7 +11,6 @@ export interface BillingProfilesMigrationSummary {
   profilesReused: number;
   linksCreated: number;
   skippedInvalid: { patientId: string; reason: string }[];
-  permissionsGranted: number;
 }
 
 // Legacy Patient.billingTaxIdType value -> SRI identification type code.
@@ -21,12 +20,9 @@ const LEGACY_ID_TYPES: Record<string, SriIdType> = {
   PASSPORT: '06',
 };
 
-const PROFESSIONAL_BILLING_PERMISSIONS = ['billing.view', 'billing.create'];
-
 /**
- * Turns the legacy billing fields of live patients into billing profiles linked to them, and
- * grants PROFESIONAL users the billing permissions that stopped being role defaults. Safe to run
- * repeatedly: whatever already exists is left as it is.
+ * Turns the legacy billing fields of live patients into billing profiles linked to them.
+ * Clinic role permissions are assigned separately by the platform administrator.
  */
 export async function migrateBillingProfiles(
   prisma: PrismaClient | PrismaService,
@@ -36,7 +32,6 @@ export async function migrateBillingProfiles(
     profilesReused: 0,
     linksCreated: 0,
     skippedInvalid: [],
-    permissionsGranted: 0,
   };
 
   const tenantIds = new Set<string>();
@@ -46,20 +41,12 @@ export async function migrateBillingProfiles(
     distinct: ['tenantId'],
   });
   patientTenants.forEach((row) => tenantIds.add(row.tenantId));
-  const professionalTenants = await prisma.user.findMany({
-    where: { role: 'PROFESIONAL', isActive: true },
-    select: { tenantId: true },
-    distinct: ['tenantId'],
-  });
-  professionalTenants.forEach((row) => tenantIds.add(row.tenantId));
-
   for (const tenantId of tenantIds) {
     const tenantSummary = await runTenant(prisma, tenantId);
     summary.profilesCreated += tenantSummary.profilesCreated;
     summary.profilesReused += tenantSummary.profilesReused;
     summary.linksCreated += tenantSummary.linksCreated;
     summary.skippedInvalid.push(...tenantSummary.skippedInvalid);
-    summary.permissionsGranted += tenantSummary.permissionsGranted;
   }
   return summary;
 }
@@ -96,7 +83,6 @@ async function migrateTenant(
     profilesReused: 0,
     linksCreated: 0,
     skippedInvalid: [],
-    permissionsGranted: 0,
   };
 
   // BillingProfile.createdById is required: the tenant's MASTER user (one per tenant) owns them.
@@ -183,23 +169,6 @@ async function migrateTenant(
       },
     });
     summary.linksCreated++;
-  }
-
-  const professionals = await tx.user.findMany({
-    where: { tenantId, role: 'PROFESIONAL', isActive: true },
-    select: { id: true },
-  });
-  for (const professional of professionals) {
-    for (const permission of PROFESSIONAL_BILLING_PERMISSIONS) {
-      const existing = await tx.userPermission.findUnique({
-        where: { userId_permission: { userId: professional.id, permission } },
-      });
-      if (existing) continue;
-      await tx.userPermission.create({
-        data: { tenantId, userId: professional.id, permission, granted: true },
-      });
-      summary.permissionsGranted++;
-    }
   }
 
   return summary;

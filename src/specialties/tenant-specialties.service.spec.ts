@@ -108,6 +108,7 @@ describe('TenantSpecialtiesService', () => {
         findUnique: jest.fn(async () => subscription),
         update: jest.fn(async ({ data }) => Object.assign(subscription, data)),
       },
+      auditLog: { create: jest.fn() },
       professionalProfile: { findFirst: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
       appointment: { findFirst: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
       clinicalNote: { deleteMany: jest.fn() },
@@ -175,6 +176,38 @@ describe('TenantSpecialtiesService', () => {
       expect(delegate.createMany).not.toHaveBeenCalled();
       expect(delegate.deleteMany).not.toHaveBeenCalled();
     }
+  });
+
+  it('audits specialty, module and price changes with the platform actor in the same transaction', async () => {
+    await service.replace('tenant-1', ['NUTRITION'], 'admin-1');
+
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        tenantId: 'tenant-1',
+        userId: 'admin-1',
+        action: 'UPDATE',
+        entity: 'TENANT',
+        entityId: 'tenant-1',
+        changes: {
+          before: {
+            specialtyIds: ['psy'],
+            modules: [
+              { moduleKey: 'obsolete', enabled: true },
+              { moduleKey: 'psychology.notes', enabled: false },
+            ],
+            monthlyPrice: 999,
+          },
+          after: {
+            specialtyIds: ['nut'],
+            modules: [
+              { moduleKey: 'nutrition.assessment', enabled: true },
+              { moduleKey: 'shared', enabled: true },
+            ],
+            monthlyPrice: 25,
+          },
+        },
+      },
+    });
   });
 
   it('blocks removal used by an effective active professional before any mutation', async () => {
@@ -404,6 +437,19 @@ describe('TenantSpecialtiesService', () => {
       moduleKey: 'nutrition.assessment',
       enabled: true,
     });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        tenantId: 'tenant-1',
+        userId: 'admin-1',
+        action: 'UPDATE',
+        entity: 'TENANT',
+        entityId: 'tenant-1',
+        changes: {
+          before: { module: { key: 'nutrition.assessment', enabled: null } },
+          after: { module: { key: 'nutrition.assessment', enabled: true } },
+        },
+      },
+    });
   });
 
   it('disables an existing owned module without changing price or clinical records', async () => {
@@ -413,6 +459,19 @@ describe('TenantSpecialtiesService', () => {
     expect(tx.tenantModule.update).toHaveBeenCalledWith({
       where: { id: 'module-1' },
       data: { enabled: false },
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        tenantId: 'tenant-1',
+        userId: 'admin-1',
+        action: 'UPDATE',
+        entity: 'TENANT',
+        entityId: 'tenant-1',
+        changes: {
+          before: { module: { key: 'nutrition.assessment', enabled: true } },
+          after: { module: { key: 'nutrition.assessment', enabled: false } },
+        },
+      },
     });
     expect(tx.tenantSubscription.update).not.toHaveBeenCalled();
   });

@@ -71,6 +71,7 @@ describe('PlatformTenantsService', () => {
       isActive: tenant.isActive ?? true,
       createdAt: new Date('2026-10-01T00:00:00Z'),
       subscription: subscription && {
+        ...subscription,
         planType: subscription.planType,
         status: subscription.status,
         trialEndsAt: subscription.trialEndsAt ?? null,
@@ -337,6 +338,21 @@ describe('PlatformTenantsService', () => {
     expect(enabled['core.team']).toBe(true);
     expect(enabled['core.patients']).toBe(true);
     expect(result.sections.find((s) => s.key === 'core.tasks')?.enabled).toBe(false);
+  });
+
+  it('shows clinical modules separately from core sections', async () => {
+    await service.create(input(), 'admin-1');
+    state.modules.push({
+      tenantId: 'tenant-1',
+      moduleKey: 'psychology.assessments',
+      enabled: false,
+    });
+
+    const detail = await service.findOne('tenant-1');
+
+    expect(detail.sections).toHaveLength(8);
+    expect(detail.modules).toEqual([{ key: 'psychology.assessments', enabled: false }]);
+    expect(detail.subscription).toMatchObject({ includedSpecialties: 1, specialtyPrice: 15 });
   });
 
   it('stores the explicit section list and disables the rest', async () => {

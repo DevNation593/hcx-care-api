@@ -118,7 +118,7 @@ describe('Billing profiles deployment script (E2E)', () => {
     await app.close();
   });
 
-  it('creates and reuses profiles, skips invalid data and keeps explicit permissions', async () => {
+  it('creates and reuses profiles without assigning personal or role permissions', async () => {
     const first = await migrateBillingProfiles(prisma);
 
     expect(first.profilesCreated).toBe(1);
@@ -133,7 +133,6 @@ describe('Billing profiles deployment script (E2E)', () => {
       ]),
     );
     expect(first.skippedInvalid).toHaveLength(4);
-    expect(first.permissionsGranted).toBe(3);
 
     const profiles = await prisma.billingProfile.findMany({ where: { tenantId } });
     expect(profiles).toHaveLength(1);
@@ -154,25 +153,17 @@ describe('Billing profiles deployment script (E2E)', () => {
       where: { tenantId },
       orderBy: [{ userId: 'asc' }, { permission: 'asc' }],
     });
-    const byUser = (userId: string) =>
-      permissions
-        .filter((row) => row.userId === userId)
-        .map((row) => [row.permission, row.granted]);
-    expect(byUser(freshProfessional)).toEqual([
-      ['billing.create', true],
-      ['billing.view', true],
+    expect(permissions).toMatchObject([
+      { userId: revokedProfessional, permission: 'billing.create', granted: false },
     ]);
-    expect(byUser(revokedProfessional)).toEqual([
-      ['billing.create', false],
-      ['billing.view', true],
-    ]);
+    expect(permissions.some((row) => row.userId === freshProfessional)).toBe(false);
+    expect(await prisma.tenantRolePermission.count({ where: { tenantId } })).toBe(0);
 
     const second = await migrateBillingProfiles(prisma);
     expect(second).toMatchObject({
       profilesCreated: 0,
       profilesReused: 0,
       linksCreated: 0,
-      permissionsGranted: 0,
     });
     expect(second.skippedInvalid).toHaveLength(4);
   });

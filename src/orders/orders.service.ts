@@ -5,6 +5,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { OrderItem, Prisma } from '@prisma/client';
+import { patientBillingProfileId } from '../billing-profiles/patient-billing-profile';
 import { BillingEligibility, evaluateBillingEligibility } from './billing-eligibility';
 import {
   BillableSession,
@@ -452,7 +453,9 @@ export class OrdersService {
             },
             select: { billingProfileId: true },
           });
-          billingProfileId = link?.billingProfileId ?? null;
+          billingProfileId =
+            link?.billingProfileId ??
+            (await patientBillingProfileId(tx, tenantId, actor.userId, [...patientIds][0]));
         }
       }
 

@@ -28,6 +28,7 @@
     "prisma:verify-patient-team-migration": "ts-node prisma/verify-patient-team-migration.ts",
     "prisma:audit-master-roles": "ts-node prisma/audit-master-roles.ts",
     "prisma:verify-master-role-migration": "ts-node prisma/verify-master-role-migration.ts",
+    "prisma:verify-platform-role-permissions": "ts-node prisma/verify-platform-role-permissions.ts",
     "platform:create-admin": "ts-node prisma/create-platform-admin.ts",
     "prisma:verify-platform-sections": "ts-node prisma/verify-platform-sections.ts",
     "prisma:encrypt-clinical-data": "ts-node prisma/encrypt-clinical-data.ts",

@@ -42,7 +42,7 @@ export class RolesGuard implements CanActivate {
     const hasRole = requiredRoles.some((role) => areRolesEquivalent(user.role, role));
 
     if (!hasRole) {
-      // A role outside the list may still hold the route's permission as a personal grant;
+      // A role outside the list may still hold the route's permission through a platform grant;
       // the permission guard, which reads the grants, has the last word.
       const permission = this.reflector.getAllAndOverride<Permission | undefined>(
         REQUIRE_PERMISSION_KEY,

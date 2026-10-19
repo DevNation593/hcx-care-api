@@ -59,9 +59,6 @@ describe('section matrix', () => {
   });
 
   it.each([
-    [SpecialtiesController, 'setSpecialties', 'core.specialties'],
-    [SpecialtiesController, 'setSpecialtiesLegacy', 'core.specialties'],
-    [SpecialtiesController, 'updateModule', 'core.specialties'],
     [UsersController, 'create', 'core.team'],
     [UsersController, 'update', 'core.team'],
     [UsersController, 'deactivate', 'core.team'],

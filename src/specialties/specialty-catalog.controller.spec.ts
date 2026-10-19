@@ -57,11 +57,5 @@ describe('SpecialtyCatalogController', () => {
     expect(
       reflector.get(IS_PUBLIC_KEY, SpecialtiesController.prototype.listSpecialties),
     ).toBeUndefined();
-    expect(
-      reflector.get(IS_PUBLIC_KEY, SpecialtiesController.prototype.setSpecialties),
-    ).toBeUndefined();
-    expect(
-      reflector.get(IS_PUBLIC_KEY, SpecialtiesController.prototype.updateModule),
-    ).toBeUndefined();
   });
 });

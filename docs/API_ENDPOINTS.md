@@ -16,8 +16,8 @@ routes require a JWT, the `MASTER` role and the `billing.view` permission.
 
 All tenant routes require JWT and the `core.billing` section. Configuration is
 restricted to MASTER. Request creation requires `billing.create`; list, detail and
-downloads require `billing.view`. MASTER has these permissions; PROFESIONAL and
-ASISTENTE can use invoice workflows when given the corresponding personal grants
+downloads require `billing.view`. MASTER has these permissions by default; PROFESIONAL and
+ASISTENTE can use invoice workflows when the platform grants them to their clinic role
 through the existing RolesGuard/PermissionGuard. Configuration remains MASTER-only.
 
 | Method | Path after `/api/v1/tenants/:tenantId` | Body / response |
@@ -351,9 +351,8 @@ PATCH /tenants/{tenantId}/medications/{medicationId}
 # One record, to print it as a document.
 GET /tenants/{tenantId}/patients/{patientId}/specialty-records/{recordId}
 
-# Permissions: what the role allows and what was withdrawn from the user. `me` reads the caller.
-GET /tenants/{tenantId}/users/{userId|me}/permissions
-PUT /tenants/{tenantId}/users/{userId}/permissions    { "revoked": ["appointments.cancel"] }   # MASTER
+# Effective permissions of the caller's clinic role. Other users cannot be inspected here.
+GET /tenants/{tenantId}/users/me/permissions
 ```
 
 ```bash
@@ -376,9 +375,7 @@ PUT /tenants/{tenantId}/branches/{branchId}/professionals   { "userIds": ["..."]
 
 Files live where `STORAGE_DRIVER` says: a private bucket of Supabase Storage (`supabase`: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_STORAGE_BUCKET`), or the disk of the API server under `STORAGE_LOCAL_PATH` (`local`, the default), which must be a persistent volume included in the backups. Downloads always go through the API, because the stored bytes are encrypted. Their bytes keep the encryption key they were written with, so a retired key stays in `CLINICAL_ENCRYPTION_KEYS` while files use it. Clinical notes also accept `encounterId`, and the clinical timeline returns `ENCOUNTER` entries.
 
-The role still decides who may call a route. A permission can only be **withdrawn** from one user (`403 PERMISSION_DENIED` afterwards), never granted beyond the role, and the account holder cannot be restricted. The catalog is in `src/common/permissions/permission-catalog.ts`.
-
-A permission can also be **granted** to one user when the catalog lists their role in `grantable` (today `billing.view`, `billing.create`, `billing.adjust`, `cash.manage` and `treatments.manage`, all held by MASTER by default and grantable to `PROFESIONAL` and `ASISTENTE`): `PUT …/permissions { "revoked": [], "granted": ["billing.view"] }`. No clinical permission is grantable. Each entry of `GET …/permissions` carries `source`: `role` (can be withdrawn) or `grant` (can be given).
+The platform `ADMIN` sets permissions for each clinic role (`MASTER`, `PROFESIONAL`, `ASISTENTE`) through `PUT /platform/tenants/:tenantId/roles/:role/permissions`. Every user with that role in the clinic receives the same effective permissions. The `MASTER` cannot assign them, and its default permissions can be withdrawn. The catalog is in `src/common/permissions/permission-catalog.ts`; only the actions listed in `grantable` can be added to a role that lacks them by default. Clinical permissions cannot be granted to `ASISTENTE`. A denied action returns `403 PERMISSION_DENIED`.
 
 ```bash
 # Activity of the clinic: appointments by status and encounters by type, by branch and by
@@ -414,7 +411,7 @@ The diagnosis catalog is loaded with `npm run catalog:import-diagnosis-codes -- 
 
 #### Treatments, consents and treatment sessions
 
-All of these routes need the section `core.specialties`. Under `/tenants/{tenantId}`. Errors keep the format `{ statusCode, code, message }`; the 422 that blocks a start or a completion adds `missing`, a list of `FINALIZED_MEDICAL_FORM`, `SIGNED_APPLICABLE_CONSENT`, `BEFORE_PHOTOS`, `CLINICAL_NOTES` and `AFTER_PHOTOS`. Writing the catalog takes the permission `treatments.manage`, which the account holder has and can grant to a professional or an assistant. The routes of a session need a professional profile (`403 PROFESSIONAL_NOT_AUTHORIZED` without it) and `clinical_records.*`; the signature, the form, the photos and the transitions are the professional of the session only (`403 CLINICAL_RECORD_FORBIDDEN`).
+All of these routes need the section `core.specialties`. Under `/tenants/{tenantId}`. Errors keep the format `{ statusCode, code, message }`; the 422 that blocks a start or a completion adds `missing`, a list of `FINALIZED_MEDICAL_FORM`, `SIGNED_APPLICABLE_CONSENT`, `BEFORE_PHOTOS`, `CLINICAL_NOTES` and `AFTER_PHOTOS`. Writing the catalog takes the permission `treatments.manage`, which the MASTER has by default and the platform owner can assign to the PROFESIONAL or ASISTENTE role in this clinic. The routes of a session need a professional profile (`403 PROFESSIONAL_NOT_AUTHORIZED` without it) and `clinical_records.*`; the signature, the form, the photos and the transitions are the professional of the session only (`403 CLINICAL_RECORD_FORBIDDEN`).
 
 **Consent templates.** A version is edited only while it is a draft; published, its text and fingerprint are fixed, and a change is a new version. Variables: `{{paciente}}`, `{{identificacion}}`, `{{tratamiento}}`, `{{profesional}}`, `{{fecha}}`.
 
@@ -472,7 +469,7 @@ Documents and sessions of another clinic answer `404 TREATMENT_SESSION_NOT_FOUND
 
 #### Cash desk, orders and payments
 
-All of these routes need the section `core.billing`. Under `/tenants/{tenantId}`. Errors keep the format `{ statusCode, code, message }`. "Who" lists the permission: the account holder (MASTER) has all of them, and can grant `billing.view`, `billing.create`, `billing.adjust` and `cash.manage` to a PROFESIONAL or an ASISTENTE. Lists take `page` and `pageSize`. Money travels as strings with 2 decimals; commands are audited, reads are not. An order is edited with its `version`: a stale one answers `409 ORDER_VERSION_CONFLICT`.
+All of these routes need the section `core.billing`. Under `/tenants/{tenantId}`. Errors keep the format `{ statusCode, code, message }`. "Who" lists the permission: `MASTER` has these permissions by default; only the platform `ADMIN` can change them for a clinic role or grant `billing.view`, `billing.create`, `billing.adjust` and `cash.manage` to `PROFESIONAL` or `ASISTENTE`. Lists take `page` and `pageSize`. Money travels as strings with 2 decimals; commands are audited, reads are not. An order is edited with its `version`: a stale one answers `409 ORDER_VERSION_CONFLICT`.
 
 **Billing profiles.** Who receives the invoice, apart from the patient (a company is never a patient). `idType` is the SRI code: `04` RUC, `05` cédula, `06` passport, `07` final consumer. `idType` and `idNumber` never change.
 
@@ -497,11 +494,13 @@ All of these routes need the section `core.billing`. Under `/tenants/{tenantId}`
 
 **Orders.** An order (`OPEN`, `PAID`, `CANCELLED`) groups treatment sessions and free items for one billing profile. The server computes the lines, the tax and the totals; prices of sessions come from the pinned treatment version.
 
+When creating an order for a single patient without an explicit recipient, the patient's active default billing profile takes precedence. If there is no active default, the server reuses or creates a profile from the patient's registered identification, name, email, address and phone. Separately registered fiscal identity fields take precedence over personal identity fields. Creation uses the same validation as manual billing profiles; incomplete or invalid data leaves the order without a recipient so another person or company can still be selected. Existing profiles are not overwritten or reactivated. Orders for multiple patients require a recipient to be selected explicitly.
+
 | Method | Path | Who | Result | Errors |
 |---|---|---|---|---|
 | GET | `/treatment-sessions/billable?branchId=&patientId=` | `billing.view` | Sessions in a billable state with no live order: `{ id, status, createdAt, completedAt, branchId, patient: { id, firstName, lastName, identificationNumber }, treatment: { id, name, version }, price, taxRatePercent, compliant }`. `compliant` says whether the clinical documentation is complete, without detail | |
 | GET | `/orders?status=&branchId=&q=` | `billing.view` | Orders; `q` searches the number, the billing profile or the patient | |
-| POST | `/orders` | `billing.create` | 201, `{ branchId?, treatmentSessionIds?, billingProfileId? }`. Without `branchId` the branch of the sessions is used. Without a profile, the default profile of the patient when all the sessions are of one patient | 404 `TREATMENT_SESSION_NOT_FOUND`, 404 `BILLING_PROFILE_NOT_FOUND`, 409 `TREATMENT_SESSION_NOT_BILLABLE`, 409 `SESSION_ALREADY_IN_ORDER`, 409 `BILLING_PROFILE_INACTIVE`, 422 `ORDER_BRANCH_MISMATCH` |
+| POST | `/orders` | `billing.create` | 201, `{ branchId?, treatmentSessionIds?, billingProfileId? }`. Without `branchId` the branch of the sessions is used. Without a profile, uses the single patient's active default profile or registered fiscal data as described above | 404 `TREATMENT_SESSION_NOT_FOUND`, 404 `BILLING_PROFILE_NOT_FOUND`, 409 `TREATMENT_SESSION_NOT_BILLABLE`, 409 `SESSION_ALREADY_IN_ORDER`, 409 `BILLING_PROFILE_INACTIVE`, 422 `ORDER_BRANCH_MISMATCH` |
 | GET | `/orders/{id}` | `billing.view` | Items, payments, totals (`subtotal`, `discountTotal`, `taxTotal`, `total`, `paidTotal`, `balance`) and `version` | 404 `ORDER_NOT_FOUND` |
 | POST | `/orders/{id}/items` | `billing.create` (a `FREE` item and a discount also need `billing.adjust`) | `{ version, kind: TREATMENT_SESSION \| FREE, treatmentSessionId? \| description, quantity?, unitPrice, taxRatePercent (0, 5 or 15), patientId?, discount? }` | 404 `ORDER_NOT_FOUND`, 409 `ORDER_NOT_EDITABLE`, 409 `ORDER_VERSION_CONFLICT`, 409 `SESSION_ALREADY_IN_ORDER`, 422 `TAX_RATE_UNSUPPORTED`, 422 `ORDER_LINE_INVALID` |
 | DELETE | `/orders/{id}/items/{itemId}?version=` | `billing.create` | The order without the item | 409 `ORDER_NOT_EDITABLE`, 409 `ORDER_VERSION_CONFLICT` |
@@ -608,13 +607,18 @@ Routes under `/platform/*` belong to the platform administration panel. They req
 | Route | Description |
 |---|---|
 | `GET /platform/tenants` | Paginated list. Query: `page`, `pageSize` (max 100, default 20), `search` (clinic name or email, owner name or email), `planType`, `status`, `isActive`. Returns `{ items, total, page, pageSize }`; each item has `id`, `name`, `tenantType`, `isActive`, `createdAt`, `master`, `planType`, `status`, `seatsPsychologistsUsed`/`seatsPsychologistsMax`, `activePatientsCount`/`maxActivePatients`. |
-| `GET /platform/tenants/:tenantId` | Detail: `tenant`, `master` (with `mustChangePassword`), `subscription`, `usage` (`seatsPsychologistsUsed`, `activePatientsCount`, `monthlyNotificationsSent`), `specialties` and the eight `sections` with `enabled`. |
+| `GET /platform/tenants/:tenantId` | Detail: `tenant`, `master` (with `mustChangePassword`), `subscription` (including monthly price, included specialties and extra specialty price), `usage`, `specialties`, core `sections` and clinical `modules`. |
 | `POST /platform/tenants` | Creates a clinic with its owner. Responds `201` with the detail shape. |
 | `PATCH /platform/tenants/:tenantId` | Edits `name`, `email`, `phone`, `address`. |
 | `PATCH /platform/tenants/:tenantId/subscription` | Changes the plan. Body: `planType`, `seatsPsychologistsMax?`, `maxActivePatients?`, `reason` (required). |
 | `POST /platform/tenants/:tenantId/suspend` | Body `{ reason }` (required). Sets `Tenant.isActive = false` and revokes the refresh tokens of the users of the tenant. |
 | `POST /platform/tenants/:tenantId/reactivate` | Sets `Tenant.isActive = true`. |
 | `PUT /platform/tenants/:tenantId/sections` | Body `{ sections: string[] }`: the keys that stay enabled; every other section is stored with `enabled = false`. |
+| `GET /platform/tenants/:tenantId/roles/:role/permissions` | Effective permissions and the configurable catalog for `MASTER`, `PROFESIONAL` or `ASISTENTE`. |
+| `PUT /platform/tenants/:tenantId/roles/:role/permissions` | Body `{ allowed: string[] }`: replaces the effective permissions of the role in this clinic; changes are audited. |
+| `GET /platform/specialty-catalog` | Active specialties and their clinical modules. |
+| `PUT /platform/tenants/:tenantId/specialties` | Body `{ specialtyCodes: string[] }`: assigns clinic specialties and their modules, recalculates the monthly price and records an audit entry. |
+| `PATCH /platform/tenants/:tenantId/modules/:moduleKey` | Body `{ enabled: boolean }`: enables or disables an assigned clinical module and records an audit entry. |
 | `POST /platform/tenants/:tenantId/master/reset-password` | Body `{ temporaryPassword }` (min. 8 characters). Stores the hash, sets `mustChangePassword = true` and revokes the owner's refresh tokens. Responds `200` without a body. |
 | `GET /platform/section-catalog` | The eight sections (key, name, dependencies) and the pre-checked sections for every plan and tenant type (`defaults`). |
 
@@ -695,7 +699,7 @@ Validates the current password (`401` if wrong), requires a new password of at l
 
 - A user with `mustChangePassword = true` receives `403 PASSWORD_CHANGE_REQUIRED` on every route except the public ones, `POST /auth/logout`, `POST /auth/logout-all` and `POST /auth/change-password`. The flag is read from the database on each request, so a reset takes effect with the access token already issued.
 - An `ADMIN` outside `/platform/*` receives `403 PLATFORM_ONLY`, except on those three session routes.
-- A clinic section that is turned off (or has no row) answers `403 SECTION_NOT_ENABLED` with `{ section }`. Sections are enforced on appointments (`core.calendar`), patients (`core.patients`), tasks (`core.tasks`), clinical notes, timeline and next-session plans (`core.clinicalNotes`), specialty records and the handlers that change specialties or modules (`core.specialties`), billing (`core.billing`) and member management in users (`core.team`).
+- A clinic section that is turned off (or has no row) answers `403 SECTION_NOT_ENABLED` with `{ section }`. Sections are enforced on appointments (`core.calendar`), patients (`core.patients`), tasks (`core.tasks`), clinical notes, timeline and next-session plans (`core.clinicalNotes`), specialty records and clinical workflows (`core.specialties`), billing (`core.billing`), member management (`core.team`), and files and storage (`core.storage`). The platform owner manages section and module assignments through `/platform/*`.
 - `SOPORTE` has no platform or cross-tenant power.
 
 ### Removed routes

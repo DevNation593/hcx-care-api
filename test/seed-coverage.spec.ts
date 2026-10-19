@@ -525,13 +525,12 @@ describe('demo seed', () => {
     });
 
     it('only withdraws permissions the role has and only grants the ones it can receive', () => {
-      const users = byId('user');
-      const permissions = ofClinic('userPermission');
+      const permissions = ofClinic('tenantRolePermission');
 
       expect(permissions.some((row) => row.granted)).toBe(true);
-      expect(permissions.some((row) => !row.granted)).toBe(true);
+      expect(permissions.some((row) => !row.granted)).toBe(false);
       for (const row of permissions) {
-        const role = users.get(row.userId).role;
+        const role = row.role;
         const allowed = row.granted ? grantablePermissions(role) : rolePermissions(role);
         expect({
           permission: row.permission,

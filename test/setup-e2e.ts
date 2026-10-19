@@ -6,6 +6,8 @@ assertE2eDatabaseSafety(testDatabaseUrl);
 
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = testDatabaseUrl;
+// E2E runs without the Redis service configured in the developer's `.env`.
+process.env.REDIS_URL = '';
 // The suites issue many requests from one address within seconds; the production
 // rate limit (per handler) would reject them with 429 and hide the behaviour under test.
 process.env.THROTTLE_LIMIT = '10000';
