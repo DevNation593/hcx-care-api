@@ -10,7 +10,6 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UpgradePlanDto } from './dto/upgrade-plan.dto';
 import { DowngradePlanDto } from './dto/downgrade-plan.dto';
-import { CustomizeFeaturesDto } from './dto/customize-features.dto';
 import { TenantType } from '@prisma/client';
 
 @ApiTags('Subscription')
@@ -67,21 +66,6 @@ export class SubscriptionController {
     @Body() dto: DowngradePlanDto,
   ) {
     return this.subscriptionService.downgradePlan(tenantId, user.userId, dto.newPlan);
-  }
-
-  @Post('features')
-  @Roles('MASTER')
-  @ApiOperation({
-    summary: 'Customize subscription modules/features (Master only)',
-    description:
-      'Select which modules to enable. Modules included in the plan are free; others are billed as addons.',
-  })
-  async customizeFeatures(
-    @Param('tenantId') tenantId: string,
-    @CurrentUser() user: any,
-    @Body() dto: CustomizeFeaturesDto,
-  ) {
-    return this.subscriptionService.customizeFeatures(tenantId, user.userId, dto.modules);
   }
 
   @Get('plans')

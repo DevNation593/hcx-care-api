@@ -74,6 +74,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       'medication',
       'documentTemplate',
       'userPermission',
+      'tenantRolePermission',
       'patientFile',
       'professionalBranch',
       'treatment',
@@ -189,6 +190,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       // Invoices restrict deleting their issuer, so they go before users.
       'invoice',
       'refreshToken',
+      'userPermission',
+      'tenantRolePermission',
       'patient',
       'professionalProfile',
       'user',

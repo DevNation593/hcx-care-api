@@ -71,6 +71,8 @@ export interface PlatformTenantDetail {
     seatsPsychologistsMax: number;
     maxActivePatients: number;
     basePrice: number;
+    includedSpecialties: number;
+    specialtyPrice: number;
     currency: string;
   };
   usage: {
@@ -80,6 +82,7 @@ export interface PlatformTenantDetail {
   };
   specialties: { id: string; code: string; name: string }[];
   sections: { key: SectionKey; name: string; enabled: boolean }[];
+  modules: { key: string; enabled: boolean }[];
 }
 
 export const TRIAL_DAYS = 14;
@@ -556,22 +559,7 @@ export class PlatformTenantsService {
         tenantType: true,
         isActive: true,
         createdAt: true,
-        subscription: {
-          select: {
-            planType: true,
-            status: true,
-            trialEndsAt: true,
-            currentPeriodStart: true,
-            currentPeriodEnd: true,
-            seatsPsychologistsMax: true,
-            seatsPsychologistsUsed: true,
-            maxActivePatients: true,
-            activePatientsCount: true,
-            monthlyNotificationsSent: true,
-            basePrice: true,
-            currency: true,
-          },
-        },
+        subscription: true,
         users: {
           where: { role: UserRole.MASTER },
           take: 1,
@@ -586,10 +574,7 @@ export class PlatformTenantsService {
         specialties: {
           select: { specialty: { select: { id: true, code: true, name: true } } },
         },
-        enabledModules: {
-          where: { moduleKey: { startsWith: 'core.' } },
-          select: { moduleKey: true, enabled: true },
-        },
+        enabledModules: { select: { moduleKey: true, enabled: true } },
       },
     });
     if (!row || !row.subscription) throw new NotFoundException('Consultorio no encontrado');
@@ -617,6 +602,8 @@ export class PlatformTenantsService {
         seatsPsychologistsMax: subscription.seatsPsychologistsMax,
         maxActivePatients: subscription.maxActivePatients,
         basePrice: Number(subscription.basePrice),
+        includedSpecialties: subscription.includedSpecialties,
+        specialtyPrice: Number(subscription.specialtyPrice),
         currency: subscription.currency,
       },
       usage: {
@@ -630,6 +617,9 @@ export class PlatformTenantsService {
         name,
         enabled: enabledByKey.get(key) === true,
       })),
+      modules: row.enabledModules
+        .filter(({ moduleKey }) => !moduleKey.startsWith('core.'))
+        .map(({ moduleKey, enabled }) => ({ key: moduleKey, enabled })),
     };
   }
 }

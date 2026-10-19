@@ -42,10 +42,35 @@ describe('Platform admin panel (E2E)', () => {
     prisma = app.get<PrismaService>(PrismaService);
 
     await prisma.cleanDatabase();
-    await prisma.specialty.upsert({
+    const psychology = await prisma.specialty.upsert({
       where: { code: 'PSYCHOLOGY' },
       update: { isActive: true },
       create: { code: 'PSYCHOLOGY', name: 'Psicología', isActive: true },
+    });
+    const nutrition = await prisma.specialty.upsert({
+      where: { code: 'NUTRITION' },
+      update: { isActive: true },
+      create: { code: 'NUTRITION', name: 'Nutrición', isActive: true },
+    });
+    await prisma.specialtyModule.upsert({
+      where: {
+        specialtyId_moduleKey: {
+          specialtyId: psychology.id,
+          moduleKey: 'psychology.assessments',
+        },
+      },
+      update: {},
+      create: { specialtyId: psychology.id, moduleKey: 'psychology.assessments' },
+    });
+    await prisma.specialtyModule.upsert({
+      where: {
+        specialtyId_moduleKey: {
+          specialtyId: nutrition.id,
+          moduleKey: 'nutrition.assessments',
+        },
+      },
+      update: {},
+      create: { specialtyId: nutrition.id, moduleKey: 'nutrition.assessments' },
     });
     const platformTenant = await prisma.tenant.create({
       data: { name: 'Plataforma', email: 'platform@tenant.test', isPlatform: true },
@@ -138,6 +163,146 @@ describe('Platform admin panel (E2E)', () => {
       .get(api(`/tenants/${tenantId}/tasks`))
       .set(bearer(masterToken))
       .expect(200);
+  });
+
+  it('applies owner-assigned permissions to the clinic role immediately', async () => {
+    const roleUrl = api(`/platform/tenants/${tenantId}/roles/MASTER/permissions`);
+    const initial = await http().get(roleUrl).set(bearer(adminToken)).expect(200);
+    const originalAllowed = initial.body.effective as string[];
+    expect(originalAllowed).toContain('patients.create');
+
+    await http()
+      .put(roleUrl)
+      .set(bearer(masterToken))
+      .send({ allowed: originalAllowed })
+      .expect(403);
+    await http()
+      .put(api(`/tenants/${tenantId}/users/me/permissions`))
+      .set(bearer(masterToken))
+      .send({ revoked: ['patients.create'] })
+      .expect(404);
+
+    try {
+      await http()
+        .put(roleUrl)
+        .set(bearer(adminToken))
+        .send({ allowed: originalAllowed.filter((permission) => permission !== 'patients.create') })
+        .expect(200);
+
+      const permissions = await http()
+        .get(api(`/tenants/${tenantId}/users/me/permissions`))
+        .set(bearer(masterToken))
+        .expect(200);
+      expect(permissions.body.effective).not.toContain('patients.create');
+
+      const denied = await http()
+        .post(api(`/tenants/${tenantId}/patients`))
+        .set(bearer(masterToken))
+        .send({})
+        .expect(403);
+      expect(denied.body.code).toBe('PERMISSION_DENIED');
+    } finally {
+      await http()
+        .put(roleUrl)
+        .set(bearer(adminToken))
+        .send({ allowed: originalAllowed })
+        .expect(200);
+    }
+  });
+
+  it('grants a new permission to every assistant in the clinic role', async () => {
+    const roleUrl = api(`/platform/tenants/${tenantId}/roles/ASISTENTE/permissions`);
+    const invoicesUrl = api(`/tenants/${tenantId}/billing/invoices`);
+    const password = await app.get<AuthService>(AuthService).hashPassword(TEST_PASSWORD);
+    const emails = ['assistant-one@consultorio-e2e.test', 'assistant-two@consultorio-e2e.test'];
+    for (const email of emails) {
+      await prisma.user.create({
+        data: {
+          tenantId,
+          email,
+          password,
+          firstName: 'Assistant',
+          lastName: 'E2E',
+          role: 'ASISTENTE',
+          isActive: true,
+        },
+      });
+    }
+    const tokens = await Promise.all(emails.map((email) => login(email, TEST_PASSWORD)));
+    const initial = await http().get(roleUrl).set(bearer(adminToken)).expect(200);
+    const originalAllowed = initial.body.effective as string[];
+    expect(originalAllowed).not.toContain('billing.view');
+
+    for (const token of tokens) {
+      const denied = await http().get(invoicesUrl).set(bearer(token)).expect(403);
+      expect(denied.body.code).toBe('PERMISSION_DENIED');
+    }
+
+    try {
+      await http()
+        .put(roleUrl)
+        .set(bearer(adminToken))
+        .send({ allowed: [...originalAllowed, 'billing.view'] })
+        .expect(200);
+      for (const token of tokens) {
+        await http().get(invoicesUrl).set(bearer(token)).expect(200);
+      }
+    } finally {
+      await http()
+        .put(roleUrl)
+        .set(bearer(adminToken))
+        .send({ allowed: originalAllowed })
+        .expect(200);
+    }
+    for (const token of tokens) {
+      const denied = await http().get(invoicesUrl).set(bearer(token)).expect(403);
+      expect(denied.body.code).toBe('PERMISSION_DENIED');
+    }
+  });
+
+  it('lets only the owner assign specialties and toggle their clinical modules', async () => {
+    const specialtiesUrl = api(`/platform/tenants/${tenantId}/specialties`);
+    const moduleUrl = api(`/platform/tenants/${tenantId}/modules/psychology.assessments`);
+    const auditWhere = { tenantId, action: 'UPDATE' as const, entity: 'TENANT' as const };
+    const auditBefore = await prisma.auditLog.count({ where: auditWhere });
+
+    await http()
+      .put(specialtiesUrl)
+      .set(bearer(masterToken))
+      .send({ specialtyCodes: ['PSYCHOLOGY', 'NUTRITION'] })
+      .expect(403);
+    await http()
+      .put(api(`/tenants/${tenantId}/specialties`))
+      .set(bearer(masterToken))
+      .send({ specialtyCodes: ['PSYCHOLOGY', 'NUTRITION'] })
+      .expect(404);
+
+    const selection = await http()
+      .put(specialtiesUrl)
+      .set(bearer(adminToken))
+      .send({ specialtyCodes: ['PSYCHOLOGY', 'NUTRITION'] })
+      .expect(200);
+    expect(selection.body.specialties.map((specialty: { code: string }) => specialty.code)).toEqual(
+      ['PSYCHOLOGY', 'NUTRITION'],
+    );
+    expect(selection.body.pricing.specialtyAddonsPrice).toBe(15);
+
+    await http().patch(moduleUrl).set(bearer(masterToken)).send({ enabled: false }).expect(403);
+    await http()
+      .patch(api(`/tenants/${tenantId}/modules/psychology.assessments`))
+      .set(bearer(masterToken))
+      .send({ enabled: false })
+      .expect(404);
+    await http().patch(moduleUrl).set(bearer(adminToken)).send({ enabled: false }).expect(200);
+
+    const detail = await http()
+      .get(api(`/platform/tenants/${tenantId}`))
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(detail.body.specialties).toHaveLength(2);
+    expect(detail.body.modules).toContainEqual({ key: 'psychology.assessments', enabled: false });
+    expect(detail.body.subscription.basePrice).toBe(selection.body.pricing.totalMonthly);
+    expect(await prisma.auditLog.count({ where: auditWhere })).toBe(auditBefore + 2);
   });
 
   it.each(['patients', 'appointments', 'clinical-notes'])(

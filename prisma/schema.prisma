@@ -270,6 +270,7 @@ model Tenant {
   medications             Medication[]
   documentTemplates       DocumentTemplate[]
   userPermissions         UserPermission[]
+  rolePermissions         TenantRolePermission[]
   patientFiles            PatientFile[]
   professionalBranches    ProfessionalBranch[]
   treatments              Treatment[]
@@ -1030,6 +1031,21 @@ model UserPermission {
   createdAt   DateTime @default(now())
 
   @@unique([userId, permission])
+  @@index([tenantId])
+}
+
+// Platform-managed overrides shared by every user with this role in one clinic.
+model TenantRolePermission {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role        UserRole
+  permission  String
+  granted     Boolean
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, role, permission])
   @@index([tenantId])
 }
 

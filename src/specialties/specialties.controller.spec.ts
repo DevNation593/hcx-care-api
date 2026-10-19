@@ -1,9 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { APP_GUARD, Reflector } from '@nestjs/core';
+import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { ROLES_KEY } from '../common/decorators/roles.decorator';
-import { IS_PUBLIC_KEY } from '../common/decorators/public.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { TenantGuard } from '../common/guards/tenant.guard';
 import { RlsContextService } from '../prisma/rls-context.service';
@@ -51,16 +49,14 @@ describe('SpecialtiesController selection routes', () => {
   beforeEach(() => selection.replace.mockClear());
 
   it.each(['put', 'post'] as const)(
-    '%s returns the same replacement result and trims codes',
+    '%s refuses specialty selection from the clinic master',
     async (method) => {
       await request(app.getHttpServer())
         [method]('/tenants/tenant-1/specialties')
         .set('x-test-role', 'MASTER')
         .send({ specialtyCodes: [' psychology '] })
-        .expect(200)
-        .expect(result);
-      expect(selection.replace).toHaveBeenCalledTimes(1);
-      expect(selection.replace).toHaveBeenCalledWith('tenant-1', ['psychology'], 'admin-1');
+        .expect(404);
+      expect(selection.replace).not.toHaveBeenCalled();
     },
   );
 
@@ -71,7 +67,7 @@ describe('SpecialtiesController selection routes', () => {
         .put('/tenants/tenant-1/specialties')
         .set('x-test-role', 'MASTER')
         .send({ specialtyCodes })
-        .expect(400);
+        .expect(404);
       expect(selection.replace).not.toHaveBeenCalled();
     },
   );
@@ -82,25 +78,22 @@ describe('SpecialtiesController selection routes', () => {
         [method]('/tenants/tenant-2/specialties')
         .set('x-test-role', 'MASTER')
         .send({ specialtyCodes: ['PSYCHOLOGY'] })
-        .expect(403);
+        .expect(404);
       await request(app.getHttpServer())
         [method]('/tenants/tenant-1/specialties')
         .set('x-test-role', 'PROFESIONAL')
         .send({ specialtyCodes: ['PSYCHOLOGY'] })
-        .expect(403);
+        .expect(404);
     }
     expect(selection.replace).not.toHaveBeenCalled();
   });
 
-  it('does not mark mutations public and requires ADMIN metadata', () => {
-    const reflector = new Reflector();
-    for (const handler of [
-      SpecialtiesController.prototype.setSpecialties,
-      SpecialtiesController.prototype.setSpecialtiesLegacy,
-      SpecialtiesController.prototype.updateModule,
-    ]) {
-      expect(reflector.get(IS_PUBLIC_KEY, handler)).toBeUndefined();
-      expect(reflector.get(ROLES_KEY, handler)).toEqual(['MASTER']);
-    }
+  it('does not register a tenant module mutation route', async () => {
+    await request(app.getHttpServer())
+      .patch('/tenants/tenant-1/modules/psychology.assessments')
+      .set('x-test-role', 'MASTER')
+      .send({ enabled: true })
+      .expect(404);
+    expect(selection.updateModule).not.toHaveBeenCalled();
   });
 });

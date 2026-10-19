@@ -1,5 +1,23 @@
 # Deployment Guide
 
+## Platform control of clinic roles and modules
+
+Deploy migration `20261018000000_platform_role_permissions` before deploying the new API and web. It creates `TenantRolePermission`, which is the source of truth for permissions of `MASTER`, `PROFESIONAL` and `ASISTENTE` in each clinic. The former per-user permission rows remain in the database for historical review but are no longer read or editable.
+
+CI exercises the migration with legacy grants and revocations in a separate schema of the disposable test database through `npm run prisma:verify-platform-role-permissions`. The verification confirms that revocations become clinic-role restrictions, personal grants are not widened to a whole role, and historical rows remain available.
+
+The migration deliberately avoids granting an action to an entire role because one user previously received it. Every old personal revocation becomes a revocation for that clinic role, so other users of the same role can temporarily lose that action. The platform owner should review the role settings for each clinic after deployment and reassign allowed actions in the platform panel. Review existing overrides before migration with this read-only query:
+
+```sql
+SELECT up."tenantId", u."role", up."permission", up."granted", COUNT(*) AS users
+FROM "UserPermission" up
+JOIN "User" u ON u."id" = up."userId" AND u."tenantId" = up."tenantId"
+GROUP BY up."tenantId", u."role", up."permission", up."granted"
+ORDER BY up."tenantId", u."role", up."permission", up."granted";
+```
+
+Apply the migration with `npx prisma migrate deploy` against the intended database, then deploy the API and web together. The clinic master can continue editing clinic settings and staff accounts, while section, specialty, clinical module and role permission assignments belong to the platform owner. Subscription feature flags follow the plan.
+
 ## Vercel and Supabase database connections
 
 The shared Supabase pooler's session endpoint (port `5432`) limits concurrent clients
@@ -464,7 +482,7 @@ Rollback: restore the backup.
 
 Before production, run once against a disposable database (`DATABASE_URL_TEST`): the migration, the verification script and `npm run test:e2e`.
 
-### 1c. Billing profiles and professionals' billing access (B1 cash register)
+### 1c. Billing profiles (B1 cash register)
 
 Right after `prisma migrate deploy` for B1, run once:
 
@@ -472,7 +490,7 @@ Right after `prisma migrate deploy` for B1, run once:
 DATABASE_URL="postgresql://..." npm run prisma:migrate-billing-profiles
 ```
 
-It turns the legacy billing fields of live patients into billing profiles linked as their default, and grants every active PROFESIONAL the `billing.view` and `billing.create` permissions (they are no longer role defaults), without touching rows that already exist. Profiles are created on behalf of each tenant's MASTER user. It prints a JSON summary (never identification numbers); patients listed in `skippedInvalid` were not migrated, each with its reason: `EMAIL_MISSING` (no billing or patient email), `IDENTIFICATION_INVALID` (the number does not pass the SRI validation), `TAX_ID_TYPE_INVALID` (the patient has a tax id but its legacy type is missing or unknown) and `MASTER_MISSING` (the tenant has no MASTER user to own the profile; the patient is skipped until one exists and the script runs again). For each of them, create the profile in the patient's «Perfiles de facturación». It is idempotent, but it only needs to run once, at the B1 deploy.
+It turns the legacy billing fields of live patients into billing profiles linked as their default. It does not assign permissions; the platform administrator grants `billing.view` and `billing.create` to clinic roles when needed. Profiles are created on behalf of each tenant's MASTER user. It prints a JSON summary (never identification numbers); patients listed in `skippedInvalid` were not migrated, each with its reason: `EMAIL_MISSING` (no billing or patient email), `IDENTIFICATION_INVALID` (the number does not pass the SRI validation), `TAX_ID_TYPE_INVALID` (the patient has a tax id but its legacy type is missing or unknown) and `MASTER_MISSING` (the tenant has no MASTER user to own the profile; the patient is skipped until one exists and the script runs again). For each of them, create the profile in the patient's «Perfiles de facturación». It is idempotent, but it only needs to run once, at the B1 deploy.
 
 Deploy the B1 web together with or before the B1 API. The B1 API rejects the fields the previous web sends (`billing*` on patient create/edit and `faktur*` on clinic settings answer 400 under `forbidNonWhitelisted`), so an old web against the new API breaks patient create/edit and clinic settings saves until the web is updated.
 

@@ -1,11 +1,7 @@
 import { SetMetadata } from '@nestjs/common';
 import { CanonicalRole, toCanonicalRole } from '../roles/role-compatibility';
 
-/**
- * What a role allows, action by action. The account holder can take a permission of the role
- * away from one user, and can give a user one their role lacks only when the entry lists that
- * role in `grantable`. The account holder (MASTER) always keeps every permission.
- */
+/** The default actions of each clinic role; the platform can override them per clinic. */
 export const PERMISSION_CATALOG = [
   {
     key: 'patients.create',
@@ -60,7 +56,7 @@ export const PERMISSION_CATALOG = [
     group: 'Facturación',
     label: 'Ver facturas',
     roles: ['MASTER'],
-    // Billing is the account holder's unless they put someone else in charge of it.
+    // Billing is the master role's by default; the platform may grant it to other clinic roles.
     grantable: ['PROFESIONAL', 'ASISTENTE'],
   },
   {
@@ -96,7 +92,7 @@ export const PERMISSION_CATALOG = [
   group: string;
   label: string;
   roles: readonly CanonicalRole[];
-  /** Roles that lack the permission but can receive it, user by user. */
+  /** Roles that lack the permission but can receive it through platform configuration. */
   grantable?: readonly CanonicalRole[];
 }[];
 
@@ -105,8 +101,8 @@ export type Permission = (typeof PERMISSION_CATALOG)[number]['key'];
 export const REQUIRE_PERMISSION_KEY = 'requirePermission';
 
 /**
- * Names the permission a route exercises. The role guard still decides who may call it;
- * this lets the account holder take the action away from one user.
+ * Names the permission a route exercises. The role guard checks whether this role can receive it;
+ * the permission guard applies the platform's settings for the clinic.
  */
 export const RequirePermission = (permission: Permission) =>
   SetMetadata(REQUIRE_PERMISSION_KEY, permission);
@@ -123,7 +119,7 @@ export function rolePermissions(role: string): Permission[] {
   ).map((entry) => entry.key);
 }
 
-/** The permissions a role lacks but one of its users can be given. */
+/** The permissions a role lacks by default but the platform can give it in one clinic. */
 export function grantablePermissions(role: string): Permission[] {
   const canonical = toCanonicalRole(role);
   return PERMISSION_CATALOG.filter(
@@ -134,8 +130,7 @@ export function grantablePermissions(role: string): Permission[] {
 }
 
 /**
- * What the user can actually do: the role's permissions minus the ones withdrawn, plus the
- * ones given to them among those their role can receive.
+ * What a clinic role can actually do after platform overrides.
  */
 export function effectivePermissions(
   role: string,
@@ -143,9 +138,6 @@ export function effectivePermissions(
   granted: readonly string[] = [],
 ): Permission[] {
   const byRole = rolePermissions(role);
-  // The account holder cannot be restricted, whatever rows exist.
-  if (role === 'MASTER') return byRole;
-
   const extra = grantablePermissions(role).filter((permission) => granted.includes(permission));
   return PERMISSION_CATALOG.map((entry) => entry.key).filter(
     (permission) =>
