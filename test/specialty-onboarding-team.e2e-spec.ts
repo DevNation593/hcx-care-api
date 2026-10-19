@@ -158,16 +158,16 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
       ]),
     );
 
-    const selectionUrl = `/api/v1/tenants/${tenantId}/specialties`;
+    const selectionUrl = `/api/v1/platform/tenants/${tenantId}/specialties`;
     const selection = { specialtyCodes: ['PSYCHOLOGY', 'NUTRITION'] };
     const first = await request(server)
       .put(selectionUrl)
-      .set('Authorization', `Bearer ${token}`)
+      .set('Authorization', `Bearer ${platformToken}`)
       .send(selection)
       .expect(200);
     const second = await request(server)
       .put(selectionUrl)
-      .set('Authorization', `Bearer ${token}`)
+      .set('Authorization', `Bearer ${platformToken}`)
       .send(selection)
       .expect(200);
     expect(first.body.pricing).toEqual(second.body.pricing);
@@ -214,7 +214,7 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
 
     const blocked = await request(server)
       .put(selectionUrl)
-      .set('Authorization', `Bearer ${token}`)
+      .set('Authorization', `Bearer ${platformToken}`)
       .send({ specialtyCodes: ['NUTRITION'] })
       .expect(409);
     expect(blocked.body.code).toBe('SPECIALTY_IN_USE_BY_ACTIVE_PROFESSIONAL');
@@ -233,7 +233,7 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
 
     const nutritionOnly = await request(server)
       .put(selectionUrl)
-      .set('Authorization', `Bearer ${token}`)
+      .set('Authorization', `Bearer ${platformToken}`)
       .send({ specialtyCodes: ['NUTRITION'] })
       .expect(200);
     expect(nutritionOnly.body.specialties.map((item: { code: string }) => item.code)).toEqual([

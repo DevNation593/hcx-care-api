@@ -121,6 +121,7 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   await db.encounter.deleteMany();
   await db.medication.deleteMany();
   await db.userPermission.deleteMany();
+  await db.tenantRolePermission.deleteMany();
   await db.diagnosisCode.deleteMany();
   await db.invoice.deleteMany();
   await db.billingSettings.deleteMany();

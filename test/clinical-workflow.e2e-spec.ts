@@ -12,6 +12,8 @@ process.env.STORAGE_LOCAL_PATH = storageRoot;
 import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { PlatformTenantsService } from './../src/platform/platform-tenants.service';
+import { PlatformRolePermissionsService } from './../src/platform/platform-role-permissions.service';
+import { createPlatformAdmin } from './../prisma/create-platform-admin';
 import { UsersService } from './../src/users/users.service';
 import { createTestTenant, TEST_PASSWORD } from './helpers/create-test-tenant';
 
@@ -31,6 +33,7 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
   let app: INestApplication;
   let prisma: PrismaService;
   let users: UsersService;
+  let platformAdminId: string;
   let tenantId: string;
   let otherTenantId: string;
   let specialtyId: string;
@@ -93,6 +96,14 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
     users = app.get<UsersService>(UsersService);
 
     await prisma.cleanDatabase();
+    platformAdminId = (
+      await createPlatformAdmin(prisma, {
+        email: 'platform-clinical-e2e@example.test',
+        password: TEST_PASSWORD,
+        firstName: 'Platform',
+        lastName: 'Admin',
+      })
+    ).userId;
     const deps = { tenants: app.get(PlatformTenantsService), prisma };
     tenantId = (await createTestTenant(deps, 1)).id;
     otherTenantId = (await createTestTenant(deps, 2)).id;
@@ -476,14 +487,28 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
   });
 
   describe('permissions', () => {
-    it('withdraws one action from one professional and gives it back', async () => {
-      const restricted = await request(server())
+    it('restricts an action for the entire professional role, then restores it', async () => {
+      const roles = app.get(PlatformRolePermissionsService);
+      const original = await roles.describe(tenantId, 'PROFESIONAL');
+      const originalAllowed = original.effective;
+      await request(server())
         .put(`${base()}/users/${professionalId}/permissions`)
         .set(as('master'))
         .send({ revoked: ['clinical_records.create'] })
-        .expect(200);
-      expect(restricted.body.effective).not.toContain('clinical_records.create');
-      expect(restricted.body.effective).toContain('clinical_records.view');
+        .expect(404);
+      await request(server())
+        .put(`/api/v1/platform/tenants/${tenantId}/roles/PROFESIONAL/permissions`)
+        .set(as('master'))
+        .send({ allowed: originalAllowed })
+        .expect(403);
+      const restricted = await roles.replace(
+        tenantId,
+        'PROFESIONAL',
+        platformAdminId,
+        originalAllowed.filter((key: string) => key !== 'clinical_records.create'),
+      );
+      expect(restricted.effective).not.toContain('clinical_records.create');
+      expect(restricted.effective).toContain('clinical_records.view');
 
       const denied = await request(server())
         .post(patientUrl('encounters'))
@@ -493,8 +518,15 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
       expect(denied.body.code).toBe('PERMISSION_DENIED');
       // Reading is a different permission and still works.
       await request(server()).get(patientUrl('encounters')).set(as('pro')).expect(200);
-      // The restriction is of one user, not of the role.
-      void colleagueId;
+      // The colleague has the same restriction.
+      const colleagueDenied = await request(server())
+        .post(patientUrl('encounters'))
+        .set(as('colleague'))
+        .send({ encounterType: 'CONTROL', reason: 'Control del colega' })
+        .expect(403);
+      expect(colleagueDenied.body.code).toBe('PERMISSION_DENIED');
+
+      await roles.replace(tenantId, 'PROFESIONAL', platformAdminId, originalAllowed);
       const other = await request(server())
         .post(patientUrl('encounters'))
         .set(as('colleague'))
@@ -506,11 +538,6 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
         .send({ reason: 'Solo era una prueba' })
         .expect(200);
 
-      await request(server())
-        .put(`${base()}/users/${professionalId}/permissions`)
-        .set(as('master'))
-        .send({ revoked: [] })
-        .expect(200);
       const mine = await request(server())
         .get(`${base()}/users/me/permissions`)
         .set(as('pro'))
@@ -518,33 +545,35 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
       expect(mine.body.effective).toContain('clinical_records.create');
     });
 
-    it('gives an assistant the invoices only while the account holder grants them', async () => {
+    it('gives invoices to the assistant role only through platform configuration', async () => {
+      const roles = app.get(PlatformRolePermissionsService);
+      const originalAllowed = (await roles.describe(tenantId, 'ASISTENTE')).effective;
       const invoices = `${base()}/billing/invoices`;
       const assistant = await prisma.user.findFirstOrThrow({
         where: { tenantId, email: 'assistant@tenant.test' },
       });
       await request(server()).get(invoices).set(as('assistant')).expect(403);
 
-      // A clinical permission cannot be given to anyone.
       await request(server())
-        .put(`${base()}/users/${assistant.id}/permissions`)
-        .set(as('master'))
-        .send({ revoked: [], granted: ['clinical_records.view'] })
-        .expect(400);
-      const granted = await request(server())
         .put(`${base()}/users/${assistant.id}/permissions`)
         .set(as('master'))
         .send({ revoked: [], granted: ['billing.view'] })
-        .expect(200);
-      expect(granted.body.effective).toContain('billing.view');
+        .expect(404);
+      await expect(
+        roles.replace(tenantId, 'ASISTENTE', platformAdminId, [
+          ...originalAllowed,
+          'clinical_records.view',
+        ]),
+      ).rejects.toThrow();
+      const granted = await roles.replace(tenantId, 'ASISTENTE', platformAdminId, [
+        ...originalAllowed,
+        'billing.view',
+      ]);
+      expect(granted.effective).toContain('billing.view');
 
       await request(server()).get(invoices).set(as('assistant')).expect(200);
 
-      await request(server())
-        .put(`${base()}/users/${assistant.id}/permissions`)
-        .set(as('master'))
-        .send({ revoked: [] })
-        .expect(200);
+      await roles.replace(tenantId, 'ASISTENTE', platformAdminId, originalAllowed);
       await request(server()).get(invoices).set(as('assistant')).expect(403);
     });
   });

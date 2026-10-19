@@ -108,10 +108,6 @@ describe('Master role (E2E)', () => {
       ['patch', `/api/v1/tenants/${id}/settings`],
       ['post', `/api/v1/tenants/${id}/subscription/upgrade`],
       ['post', `/api/v1/tenants/${id}/subscription/downgrade`],
-      ['post', `/api/v1/tenants/${id}/subscription/features`],
-      ['put', `/api/v1/tenants/${id}/specialties`],
-      ['post', `/api/v1/tenants/${id}/specialties`],
-      ['patch', `/api/v1/tenants/${id}/modules/placeholder-module`],
       ['get', `/api/v1/tenants/${id}/audit-logs`],
       ['delete', `/api/v1/tenants/${id}/patients/placeholder-patient`],
       ['delete', `/api/v1/tenants/${id}/tasks/placeholder-task`],
@@ -143,6 +139,16 @@ describe('Master role (E2E)', () => {
 
     const call = (method: Route[0], path: string, bearer: string) =>
       request(app.getHttpServer())[method](path).set('Authorization', `Bearer ${bearer}`).send({});
+
+    it.each([
+      ['post', '/api/v1/tenants/TENANT/subscription/features'],
+      ['put', '/api/v1/tenants/TENANT/specialties'],
+      ['post', '/api/v1/tenants/TENANT/specialties'],
+      ['patch', '/api/v1/tenants/TENANT/modules/placeholder-module'],
+      ['put', '/api/v1/tenants/TENANT/users/me/permissions'],
+    ] as Route[])('the former clinic assignment route %s %s is gone', async (method, path) => {
+      await call(method, path.replace('TENANT', tenantId), token).expect(404);
+    });
 
     it.each(masterOnly('TENANT'))('a PROFESIONAL gets 403 on %s %s', async (method, path) => {
       await call(method, path.replace('TENANT', tenantId), tokens.PROFESIONAL).expect(403);

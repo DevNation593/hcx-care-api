@@ -204,31 +204,30 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     firstName: 'Hugo',
     lastName: 'Salas',
     role: 'PROFESIONAL',
-    note: 'Fisioterapeuta en ambas sedes; el titular le dejó ver facturas, sin «Emitir facturas»',
+    note: 'Fisioterapeuta en ambas sedes; su rol puede ver facturas, sin emitirlas',
     profile: { specialty: 'physiotherapy', title: 'Fisioterapeuta', licenseNumber: 'FIS-EC-313' },
   });
-  const marta = await createUser(ctx, clinic, {
+  await createUser(ctx, clinic, {
     email: 'recepcion.arrayanes@psic.com',
     firstName: 'Marta',
     lastName: 'Luna',
     role: 'ASISTENTE',
-    note: 'Asistente con permisos adicionales: ve y emite facturas',
+    note: 'Asistente; su rol puede ver y emitir facturas',
   });
-  const pablo = await createUser(ctx, clinic, {
+  await createUser(ctx, clinic, {
     email: 'asistente.arrayanes@psic.com',
     firstName: 'Pablo',
     lastName: 'Rey',
     role: 'ASISTENTE',
-    note: 'Asistente al que se retiró «Cancelar citas»',
+    note: 'Asistente con los mismos permisos de su rol',
   });
 
-  await db.userPermission.createMany({
+  await db.tenantRolePermission.createMany({
     data: [
-      { userId: marta.id, permission: 'billing.view', granted: true },
-      { userId: marta.id, permission: 'billing.create', granted: true },
-      { userId: pablo.id, permission: 'appointments.cancel', granted: false },
-      // Professionals have no billing access by default: Hugo can see invoices but not issue them.
-      { userId: hugo.id, permission: 'billing.view', granted: true },
+      { role: 'ASISTENTE' as const, permission: 'billing.view', granted: true },
+      { role: 'ASISTENTE' as const, permission: 'billing.create', granted: true },
+      // Professionals can view invoices, but only the master and assistants can issue them.
+      { role: 'PROFESIONAL' as const, permission: 'billing.view', granted: true },
     ].map((row) => ({ tenantId, createdById: clinic.master.id, ...row })),
   });
 
