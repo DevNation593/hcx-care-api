@@ -28,7 +28,7 @@ class UngatedController {
 }
 
 describe('SectionGuard', () => {
-  const prisma = { tenantModule: { findUnique: jest.fn() } };
+  const prisma = { tenantModule: { findUnique: jest.fn() }, tenant: { findUnique: jest.fn() } };
   const guard = new SectionGuard(new Reflector(), prisma as unknown as PrismaService);
 
   const contextFor = (controller: { prototype: { handler: () => void } }) =>
@@ -42,6 +42,15 @@ describe('SectionGuard', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    prisma.tenant.findUnique.mockResolvedValue({ businessKind: 'MEDICAL' });
+  });
+
+  it('blocks medical routes in aesthetic studios even when a module row is enabled', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ businessKind: 'AESTHETIC_STUDIO' });
+    prisma.tenantModule.findUnique.mockResolvedValue({ enabled: true });
+    await expect(guard.canActivate(contextFor(TasksLikeController))).rejects.toMatchObject({
+      response: { code: 'SECTION_BUSINESS_KIND_MISMATCH', section: 'core.tasks' },
+    });
   });
 
   it('passes when the route requires no section', async () => {

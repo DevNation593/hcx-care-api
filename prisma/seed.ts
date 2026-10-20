@@ -20,11 +20,25 @@ import {
   SpecialtyCatalog,
 } from './seed-helpers';
 import { seedClinicalWorkflow } from './seed-clinical-workflow';
-import { seedMainClinic } from './seed-main-clinic';
-import { seedTenantStates } from './seed-tenant-states';
 
 export const DEMO_PASSWORD = 'Password123!';
 const PLATFORM_ADMIN_EMAIL = 'admin@plataforma.test';
+
+/** The demo seed deletes data, so its CLI entry point accepts only local PostgreSQL. */
+export function assertDemoSeedTarget(databaseUrl: string | undefined, nodeEnv: string | undefined) {
+  if (nodeEnv === 'production' || !databaseUrl) {
+    throw new Error('La seed demo solo se puede ejecutar en PostgreSQL local.');
+  }
+  let host: string;
+  try {
+    host = new URL(databaseUrl).hostname;
+  } catch {
+    throw new Error('La seed demo requiere una URL local válida de PostgreSQL.');
+  }
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(host)) {
+    throw new Error('La seed demo solo se puede ejecutar en PostgreSQL local.');
+  }
+}
 
 async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog> {
   const specialties = await Promise.all([
@@ -64,6 +78,16 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
         description: 'Prevención y atención odontológica.',
       },
     }),
+    db.specialty.upsert({
+      where: { code: 'GENERAL_MEDICINE' },
+      update: { name: 'Medicina General', isActive: true },
+      create: {
+        code: 'GENERAL_MEDICINE',
+        name: 'Medicina General',
+        description: 'Atención médica general, prevención y seguimiento.',
+        isActive: true,
+      },
+    }),
   ]);
   // Retired from the catalog: no plan offers it and no clinic can select it.
   await db.specialty.upsert({
@@ -77,8 +101,14 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
     },
   });
 
-  const [psychology, nutrition, physiotherapy, dentistry] = specialties;
-  const catalog: SpecialtyCatalog = { psychology, nutrition, physiotherapy, dentistry };
+  const [psychology, nutrition, physiotherapy, dentistry, generalMedicine] = specialties;
+  const catalog: SpecialtyCatalog = {
+    psychology,
+    nutrition,
+    physiotherapy,
+    dentistry,
+    generalMedicine,
+  };
 
   await db.specialtyModule.createMany({
     data: Object.entries(SPECIALTY_MODULE_KEYS).flatMap(([key, moduleKeys]) =>
@@ -111,7 +141,15 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
     // The rows are about to go: their bytes would be left behind with nothing pointing at them.
     const files = await db.patientFile.findMany({ select: { storageKey: true } });
     await Promise.all(files.map(({ storageKey }) => storage.remove(storageKey)));
+    const aestheticPhotos = await db.aestheticPhoto.findMany({ select: { storageKey: true } });
+    await Promise.all(aestheticPhotos.map(({ storageKey }) => storage.remove(storageKey)));
   }
+  await db.aestheticPhoto.deleteMany();
+  await db.aestheticConsent.deleteMany();
+  await db.aestheticSession.deleteMany();
+  await db.aestheticBooking.deleteMany();
+  await db.aestheticService.deleteMany();
+  await db.aestheticClient.deleteMany();
   // Files restrict deleting their uploader, so they go before the users.
   await db.patientFile.deleteMany();
   await db.documentTemplate.deleteMany();
@@ -167,9 +205,8 @@ export interface SeedResult {
 }
 
 /**
- * Replaces every row with the demo data set: the platform tenant, one clinic with data in
- * every state, one clinic that walks through the clinical workflow (branches, encounters,
- * documents, files) and one clinic per plan and subscription state. All dates hang from `now`.
+ * Replaces every row with the demo data set: the platform account and Los Arrayanes, including
+ * its clinical workflow (branches, encounters, documents and files). All dates hang from `now`.
  * Patient files are seeded only when a `storage` is given for their bytes.
  */
 export async function seedDatabase(
@@ -212,9 +249,7 @@ export async function seedDatabase(
     nextPaymentReference: () => `TRF-DEMO-${String(++paymentReferences).padStart(4, '0')}`,
   };
 
-  await seedMainClinic(ctx);
   await seedClinicalWorkflow(ctx);
-  await seedTenantStates(ctx);
 
   // The rows above are written as plain text; with a key configured they are stored as the
   // API stores them, so the demo data is readable by the API and nothing else.
@@ -253,9 +288,7 @@ function printSummary({ logins, highlights, encrypted }: SeedResult) {
 
 async function main() {
   await import('dotenv/config');
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('The demo seed deletes every row; it does not run with NODE_ENV=production');
-  }
+  assertDemoSeedTarget(process.env.DATABASE_URL, process.env.NODE_ENV);
 
   const prisma = new PrismaClient();
   try {

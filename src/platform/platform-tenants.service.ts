@@ -4,7 +4,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PlanType, Prisma, SubscriptionStatus, TenantType, UserRole } from '@prisma/client';
+import {
+  PlanType,
+  Prisma,
+  SubscriptionStatus,
+  TenantBusinessKind,
+  TenantType,
+  UserRole,
+} from '@prisma/client';
 import { AuthService } from '../auth/auth.service';
 import {
   SECTION_CATALOG,
@@ -31,6 +38,7 @@ export interface PlatformTenantRow {
   id: string;
   name: string;
   tenantType: TenantType;
+  businessKind: TenantBusinessKind;
   isActive: boolean;
   createdAt: Date;
   master: { firstName: string; lastName: string; email: string } | null;
@@ -52,6 +60,7 @@ export interface PlatformTenantDetail {
     phone: string | null;
     address: string | null;
     tenantType: TenantType;
+    businessKind: TenantBusinessKind;
     isActive: boolean;
     createdAt: Date;
   };
@@ -102,11 +111,18 @@ export class PlatformTenantsService {
   ) {}
 
   async create(dto: CreatePlatformTenantDto, actorId: string): Promise<PlatformTenantDetail> {
+    const businessKind = dto.businessKind ?? TenantBusinessKind.MEDICAL;
     const specialtyCodes = normalizeSpecialtyCodes(dto.specialtyCodes);
-    if (specialtyCodes.length === 0) {
+    if (businessKind === TenantBusinessKind.MEDICAL && specialtyCodes.length === 0) {
       throw new BadRequestException({
         code: 'SPECIALTY_SELECTION_REQUIRED',
         message: 'Selecciona al menos una especialidad.',
+      });
+    }
+    if (businessKind === TenantBusinessKind.AESTHETIC_STUDIO && specialtyCodes.length > 0) {
+      throw new BadRequestException({
+        code: 'SPECIALTY_BUSINESS_KIND_MISMATCH',
+        message: 'Un estudio estético no puede seleccionar especialidades médicas.',
       });
     }
     if (specialtyCodes.length !== dto.specialtyCodes.length) {
@@ -123,7 +139,9 @@ export class PlatformTenantsService {
       });
     }
     const enabledSections = new Set<string>(
-      dto.sections ? validateSections(dto.sections) : defaultSections(dto.planType, dto.tenantType),
+      dto.sections
+        ? validateSections(dto.sections, businessKind)
+        : defaultSections(dto.planType, dto.tenantType, businessKind),
     );
 
     const masterEmail = dto.masterEmail.trim().toLowerCase();
@@ -148,6 +166,7 @@ export class PlatformTenantsService {
                 phone: dto.phone?.trim(),
                 address: dto.address?.trim(),
                 tenantType: dto.tenantType,
+                businessKind,
                 onboardingCompleted: true,
               },
               select: { id: true },
@@ -220,7 +239,9 @@ export class PlatformTenantsService {
               })),
             });
 
-            const specialties = await this.catalog.resolveActiveCodes(specialtyCodes, tx);
+            const specialties = specialtyCodes.length
+              ? await this.catalog.resolveActiveCodes(specialtyCodes, tx)
+              : [];
             await tx.user.create({
               data: {
                 tenantId: tenant.id,
@@ -237,11 +258,13 @@ export class PlatformTenantsService {
               },
               select: { id: true },
             });
-            await this.tenantSpecialties.applySelection(tx, {
-              tenantId: tenant.id,
-              subscription,
-              specialties,
-            });
+            if (businessKind === TenantBusinessKind.MEDICAL) {
+              await this.tenantSpecialties.applySelection(tx, {
+                tenantId: tenant.id,
+                subscription,
+                specialties,
+              });
+            }
             return this.loadDetail(tx, tenant.id);
           },
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -300,6 +323,7 @@ export class PlatformTenantsService {
           id: true,
           name: true,
           tenantType: true,
+          businessKind: true,
           isActive: true,
           createdAt: true,
           subscription: {
@@ -327,6 +351,7 @@ export class PlatformTenantsService {
         id: row.id,
         name: row.name,
         tenantType: row.tenantType,
+        businessKind: row.businessKind,
         isActive: row.isActive,
         createdAt: row.createdAt,
         master: row.users[0] ?? null,
@@ -440,13 +465,18 @@ export class PlatformTenantsService {
     sections: string[],
     actorId: string,
   ): Promise<PlatformTenantDetail> {
-    const enabled = new Set<string>(validateSections(sections));
+    const target = await this.prisma.tenant.findFirst({
+      where: { id: tenantId, isPlatform: false },
+      select: { businessKind: true },
+    });
+    if (!target) throw new NotFoundException('Consultorio no encontrado');
+    const enabled = new Set<string>(validateSections(sections, target.businessKind));
     const inCatalogOrder = (keys: Set<string>) =>
       SECTION_CATALOG.map(({ key }) => key).filter((key) => keys.has(key));
     return this.prisma.$transaction(async (tx) => {
       const tenant = await tx.tenant.findFirst({
         where: { id: tenantId, isPlatform: false },
-        select: { id: true },
+        select: { id: true, businessKind: true },
       });
       if (!tenant) throw new NotFoundException('Consultorio no encontrado');
       const previous = await tx.tenantModule.findMany({
@@ -531,13 +561,30 @@ export class PlatformTenantsService {
 
   getSectionCatalog(): {
     sections: SectionDefinition[];
-    defaults: { planType: PlanType; tenantType: TenantType; sections: SectionKey[] }[];
+    defaults: {
+      planType: PlanType;
+      tenantType: TenantType;
+      businessKind: TenantBusinessKind;
+      sections: SectionKey[];
+    }[];
   } {
-    const defaults: { planType: PlanType; tenantType: TenantType; sections: SectionKey[] }[] = [];
+    const defaults: {
+      planType: PlanType;
+      tenantType: TenantType;
+      businessKind: TenantBusinessKind;
+      sections: SectionKey[];
+    }[] = [];
     for (const planType of Object.values(PlanType)) {
       for (const tenantType of Object.values(TenantType)) {
         if (isPlanAllowedForTenantType(planType, tenantType)) {
-          defaults.push({ planType, tenantType, sections: defaultSections(planType, tenantType) });
+          for (const businessKind of Object.values(TenantBusinessKind)) {
+            defaults.push({
+              planType,
+              tenantType,
+              businessKind,
+              sections: defaultSections(planType, tenantType, businessKind),
+            });
+          }
         }
       }
     }
@@ -557,6 +604,7 @@ export class PlatformTenantsService {
         phone: true,
         address: true,
         tenantType: true,
+        businessKind: true,
         isActive: true,
         createdAt: true,
         subscription: true,
@@ -589,6 +637,7 @@ export class PlatformTenantsService {
         phone: row.phone,
         address: row.address,
         tenantType: row.tenantType,
+        businessKind: row.businessKind,
         isActive: row.isActive,
         createdAt: row.createdAt,
       },

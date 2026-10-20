@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { PlanType, TenantType } from '@prisma/client';
+import { PlanType, TenantBusinessKind, TenantType } from '@prisma/client';
 import { getPlanIncludedModules } from '../../subscription/subscription-pricing';
 
 export const SECTION_KEYS = [
@@ -11,6 +11,7 @@ export const SECTION_KEYS = [
   'core.billing',
   'core.team',
   'core.storage',
+  'core.aesthetics',
 ] as const;
 
 export type SectionKey = (typeof SECTION_KEYS)[number];
@@ -30,7 +31,17 @@ export const SECTION_CATALOG: readonly SectionDefinition[] = [
   { key: 'core.billing', name: 'Facturación', requires: [] },
   { key: 'core.team', name: 'Equipo', requires: [] },
   { key: 'core.storage', name: 'Almacenamiento', requires: [] },
+  { key: 'core.aesthetics', name: 'Estética', requires: [] },
 ];
+
+export function isSectionAllowedForBusinessKind(
+  key: SectionKey,
+  businessKind: TenantBusinessKind,
+): boolean {
+  return businessKind === TenantBusinessKind.AESTHETIC_STUDIO
+    ? key === 'core.team' || key === 'core.aesthetics'
+    : key !== 'core.aesthetics';
+}
 
 const PERSONAL_PLANS: readonly PlanType[] = ['PERSONAL_BASIC', 'PERSONAL_PRO'];
 const CLINIC_PLANS: readonly PlanType[] = ['CLINIC_BASIC', 'CLINIC_PRO', 'CLINIC_ENTERPRISE'];
@@ -39,9 +50,14 @@ export function isSectionKey(value: string): value is SectionKey {
   return (SECTION_KEYS as readonly string[]).includes(value);
 }
 
-export function defaultSections(planType: PlanType, tenantType: TenantType): SectionKey[] {
+export function defaultSections(
+  planType: PlanType,
+  tenantType: TenantType,
+  businessKind: TenantBusinessKind = TenantBusinessKind.MEDICAL,
+): SectionKey[] {
   const includesTasks = (getPlanIncludedModules(planType) as string[]).includes('tasks');
   return SECTION_KEYS.filter((key) => {
+    if (!isSectionAllowedForBusinessKind(key, businessKind)) return false;
     if (key === 'core.tasks') return includesTasks;
     if (key === 'core.team') return tenantType === 'CLINIC';
     return true;
@@ -49,7 +65,10 @@ export function defaultSections(planType: PlanType, tenantType: TenantType): Sec
 }
 
 /** Deduplicates; throws BadRequestException SECTION_UNKNOWN { section } or SECTION_DEPENDENCY { section, requires }. */
-export function validateSections(keys: string[]): SectionKey[] {
+export function validateSections(
+  keys: string[],
+  businessKind: TenantBusinessKind = TenantBusinessKind.MEDICAL,
+): SectionKey[] {
   const unique = [...new Set(keys)];
   for (const key of unique) {
     if (!isSectionKey(key)) {
@@ -57,6 +76,16 @@ export function validateSections(keys: string[]): SectionKey[] {
         statusCode: 400,
         code: 'SECTION_UNKNOWN',
         message: `Unknown section: ${key}`,
+        section: key,
+      });
+    }
+  }
+  for (const key of unique as SectionKey[]) {
+    if (!isSectionAllowedForBusinessKind(key, businessKind)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'SECTION_BUSINESS_KIND_MISMATCH',
+        message: `La sección ${key} no corresponde al tipo de negocio.`,
         section: key,
       });
     }

@@ -14,8 +14,8 @@ import {
 } from '../module-builders';
 
 /**
- * Specialties whose professionals may issue prescriptions. Only DENTISTRY is in the catalog
- * today; the medical codes are listed so they work as soon as they are added to it.
+ * Specialties whose professionals may issue prescriptions. DENTISTRY and GENERAL_MEDICINE are
+ * in the catalog; other medical codes work as soon as they are added to it.
  */
 export const PRESCRIBER_SPECIALTY_CODES = [
   'DENTISTRY',

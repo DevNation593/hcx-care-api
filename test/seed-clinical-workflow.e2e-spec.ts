@@ -84,6 +84,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       'odonto',
       'nutri',
       'fisio',
+      'medicina',
       'recepcion',
       'asistente',
     ]) {
@@ -129,7 +130,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
 
     expect(response.body).toHaveLength(3);
     expect(branch('Sede principal').professionalIds.sort()).toEqual(
-      [users.psic, users.fisio].sort(),
+      [users.psic, users.fisio, users.medicina].sort(),
     );
     expect(branch('Sede Norte').professionalIds.sort()).toEqual([users.odonto, users.fisio].sort());
     expect(branch('Sede Valle')).toMatchObject({ isActive: false, professionalIds: [] });

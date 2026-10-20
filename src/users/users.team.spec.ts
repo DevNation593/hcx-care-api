@@ -87,7 +87,13 @@ describe('UsersService clinic team control', () => {
         ),
       },
       appointment: { count: jest.fn().mockResolvedValue(0) },
+      aestheticBooking: { findFirst: jest.fn().mockResolvedValue(null) },
       user: {
+        count: jest.fn(
+          async () =>
+            users.filter((u) => u.tenantId === 'tenant-1' && u.role === 'PROFESIONAL' && u.isActive)
+              .length,
+        ),
         findUnique: jest.fn(
           async ({ where }) =>
             users.find(
@@ -182,6 +188,50 @@ describe('UsersService clinic team control', () => {
   });
 
   it.each([
+    ['deactivation', { isActive: false }],
+    ['role change', { role: 'ASISTENTE' }],
+  ])('keeps a studio professional assigned to future bookings during %s', async (_label, input) => {
+    tenant.businessKind = 'AESTHETIC_STUDIO';
+    const person = seed({ role: 'PROFESIONAL' });
+    db.aestheticBooking.findFirst.mockResolvedValue({ id: 'booking-1' });
+
+    await expect(
+      service.update('tenant-1', person.id, input as any, 'master-1'),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'AESTHETIC_STAFF_IN_USE' },
+    });
+    expect(db.aestheticBooking.findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant-1',
+        staffId: person.id,
+        status: 'SCHEDULED',
+        endAt: { gt: expect.any(Date) },
+      },
+      select: { id: true },
+    });
+    expect(person).toMatchObject({ role: 'PROFESIONAL', isActive: true });
+  });
+
+  it('blocks deactivation during a studio booking that already started', async () => {
+    tenant.businessKind = 'AESTHETIC_STUDIO';
+    const person = seed({ role: 'PROFESIONAL' });
+    const startedAt = new Date(Date.now() - 30 * 60_000);
+    const endsAt = new Date(Date.now() + 30 * 60_000);
+    db.aestheticBooking.findFirst.mockImplementation(async ({ where }) =>
+      where.endAt?.gt > startedAt && where.endAt?.gt < endsAt
+        ? { id: 'booking-in-progress' }
+        : null,
+    );
+
+    await expect(service.deactivate('tenant-1', person.id, 'master-1')).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'AESTHETIC_STAFF_IN_USE' },
+    });
+    expect(person.isActive).toBe(true);
+  });
+
+  it.each([
     ['PERSONAL', 'TRIALING'],
     ['CLINIC', 'CANCELED'],
     ['CLINIC', 'PAST_DUE'],
@@ -235,6 +285,27 @@ describe('UsersService clinic team control', () => {
         'admin-1',
       ),
     ).rejects.toMatchObject({ response: { code: 'PROFESSIONAL_PROFILE_NOT_ALLOWED' } });
+  });
+
+  it('creates an aesthetic professional without a medical profile and counts a plan seat', async () => {
+    tenant.businessKind = 'AESTHETIC_STUDIO';
+    const result = await service.createForTenant(
+      'tenant-1',
+      member({ role: 'PROFESIONAL' }) as any,
+      'admin-1',
+    );
+    expect(result.role).toBe('PROFESIONAL');
+    expect(result.professionalProfile).toBeNull();
+    expect(subscription.seatsPsychologistsUsed).toBe(1);
+  });
+
+  it('keeps the studio professional seat limit without a medical profile', async () => {
+    tenant.businessKind = 'AESTHETIC_STUDIO';
+    seed({ role: 'PROFESIONAL' });
+    await expect(
+      service.createForTenant('tenant-1', member({ role: 'PROFESIONAL' }) as any, 'admin-1'),
+    ).rejects.toMatchObject({ response: { code: 'PROFESSIONAL_SEAT_LIMIT_REACHED' } });
+    expect(users).toHaveLength(1);
   });
 
   it('allows an assistant without a seat and a professional with one mirrored specialty', async () => {
