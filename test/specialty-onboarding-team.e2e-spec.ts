@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module';
 import { createPlatformAdmin } from '../prisma/create-platform-admin';
 import { PlatformTenantsService } from '../src/platform/platform-tenants.service';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { SECTION_KEYS } from '../src/common/sections/section-catalog';
 import { TenantSpecialtiesService } from '../src/specialties/tenant-specialties.service';
 import { assertSpecialtyStageDatabaseSafety } from './helpers/assert-e2e-database';
 
@@ -129,7 +130,10 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
     expect(created.body.specialties.map((item: { code: string }) => item.code)).toEqual([
       'PSYCHOLOGY',
     ]);
-    expect(created.body.sections).toHaveLength(8);
+    expect(created.body.sections).toHaveLength(SECTION_KEYS.length);
+    expect(created.body.sections).toContainEqual(
+      expect.objectContaining({ key: 'core.aesthetics', enabled: false }),
+    );
     await clearTemporaryPassword(adminId);
 
     // Login deliberately uses the normalized value returned by the platform panel.
