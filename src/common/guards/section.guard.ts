@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { PLATFORM_ROUTE_KEY } from '../decorators/platform-route.decorator';
 import { REQUIRE_SECTION_KEY } from '../decorators/require-section.decorator';
-import { SectionKey } from '../sections/section-catalog';
+import { SectionKey, isSectionAllowedForBusinessKind } from '../sections/section-catalog';
 
 @Injectable()
 export class SectionGuard implements CanActivate {
@@ -41,6 +41,18 @@ export class SectionGuard implements CanActivate {
         statusCode: 403,
         code: 'SECTION_NOT_ENABLED',
         message: 'Esta sección no está habilitada para tu consultorio.',
+        section,
+      });
+    }
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { businessKind: true },
+    });
+    if (!tenant || !isSectionAllowedForBusinessKind(section, tenant.businessKind)) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'SECTION_BUSINESS_KIND_MISMATCH',
+        message: 'Esta sección no corresponde al tipo de negocio.',
         section,
       });
     }

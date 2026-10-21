@@ -1,5 +1,8 @@
-import { TenantType } from '@prisma/client';
-import { SECTION_KEYS } from '../../src/common/sections/section-catalog';
+import { TenantBusinessKind, TenantType } from '@prisma/client';
+import {
+  isSectionAllowedForBusinessKind,
+  SECTION_KEYS,
+} from '../../src/common/sections/section-catalog';
 import { PlatformTenantsService } from '../../src/platform/platform-tenants.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
 
@@ -32,7 +35,9 @@ export async function createTestTenant(
       temporaryPassword: TEST_PASSWORD,
       planType: 'TRIAL',
       specialtyCodes: ['PSYCHOLOGY'],
-      sections: [...SECTION_KEYS],
+      sections: SECTION_KEYS.filter((key) =>
+        isSectionAllowedForBusinessKind(key, TenantBusinessKind.MEDICAL),
+      ),
     },
     'e2e-setup',
   );

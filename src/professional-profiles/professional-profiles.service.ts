@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, UnprocessableEntityException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, TenantBusinessKind, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { isMasterRole, isProfessionalRole } from '../common/roles/role-compatibility';
 import { ProfessionalProfileInputDto } from './dto/professional-profile.dto';
@@ -47,6 +47,13 @@ export class ProfessionalProfilesService {
 
   async countActiveProfiles(tenantId: string, tx?: Prisma.TransactionClient): Promise<number> {
     const db: ProfileDb = tx ?? this.prisma;
+    const tenant = await db.tenant.findUnique({
+      where: { id: tenantId },
+      select: { businessKind: true },
+    });
+    if (tenant?.businessKind === TenantBusinessKind.AESTHETIC_STUDIO) {
+      return db.user.count({ where: { tenantId, role: UserRole.PROFESIONAL, isActive: true } });
+    }
     return db.professionalProfile.count({ where: { isActive: true, user: { tenantId } } });
   }
 

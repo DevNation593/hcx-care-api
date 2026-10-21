@@ -4,10 +4,11 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma, TenantType, UserRole } from '@prisma/client';
+import { Prisma, TenantBusinessKind, TenantType, UserRole } from '@prisma/client';
 import { CreateTenantUserDto, CreateUserDto, InviteUserDto, UpdateUserDto } from './dto/user.dto';
 import { AuthService } from '../auth/auth.service';
 import { isMasterRole, isProfessionalRole } from '../common/roles/role-compatibility';
@@ -157,7 +158,18 @@ export class UsersService {
     const email = dto.email.trim().toLowerCase();
     const profile = this.resolveProfileInput(dto);
     if (invitation && profile) profile.isActive = true;
-    this.profiles.validateRoleProfile(role, profile);
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { businessKind: true },
+    });
+    const aestheticStudio = tenant?.businessKind === TenantBusinessKind.AESTHETIC_STUDIO;
+    if (aestheticStudio && profile) {
+      throw new UnprocessableEntityException({
+        code: 'PROFESSIONAL_PROFILE_NOT_ALLOWED',
+        message: 'Un estudio estético no utiliza especialidades médicas.',
+      });
+    }
+    if (!aestheticStudio) this.profiles.validateRoleProfile(role, profile);
     const hashedPassword = await this.authService.hashPassword(
       password ?? Math.random().toString(36).slice(-12),
     );
@@ -175,6 +187,9 @@ export class UsersService {
           if (profile) {
             await this.profiles.assertSpecialtyEnabled(tenantId, profile.specialtyId, tx);
             if (profile.isActive) await this.checkSeatAvailability(tenantId, tx);
+          }
+          if (aestheticStudio && role === UserRole.PROFESIONAL && !invitation) {
+            await this.checkSeatAvailability(tenantId, tx);
           }
           const user = await tx.user.create({
             data: {
@@ -446,7 +461,37 @@ export class UsersService {
       (dto.role !== undefined && dto.role !== user.role) ||
       input !== undefined ||
       dto.professionalProfile !== undefined;
-    if (touchesRoleOrProfile) this.profiles.validateRoleProfile(nextRole, profile);
+    if (touchesRoleOrProfile) {
+      const tenant = await tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { businessKind: true },
+      });
+      if (tenant?.businessKind === TenantBusinessKind.AESTHETIC_STUDIO) {
+        if (profile) {
+          throw new UnprocessableEntityException({
+            code: 'PROFESSIONAL_PROFILE_NOT_ALLOWED',
+            message: 'Un estudio estético no utiliza especialidades médicas.',
+          });
+        }
+      } else {
+        this.profiles.validateRoleProfile(nextRole, profile);
+      }
+    }
+    const studio =
+      (
+        await tx.tenant.findUnique({
+          where: { id: tenantId },
+          select: { businessKind: true },
+        })
+      )?.businessKind === TenantBusinessKind.AESTHETIC_STUDIO;
+    if (
+      studio &&
+      nextRole === UserRole.PROFESIONAL &&
+      (dto.isActive ?? user.isActive) &&
+      !(user.role === UserRole.PROFESIONAL && user.isActive)
+    ) {
+      await this.checkSeatAvailability(tenantId, tx);
+    }
     const hadClinicalCapacity = user.isActive && current?.isActive === true;
     const willHaveClinicalCapacity =
       (dto.isActive ?? user.isActive) &&
@@ -455,6 +500,30 @@ export class UsersService {
     const losesClinicalCapacity = hadClinicalCapacity && !willHaveClinicalCapacity;
     if (losesClinicalCapacity) {
       await this.patientTeam.assertNoFutureAppointmentsForProfessional(tx, tenantId, userId);
+    }
+    const losesStudioCapacity =
+      studio &&
+      user.isActive &&
+      (isMasterRole(user.role) || isProfessionalRole(user.role)) &&
+      (!(dto.isActive ?? user.isActive) ||
+        !(isMasterRole(nextRole) || isProfessionalRole(nextRole)));
+    if (losesStudioCapacity) {
+      const futureBooking = await tx.aestheticBooking.findFirst({
+        where: {
+          tenantId,
+          staffId: userId,
+          status: 'SCHEDULED',
+          endAt: { gt: new Date() },
+        },
+        select: { id: true },
+      });
+      if (futureBooking) {
+        throw new ConflictException({
+          code: 'AESTHETIC_STAFF_IN_USE',
+          message:
+            'Reasigna o cancela las próximas citas de este profesional antes de desactivarlo.',
+        });
+      }
     }
     if (profile) {
       if (!current || profile.specialtyId !== current.specialtyId) {

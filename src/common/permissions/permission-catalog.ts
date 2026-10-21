@@ -1,4 +1,5 @@
 import { SetMetadata } from '@nestjs/common';
+import { TenantBusinessKind } from '@prisma/client';
 import { CanonicalRole, toCanonicalRole } from '../roles/role-compatibility';
 
 /** The default actions of each clinic role; the platform can override them per clinic. */
@@ -87,6 +88,59 @@ export const PERMISSION_CATALOG = [
     roles: ['MASTER'],
     grantable: ['PROFESIONAL', 'ASISTENTE'],
   },
+  {
+    key: 'aesthetics.view',
+    group: 'Estética',
+    label: 'Ver clientes, agenda y sesiones',
+    roles: ['MASTER', 'PROFESIONAL', 'ASISTENTE'],
+  },
+  {
+    key: 'aesthetics.clients.manage',
+    group: 'Estética',
+    label: 'Registrar y editar clientes',
+    roles: ['MASTER', 'PROFESIONAL', 'ASISTENTE'],
+  },
+  {
+    key: 'aesthetics.bookings.manage',
+    group: 'Estética',
+    label: 'Programar y modificar citas',
+    roles: ['MASTER', 'PROFESIONAL', 'ASISTENTE'],
+  },
+  {
+    key: 'aesthetics.services.manage',
+    group: 'Estética',
+    label: 'Gestionar servicios',
+    roles: ['MASTER'],
+    grantable: ['PROFESIONAL', 'ASISTENTE'],
+  },
+  {
+    key: 'aesthetics.sessions.manage',
+    group: 'Estética',
+    label: 'Registrar sesiones',
+    roles: ['MASTER', 'PROFESIONAL'],
+    grantable: ['ASISTENTE'],
+  },
+  {
+    key: 'aesthetics.consents.manage',
+    group: 'Estética',
+    label: 'Registrar consentimientos',
+    roles: ['MASTER', 'PROFESIONAL'],
+    grantable: ['ASISTENTE'],
+  },
+  {
+    key: 'aesthetics.photos.view',
+    group: 'Estética',
+    label: 'Ver y descargar fotos',
+    roles: ['MASTER', 'PROFESIONAL'],
+    grantable: ['ASISTENTE'],
+  },
+  {
+    key: 'aesthetics.photos.manage',
+    group: 'Estética',
+    label: 'Subir y retirar fotos',
+    roles: ['MASTER', 'PROFESIONAL'],
+    grantable: ['ASISTENTE'],
+  },
 ] as const satisfies readonly {
   key: string;
   group: string;
@@ -97,6 +151,15 @@ export const PERMISSION_CATALOG = [
 }[];
 
 export type Permission = (typeof PERMISSION_CATALOG)[number]['key'];
+
+export function isPermissionForBusinessKind(
+  permission: Permission,
+  businessKind: TenantBusinessKind,
+): boolean {
+  return (
+    permission.startsWith('aesthetics.') === (businessKind === TenantBusinessKind.AESTHETIC_STUDIO)
+  );
+}
 
 export const REQUIRE_PERMISSION_KEY = 'requirePermission';
 

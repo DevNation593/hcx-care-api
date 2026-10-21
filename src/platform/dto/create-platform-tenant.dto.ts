@@ -1,8 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { PlanType, TenantType } from '@prisma/client';
+import { PlanType, TenantBusinessKind, TenantType } from '@prisma/client';
 import { Transform } from 'class-transformer';
 import {
-  ArrayMinSize,
   IsArray,
   IsEmail,
   IsEnum,
@@ -46,6 +45,11 @@ export class CreatePlatformTenantDto {
   @ApiProperty({ enum: TenantType })
   @IsEnum(TenantType)
   tenantType: TenantType;
+
+  @ApiPropertyOptional({ enum: TenantBusinessKind, default: TenantBusinessKind.MEDICAL })
+  @IsOptional()
+  @IsEnum(TenantBusinessKind)
+  businessKind?: TenantBusinessKind;
 
   @ApiProperty()
   @Transform(trimText)
@@ -91,7 +95,6 @@ export class CreatePlatformTenantDto {
     Array.isArray(value) ? value.map((code) => trimCode({ value: code })) : value,
   )
   @IsArray()
-  @ArrayMinSize(1)
   @IsString({ each: true })
   @IsNotEmpty({ each: true })
   specialtyCodes: string[];

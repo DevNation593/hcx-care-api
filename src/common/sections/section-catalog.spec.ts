@@ -7,7 +7,29 @@ import {
 } from './section-catalog';
 
 describe('section catalog', () => {
-  it('names the eight sections', () => {
+  it('gives aesthetic studios their own section without clinical modules', () => {
+    const sections = (defaultSections as (...args: any[]) => string[])(
+      'CLINIC_PRO',
+      'CLINIC',
+      'AESTHETIC_STUDIO',
+    );
+    expect(sections).toEqual(['core.team', 'core.aesthetics']);
+  });
+
+  it('rejects medical sections in aesthetic studios and aesthetic sections in clinics', () => {
+    const validate = validateSections as (...args: any[]) => string[];
+    expect(() => validate(['core.specialties'], 'AESTHETIC_STUDIO')).toThrow(
+      expect.objectContaining({
+        response: expect.objectContaining({ code: 'SECTION_BUSINESS_KIND_MISMATCH' }),
+      }),
+    );
+    expect(() => validate(['core.aesthetics'], 'MEDICAL')).toThrow(
+      expect.objectContaining({
+        response: expect.objectContaining({ code: 'SECTION_BUSINESS_KIND_MISMATCH' }),
+      }),
+    );
+  });
+  it('names medical and aesthetic sections', () => {
     expect(SECTION_CATALOG.map((s) => s.name)).toEqual([
       'Calendario',
       'Pacientes',
@@ -17,6 +39,7 @@ describe('section catalog', () => {
       'Facturación',
       'Equipo',
       'Almacenamiento',
+      'Estética',
     ]);
   });
   it('preselects everything but tasks and team for a personal trial', () => {
@@ -32,7 +55,9 @@ describe('section catalog', () => {
   it('adds team for clinics and tasks for paid plans', () => {
     expect(defaultSections('TRIAL', 'CLINIC')).toContain('core.team');
     expect(defaultSections('TRIAL', 'CLINIC')).not.toContain('core.tasks');
-    expect(defaultSections('CLINIC_BASIC', 'CLINIC')).toEqual([...SECTION_KEYS]);
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC')).toEqual(
+      SECTION_KEYS.filter((key) => key !== 'core.aesthetics'),
+    );
     expect(defaultSections('PERSONAL_PRO', 'PERSONAL')).not.toContain('core.team');
   });
   it('rejects unknown keys', () => {

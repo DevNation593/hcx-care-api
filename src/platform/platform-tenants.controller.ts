@@ -1,4 +1,16 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
+import { TenantBusinessKind } from '@prisma/client';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ArrayMaxSize, IsArray, IsString } from 'class-validator';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
@@ -141,7 +153,10 @@ export class PlatformTenantsController {
     @Body() dto: UpdateTenantSpecialtiesDto,
     @CurrentUser() user: AuthUser,
   ) {
-    await this.tenants.findOne(tenantId);
+    const detail = await this.tenants.findOne(tenantId);
+    if (detail.tenant.businessKind === TenantBusinessKind.AESTHETIC_STUDIO) {
+      throw new BadRequestException('Un estudio estético no utiliza especialidades médicas.');
+    }
     return this.clinicModules.replace(tenantId, dto.specialtyCodes, user.userId);
   }
 
@@ -152,7 +167,10 @@ export class PlatformTenantsController {
     @Body() dto: UpdateModuleDto,
     @CurrentUser() user: AuthUser,
   ) {
-    await this.tenants.findOne(tenantId);
+    const detail = await this.tenants.findOne(tenantId);
+    if (detail.tenant.businessKind === TenantBusinessKind.AESTHETIC_STUDIO) {
+      throw new BadRequestException('Un estudio estético no utiliza módulos clínicos.');
+    }
     return this.clinicModules.updateModule(tenantId, moduleKey, dto.enabled, user.userId);
   }
 }

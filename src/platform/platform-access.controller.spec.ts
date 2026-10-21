@@ -20,6 +20,7 @@ describe('platform access routes', () => {
   const personal = { describe: jest.fn(), replace: jest.fn() };
   const modules = { replace: jest.fn(), updateModule: jest.fn() };
   const catalog = { listActive: jest.fn() };
+  const tenants = { findOne: jest.fn() };
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -27,7 +28,7 @@ describe('platform access routes', () => {
       providers: [
         {
           provide: PlatformTenantsService,
-          useValue: { findOne: jest.fn().mockResolvedValue({ tenant: { id: 'clinic-1' } }) },
+          useValue: tenants,
         },
         { provide: PlatformSubscriptionService, useValue: {} },
         { provide: PlatformRolePermissionsService, useValue: roles },
@@ -61,6 +62,7 @@ describe('platform access routes', () => {
     modules.replace.mockResolvedValue({ tenantId: 'clinic-1', specialties: [] });
     modules.updateModule.mockResolvedValue({ moduleKey: 'psychology.assessments', enabled: false });
     catalog.listActive.mockResolvedValue([{ code: 'PSYCHOLOGY', name: 'Psicología', modules: [] }]);
+    tenants.findOne.mockResolvedValue({ tenant: { id: 'clinic-1', businessKind: 'MEDICAL' } });
   });
 
   it('lets only the platform owner set a clinic role and denies the clinic master', async () => {
@@ -112,6 +114,24 @@ describe('platform access routes', () => {
       false,
       'owner-1',
     );
+  });
+
+  it('does not assign medical specialties or modules to an aesthetic studio', async () => {
+    tenants.findOne.mockResolvedValue({
+      tenant: { id: 'clinic-1', businessKind: 'AESTHETIC_STUDIO' },
+    });
+    await request(app.getHttpServer())
+      .put('/platform/tenants/clinic-1/specialties')
+      .set('x-test-role', 'ADMIN')
+      .send({ specialtyCodes: ['PSYCHOLOGY'] })
+      .expect(400);
+    await request(app.getHttpServer())
+      .patch('/platform/tenants/clinic-1/modules/psychology.assessments')
+      .set('x-test-role', 'ADMIN')
+      .send({ enabled: true })
+      .expect(400);
+    expect(modules.replace).not.toHaveBeenCalled();
+    expect(modules.updateModule).not.toHaveBeenCalled();
   });
 
   it('lists the specialty catalog for the platform panel', async () => {

@@ -109,7 +109,7 @@ describe('Platform admin panel (E2E)', () => {
         temporaryPassword,
         planType: 'TRIAL',
         specialtyCodes: ['PSYCHOLOGY'],
-        sections: SECTION_KEYS.filter((key) => key !== 'core.tasks'),
+        sections: SECTION_KEYS.filter((key) => key !== 'core.tasks' && key !== 'core.aesthetics'),
       })
       .expect(201);
 
@@ -117,7 +117,7 @@ describe('Platform admin panel (E2E)', () => {
     const sections = response.body.sections as { key: string; enabled: boolean }[];
     expect(sections).toHaveLength(SECTION_KEYS.length);
     expect(sections.find((section) => section.key === 'core.tasks')?.enabled).toBe(false);
-    expect(sections.filter((section) => section.enabled)).toHaveLength(SECTION_KEYS.length - 1);
+    expect(sections.filter((section) => section.enabled)).toHaveLength(SECTION_KEYS.length - 2);
     expect(response.body.master).toMatchObject({ email: masterEmail, mustChangePassword: true });
     expect(response.body.master.password).toBeUndefined();
   });
@@ -156,7 +156,7 @@ describe('Platform admin panel (E2E)', () => {
     await http()
       .put(api(`/platform/tenants/${tenantId}/sections`))
       .set(bearer(adminToken))
-      .send({ sections: [...SECTION_KEYS] })
+      .send({ sections: SECTION_KEYS.filter((key) => key !== 'core.aesthetics') })
       .expect(200);
 
     await http()
