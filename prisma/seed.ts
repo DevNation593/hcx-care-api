@@ -167,11 +167,37 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
       await tx.aestheticClient.deleteMany({ where: { tenantId: id } });
     });
   }
+  // The seed writes none of what follows, but a database in use has it, and it restricts
+  // deleting the encounters, records, users and branches below.
+  // Electronic invoicing: events and replacements before their requests.
+  await db.invoiceRequestEvent.deleteMany();
+  await db.invoiceRequest.deleteMany();
+  await db.invoicingRef.deleteMany();
+  await db.branchEmissionPoint.deleteMany();
+  await db.invoicingConnection.deleteMany();
+  // Payments restrict deleting their order and cash register; items restrict their session.
+  await db.payment.deleteMany();
+  await db.orderItem.deleteMany();
+  await db.order.deleteMany();
+  await db.cashRegisterSession.deleteMany();
+  await db.patientBillingProfile.deleteMany();
+  // Consent evidence restricts deleting its document.
+  await db.consentEvent.deleteMany();
+  await db.consentSignature.deleteMany();
+  // Sessions restrict deleting their encounter, record, version and consent document.
+  await db.treatmentSession.deleteMany();
+  await db.consentDocument.deleteMany();
+  // Versions restrict deleting their form definition and consent template version.
+  await db.treatmentVersion.deleteMany();
+  await db.treatment.deleteMany();
+  await db.consentTemplateVersion.deleteMany();
+  await db.consentTemplate.deleteMany();
   // Files restrict deleting their uploader, so they go before the users.
   await db.patientFile.deleteMany();
   await db.documentTemplate.deleteMany();
   await db.professionalBranch.deleteMany();
   await db.specialtyRecord.deleteMany();
+  await db.formDefinitionVersion.deleteMany();
   await db.formDefinition.deleteMany();
   await db.encounter.deleteMany();
   await db.medication.deleteMany();
