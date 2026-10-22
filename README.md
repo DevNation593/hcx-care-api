@@ -75,8 +75,12 @@ After deploying the migration, apply it with `npx prisma migrate deploy`.
 - `npm run test:e2e`: e2e tests
 - `npm run prisma:generate`: Prisma client
 - `npm run prisma:migrate`: create/apply dev migrations
-- `npm run prisma:seed`: **deletes every row** of the database in `DATABASE_URL` and loads the
-  demo data set (one clinic per plan and subscription state); prints the demo logins when done
+- `npm run prisma:seed`: **deletes every row** of the database in `DATABASE_URL`, production
+  included, and loads the demos: the platform admin, Centro Médico Los Arrayanes and the aesthetic
+  studio Estudio Estético Aurora; prints the demo logins when done
+- `npm run platform:create-admin -- --email <email> --first-name <name> --last-name <surname>`:
+  creates a platform administrator. `--password` is optional; without it a password is generated
+  and printed once. Each flag can come from its `PLATFORM_ADMIN_*` variable instead
 
 ## Docker
 

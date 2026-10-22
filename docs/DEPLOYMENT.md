@@ -512,7 +512,7 @@ Steps:
 2. Stop the API.
 3. `npx prisma migrate deploy`. Migration `20261006000000_platform_admin_sections` stacks on `20261003000000`, `20261004000000` and `20261005000000`, which have never been applied either.
 4. Start the new API.
-5. `npm run platform:create-admin` with `PLATFORM_ADMIN_EMAIL`, `PLATFORM_ADMIN_PASSWORD`, `PLATFORM_ADMIN_FIRST_NAME` and `PLATFORM_ADMIN_LAST_NAME` set (see `.env.example`).
+5. `npm run platform:create-admin -- --email <email> --first-name <name> --last-name <surname>` (add `--password <password>`, or take the generated one it prints once). The `PLATFORM_ADMIN_*` variables of `.env.example` still work in place of the flags.
 6. `npm run prisma:verify-platform-sections`. Exit code 0 means nothing blocks the release.
 7. Deploy the web.
 
@@ -538,10 +538,15 @@ Deploy the B1 web together with or before the B1 API. The B1 API rejects the fie
 npm run prisma:generate
 ```
 
-### 3. (Optional) Seed Development Data
+### 3. (Optional) Load the Demo Data
+
+The seed **deletes every row** (and the stored clinical files and studio photos) of the database
+in `DATABASE_URL`, production included, and loads the demos: Centro Médico Los Arrayanes and
+Estudio Estético Aurora. It prints that database's host when it starts. Every account it creates,
+including `admin@plataforma.test`, uses the demo password; create the real platform administrator
+afterwards with `npm run platform:create-admin`, since the seed deletes it too.
 
 ```bash
-# Only for staging/development
 npm run prisma:seed
 ```
 

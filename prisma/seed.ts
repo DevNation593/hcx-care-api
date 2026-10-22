@@ -18,26 +18,32 @@ import {
   SeedLogin,
   SPECIALTY_MODULE_KEYS,
   SpecialtyCatalog,
+  withTenantContext,
 } from './seed-helpers';
+import { seedAestheticStudio } from './seed-aesthetic-studio';
 import { seedClinicalWorkflow } from './seed-clinical-workflow';
 
 export const DEMO_PASSWORD = 'Password123!';
 const PLATFORM_ADMIN_EMAIL = 'admin@plataforma.test';
 
-/** The demo seed deletes data, so its CLI entry point accepts only local PostgreSQL. */
-export function assertDemoSeedTarget(databaseUrl: string | undefined, nodeEnv: string | undefined) {
-  if (nodeEnv === 'production' || !databaseUrl) {
-    throw new Error('La seed demo solo se puede ejecutar en PostgreSQL local.');
-  }
-  let host: string;
+/**
+ * The demo seed runs on whatever PostgreSQL `DATABASE_URL` names, production included, to show
+ * the demos. Returns that database's host, so the run says which one it is about to empty.
+ */
+export function demoSeedTarget(databaseUrl: string | undefined): string {
+  let hostname = '';
   try {
-    host = new URL(databaseUrl).hostname;
+    const parsed = new URL(databaseUrl ?? '');
+    if (['postgres:', 'postgresql:'].includes(parsed.protocol)) {
+      hostname = parsed.hostname.toLowerCase();
+    }
   } catch {
-    throw new Error('La seed demo requiere una URL local válida de PostgreSQL.');
+    hostname = '';
   }
-  if (!['localhost', '127.0.0.1', '[::1]'].includes(host)) {
-    throw new Error('La seed demo solo se puede ejecutar en PostgreSQL local.');
+  if (!hostname) {
+    throw new Error('El seed de demostración necesita un DATABASE_URL de PostgreSQL válido');
   }
+  return hostname;
 }
 
 async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog> {
@@ -141,20 +147,57 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
     // The rows are about to go: their bytes would be left behind with nothing pointing at them.
     const files = await db.patientFile.findMany({ select: { storageKey: true } });
     await Promise.all(files.map(({ storageKey }) => storage.remove(storageKey)));
-    const aestheticPhotos = await db.aestheticPhoto.findMany({ select: { storageKey: true } });
-    await Promise.all(aestheticPhotos.map(({ storageKey }) => storage.remove(storageKey)));
   }
-  await db.aestheticPhoto.deleteMany();
-  await db.aestheticConsent.deleteMany();
-  await db.aestheticSession.deleteMany();
-  await db.aestheticBooking.deleteMany();
-  await db.aestheticService.deleteMany();
-  await db.aestheticClient.deleteMany();
+  // The aesthetic tables only show their rows inside the context of the tenant that owns them,
+  // and they restrict deleting the users they point to.
+  for (const { id } of await db.tenant.findMany({ select: { id: true } })) {
+    await withTenantContext(db, id, async (tx) => {
+      if (storage) {
+        const photos = await tx.aestheticPhoto.findMany({
+          where: { tenantId: id },
+          select: { storageKey: true },
+        });
+        await Promise.all(photos.map(({ storageKey }) => storage.remove(storageKey)));
+      }
+      await tx.aestheticPhoto.deleteMany({ where: { tenantId: id } });
+      await tx.aestheticConsent.deleteMany({ where: { tenantId: id } });
+      await tx.aestheticSession.deleteMany({ where: { tenantId: id } });
+      await tx.aestheticBooking.deleteMany({ where: { tenantId: id } });
+      await tx.aestheticService.deleteMany({ where: { tenantId: id } });
+      await tx.aestheticClient.deleteMany({ where: { tenantId: id } });
+    });
+  }
+  // The seed writes none of what follows, but a database in use has it, and it restricts
+  // deleting the encounters, records, users and branches below.
+  // Electronic invoicing: events and replacements before their requests.
+  await db.invoiceRequestEvent.deleteMany();
+  await db.invoiceRequest.deleteMany();
+  await db.invoicingRef.deleteMany();
+  await db.branchEmissionPoint.deleteMany();
+  await db.invoicingConnection.deleteMany();
+  // Payments restrict deleting their order and cash register; items restrict their session.
+  await db.payment.deleteMany();
+  await db.orderItem.deleteMany();
+  await db.order.deleteMany();
+  await db.cashRegisterSession.deleteMany();
+  await db.patientBillingProfile.deleteMany();
+  // Consent evidence restricts deleting its document.
+  await db.consentEvent.deleteMany();
+  await db.consentSignature.deleteMany();
+  // Sessions restrict deleting their encounter, record, version and consent document.
+  await db.treatmentSession.deleteMany();
+  await db.consentDocument.deleteMany();
+  // Versions restrict deleting their form definition and consent template version.
+  await db.treatmentVersion.deleteMany();
+  await db.treatment.deleteMany();
+  await db.consentTemplateVersion.deleteMany();
+  await db.consentTemplate.deleteMany();
   // Files restrict deleting their uploader, so they go before the users.
   await db.patientFile.deleteMany();
   await db.documentTemplate.deleteMany();
   await db.professionalBranch.deleteMany();
   await db.specialtyRecord.deleteMany();
+  await db.formDefinitionVersion.deleteMany();
   await db.formDefinition.deleteMany();
   await db.encounter.deleteMany();
   await db.medication.deleteMany();
@@ -205,9 +248,10 @@ export interface SeedResult {
 }
 
 /**
- * Replaces every row with the demo data set: the platform account and Los Arrayanes, including
- * its clinical workflow (branches, encounters, documents and files). All dates hang from `now`.
- * Patient files are seeded only when a `storage` is given for their bytes.
+ * Replaces every row with the demo data set: the platform account, Los Arrayanes with its
+ * clinical workflow (branches, encounters, documents and files) and the aesthetic studio Aurora.
+ * All dates hang from `now`. Patient files and studio photos are seeded only when a `storage` is
+ * given for their bytes.
  */
 export async function seedDatabase(
   db: PrismaClient,
@@ -250,6 +294,8 @@ export async function seedDatabase(
   };
 
   await seedClinicalWorkflow(ctx);
+  // Writes its clinical text and photos already encrypted: the step below covers medical tables.
+  await seedAestheticStudio(ctx);
 
   // The rows above are written as plain text; with a key configured they are stored as the
   // API stores them, so the demo data is readable by the API and nothing else.
@@ -288,11 +334,11 @@ function printSummary({ logins, highlights, encrypted }: SeedResult) {
 
 async function main() {
   await import('dotenv/config');
-  assertDemoSeedTarget(process.env.DATABASE_URL, process.env.NODE_ENV);
+  const host = demoSeedTarget(process.env.DATABASE_URL);
 
   const prisma = new PrismaClient();
   try {
-    console.log('🌱 Starting deterministic demo seed...');
+    console.log(`🌱 Starting deterministic demo seed on ${host} (every row is replaced)...`);
     const result = await seedDatabase(prisma, {
       cipher: new ClinicalCipher(parseClinicalKeys(process.env.CLINICAL_ENCRYPTION_KEYS)),
       // The same place the API reads the clinical files from.

@@ -418,14 +418,96 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
     expect(entries.filter((entry: { type: string }) => entry.type === 'ENCOUNTER')).toHaveLength(2);
   });
 
+  describe('aesthetic studio', () => {
+    const studio: Record<string, string> = {};
+    const studioBase = () => `/api/v1/tenants/${studio.tenantId}/aesthetics`;
+
+    beforeAll(async () => {
+      for (const account of ['titular', 'recepcion']) {
+        const response = await request(server())
+          .post('/api/v1/auth/login')
+          .send({ email: `${account}.aurora@psic.com`, password: DEMO_PASSWORD })
+          .expect(200);
+        studio[account] = response.body.accessToken;
+        studio.tenantId = response.body.user.tenantId;
+      }
+    });
+    const asStudio = (who: string) => ({ Authorization: `Bearer ${studio[who]}` });
+
+    it('reads back the encrypted notes and consents, and blocks the medical sections', async () => {
+      const sessions = await request(server())
+        .get(`${studioBase()}/sessions`)
+        .set(asStudio('titular'))
+        .expect(200);
+      expect(sessions.body).toHaveLength(6);
+      expect(sessions.body.map((s: { notes: string | null }) => s.notes)).toContain(
+        'Sesión 1 de 6. Fluencia 18 J/cm². Sin reacciones adversas.',
+      );
+      const consents = await request(server())
+        .get(`${studioBase()}/consents`)
+        .set(asStudio('recepcion'))
+        .expect(200);
+      expect(consents.body.map((c: { signerName: string }) => c.signerName).sort()).toEqual([
+        'Gabriela Suárez',
+        'Valentina Ríos',
+      ]);
+
+      await request(server())
+        .get(`/api/v1/tenants/${studio.tenantId}/patients`)
+        .set(asStudio('titular'))
+        .expect(403);
+    });
+
+    it('downloads the photos to who may see them, and not to the front desk', async () => {
+      const sessions = await request(server())
+        .get(`${studioBase()}/sessions`)
+        .set(asStudio('titular'))
+        .expect(200);
+      const peeling = sessions.body.find(
+        (s: { client: { firstName: string }; completedAt: string | null }) =>
+          s.client.firstName === 'Valentina' && s.completedAt,
+      );
+      const photos = await request(server())
+        .get(`${studioBase()}/sessions/${peeling.id}/photos`)
+        .set(asStudio('titular'))
+        .expect(200);
+      expect(photos.body.map((p: { phase: string }) => p.phase)).toEqual(['BEFORE', 'AFTER']);
+
+      const file = await binary(
+        request(server())
+          .get(`${studioBase()}/sessions/${peeling.id}/photos/${photos.body[0].id}/download`)
+          .set(asStudio('titular')),
+      ).expect(200);
+      expect(file.body.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+      await request(server())
+        .get(`${studioBase()}/sessions/${peeling.id}/photos`)
+        .set(asStudio('recepcion'))
+        .expect(403);
+    });
+
+    it('asks for the consent before closing the session in progress', async () => {
+      const sessions = await request(server())
+        .get(`${studioBase()}/sessions`)
+        .set(asStudio('titular'))
+        .expect(200);
+      const open = sessions.body.find((s: { completedAt: string | null }) => !s.completedAt);
+      await request(server())
+        .post(`${studioBase()}/sessions/${open.id}/complete`)
+        .set(asStudio('titular'))
+        .send({})
+        .expect(409);
+    });
+  });
+
   it('can be run again: it replaces the rows and leaves no file behind', async () => {
     const before = storedFiles(storageRoot).length;
-    expect(before).toBe(await prisma.patientFile.count());
+    expect(before).toBe((await prisma.patientFile.count()) + 3);
 
     await seed();
 
     expect(storedFiles(storageRoot)).toHaveLength(before);
-    expect(await prisma.patientFile.count()).toBe(before);
     expect(await prisma.tenant.count({ where: { name: 'Centro Médico Los Arrayanes' } })).toBe(1);
+    expect(await prisma.tenant.count({ where: { name: 'Estudio Estético Aurora' } })).toBe(1);
   });
 });

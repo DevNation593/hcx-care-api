@@ -15,7 +15,7 @@ La aplicación presenta una ruta `Estética` con vistas para las seis funciones 
 
 ## Límites
 
-- No se ejecutará `prisma:seed` contra la base de producción: borra todas las cuentas y registros antes de recrear la demo.
+- `prisma:seed` corre sobre la base de `DATABASE_URL`, producción incluida, para mostrar las demos (decisión del 2026-10-21): borra todas las cuentas y registros antes de recrearlas. Además de Los Arrayanes crea el estudio estético Aurora.
 - La migración de esquema será aditiva y dejará todos los tenants actuales como `MEDICAL`.
 - La foto y su metadata no serán públicas ni contendrán claves de Storage en las respuestas.
 - El registro de aceptación indica quién la registró y cuándo. No pretende sustituir una firma electrónica avanzada.
