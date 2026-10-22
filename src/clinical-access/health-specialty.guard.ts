@@ -16,11 +16,8 @@ export class HealthSpecialtyGuard implements CanActivate {
     if (!user?.userId) return true;
 
     const profile = await this.prisma.professionalProfile.findFirst({
-      where: {
-        userId: user.userId,
-        isActive: true,
-        user: { tenantId: user.tenantId, isActive: true },
-      },
+      // Active or not: a deactivated aesthetic profile still is not health care.
+      where: { userId: user.userId, user: { tenantId: user.tenantId, isActive: true } },
       select: { specialty: { select: { code: true } } },
     });
     if (profile && !isHealthSpecialty(profile.specialty?.code)) {

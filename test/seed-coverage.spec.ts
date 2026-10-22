@@ -217,6 +217,14 @@ describe('demo seed', () => {
       expect(of('tenantSubscription')[0].storageUsedBytes).toBe(BigInt(used));
     });
 
+    it('gives its form records verification codes the public page can find', () => {
+      const codes = of('specialtyRecord').map((record) => record.verificationCode);
+      expect(codes.length).toBeGreaterThan(0);
+      for (const code of codes) expect(normalizeVerificationCode(code)).toBe(code);
+      const everyCode = rows('specialtyRecord').map((record) => record.verificationCode);
+      expect(new Set(everyCode).size).toBe(everyCode.length);
+    });
+
     it('writes no health-only module record', () => {
       const healthOnly = new Set(
         CLINICAL_MODULES.filter((m) => m.healthOnly).map((m) => m.moduleKey),

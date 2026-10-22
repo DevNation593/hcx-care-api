@@ -68,6 +68,7 @@ export class NextSessionPlansController {
   @ApiOperation({ summary: 'Update session plan for patient' })
   @ApiResponse({ status: 200, description: 'Plan updated' })
   @RequirePermission('clinical_records.update')
+  @UseGuards(HealthSpecialtyGuard)
   async update(
     @Param('tenantId') tenantId: string,
     @Param('patientId') patientId: string,
@@ -82,6 +83,7 @@ export class NextSessionPlansController {
   @ApiOperation({ summary: 'Delete session plan' })
   @ApiResponse({ status: 200, description: 'Plan deleted' })
   @RequirePermission('clinical_records.update')
+  @UseGuards(HealthSpecialtyGuard)
   async remove(@Param('tenantId') tenantId: string, @Param('patientId') patientId: string) {
     return this.nextSessionPlansService.delete(tenantId, patientId);
   }

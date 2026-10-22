@@ -26,8 +26,14 @@ describe('HealthSpecialtyGuard', () => {
       status: 403,
       response: { code: 'HEALTH_SPECIALTY_REQUIRED' },
     });
+  });
+
+  it('looks at the own profile even when it was deactivated', async () => {
+    withProfile('AESTHETICS');
+    await expect(guard.canActivate(context())).rejects.toMatchObject({ status: 403 });
+    // An inactive aesthetic profile must not slip through on routes without ClinicalProfileGuard.
     expect(prisma.professionalProfile.findFirst).toHaveBeenCalledWith({
-      where: { userId: 'user-1', isActive: true, user: { tenantId: 'tenant-1', isActive: true } },
+      where: { userId: 'user-1', user: { tenantId: 'tenant-1', isActive: true } },
       select: { specialty: { select: { code: true } } },
     });
   });
@@ -42,10 +48,12 @@ describe('HealthSpecialtyGuard', () => {
     await expect(guard.canActivate(context())).resolves.toBe(true);
   });
 
-  it('guards creating clinical notes and next session plans', () => {
+  it('guards creating clinical notes and every write on next session plans', () => {
     for (const handler of [
       ClinicalNotesController.prototype.create,
       NextSessionPlansController.prototype.create,
+      NextSessionPlansController.prototype.update,
+      NextSessionPlansController.prototype.remove,
     ]) {
       expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toContain(HealthSpecialtyGuard);
     }

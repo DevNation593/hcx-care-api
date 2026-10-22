@@ -411,7 +411,8 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
             moduleKey: `${CUSTOM_MODULE_PREFIX}${form.id}`,
             schemaVersion: 1,
             formDefinitionId: form.id,
-            verificationCode: `AURO${String(++codes).padStart(12, '0')}`,
+            // Crockford base 32, as the API issues them: no U, no O.
+            verificationCode: `A0R0${String(++codes).padStart(12, '0')}`,
             data: validateFormData(FACIAL_FORM, input.form) as Prisma.InputJsonObject,
             recordDate: openedAt,
             createdAt: openedAt,
