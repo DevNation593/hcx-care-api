@@ -1,5 +1,7 @@
 # Demo única y estudios estéticos
 
+> **Reemplazado** en su parte estética por `2026-10-22-aesthetics-shared-modules-design.md`: Estética es una especialidad sobre los módulos compartidos; ya no hay tablas `Aesthetic*` ni `businessKind`.
+
 ## Alcance acordado
 
 - La seed de demostración crea una sola cuenta cliente: Centro Médico Los Arrayanes. La cuenta de administración de plataforma y los catálogos globales siguen presentes.

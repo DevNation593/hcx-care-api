@@ -15,11 +15,7 @@ describe('clinic role permission enforcement', () => {
     jest.resetAllMocks();
     db.tenantRolePermission.findFirst.mockResolvedValue(null);
     db.tenantRolePermission.findMany.mockResolvedValue([]);
-    db.user.findFirst.mockResolvedValue({
-      id: 'master-1',
-      role: 'MASTER',
-      tenant: { businessKind: 'MEDICAL' },
-    });
+    db.user.findFirst.mockResolvedValue({ id: 'master-1', role: 'MASTER' });
   });
 
   it('denies a MASTER when the platform removes an action from that clinic role', async () => {
@@ -66,19 +62,5 @@ describe('clinic role permission enforcement', () => {
       select: { permission: true, granted: true },
     });
     expect(db.userPermission.findMany).not.toHaveBeenCalled();
-  });
-
-  it('describes only aesthetic actions to a studio member', async () => {
-    db.user.findFirst.mockResolvedValue({
-      id: 'master-1',
-      role: 'MASTER',
-      tenant: { businessKind: 'AESTHETIC_STUDIO' },
-    });
-    const result = await descriptions.describe('studio-1', 'master-1');
-    expect(result.effective).toContain('aesthetics.view');
-    expect(result.effective).not.toContain('patients.create');
-    expect(result.permissions.every((permission) => permission.key.startsWith('aesthetics.'))).toBe(
-      true,
-    );
   });
 });

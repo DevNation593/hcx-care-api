@@ -5,6 +5,7 @@ import {
   CLINICAL_MODULES,
   clinicalModuleVersions,
   findClinicalModule,
+  isHealthSpecialty,
   latestClinicalModule,
   resolveWriteVersion,
   specialtyModuleKeys,
@@ -14,6 +15,35 @@ import {
 const current = (moduleKey: string) => latestClinicalModule(moduleKey)!;
 
 describe('clinical module registry', () => {
+  it('marks exactly the health-only general modules, in every version', () => {
+    const healthOnly = [
+      ...new Set(CLINICAL_MODULES.filter((m) => m.healthOnly).map((m) => m.moduleKey)),
+    ].sort();
+    expect(healthOnly).toEqual([
+      'general.certificates',
+      'general.diagnoses',
+      'general.orders',
+      'general.prescriptions',
+      'general.referrals',
+      'general.soap-note',
+      'general.vital-signs',
+    ]);
+    for (const definition of CLINICAL_MODULES.filter((m) => healthOnly.includes(m.moduleKey))) {
+      expect([definition.moduleKey, definition.schemaVersion, definition.healthOnly]).toEqual([
+        definition.moduleKey,
+        definition.schemaVersion,
+        true,
+      ]);
+    }
+  });
+
+  it('treats only AESTHETICS as a non-health specialty', () => {
+    expect(isHealthSpecialty('AESTHETICS')).toBe(false);
+    expect(isHealthSpecialty('PSYCHOLOGY')).toBe(true);
+    expect(isHealthSpecialty('GENERAL_MEDICINE')).toBe(true);
+    expect(isHealthSpecialty(null)).toBe(true);
+  });
+
   it('never defines the same version of a module twice and numbers versions without gaps', () => {
     const keys = [...new Set(CLINICAL_MODULES.map((definition) => definition.moduleKey))];
 

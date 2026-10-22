@@ -37,16 +37,6 @@ describe('PlatformRolePermissionsService', () => {
     });
   });
 
-  it('offers aesthetic permissions only to studio roles', async () => {
-    db.tenant.findFirst.mockResolvedValue({ id: 'studio-1', businessKind: 'AESTHETIC_STUDIO' });
-    const result = await service.describe('studio-1', 'MASTER');
-    expect(result.permissions.length).toBeGreaterThan(0);
-    expect(result.permissions.every((entry) => entry.key.startsWith('aesthetics.'))).toBe(true);
-    await expect(
-      service.replace('studio-1', 'MASTER', 'platform-admin', ['clinical_records.view']),
-    ).rejects.toMatchObject({ response: { code: 'PERMISSION_INVALID' } });
-  });
-
   it('can withdraw a permission from MASTER for the whole clinic', async () => {
     await service.replace('clinic-1', 'MASTER', 'platform-admin', ['patients.create']);
 

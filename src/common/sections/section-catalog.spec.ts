@@ -7,29 +7,7 @@ import {
 } from './section-catalog';
 
 describe('section catalog', () => {
-  it('gives aesthetic studios their own section without clinical modules', () => {
-    const sections = (defaultSections as (...args: any[]) => string[])(
-      'CLINIC_PRO',
-      'CLINIC',
-      'AESTHETIC_STUDIO',
-    );
-    expect(sections).toEqual(['core.team', 'core.aesthetics']);
-  });
-
-  it('rejects medical sections in aesthetic studios and aesthetic sections in clinics', () => {
-    const validate = validateSections as (...args: any[]) => string[];
-    expect(() => validate(['core.specialties'], 'AESTHETIC_STUDIO')).toThrow(
-      expect.objectContaining({
-        response: expect.objectContaining({ code: 'SECTION_BUSINESS_KIND_MISMATCH' }),
-      }),
-    );
-    expect(() => validate(['core.aesthetics'], 'MEDICAL')).toThrow(
-      expect.objectContaining({
-        response: expect.objectContaining({ code: 'SECTION_BUSINESS_KIND_MISMATCH' }),
-      }),
-    );
-  });
-  it('names medical and aesthetic sections', () => {
+  it('names the eight sections', () => {
     expect(SECTION_CATALOG.map((s) => s.name)).toEqual([
       'Calendario',
       'Pacientes',
@@ -39,7 +17,6 @@ describe('section catalog', () => {
       'Facturación',
       'Equipo',
       'Almacenamiento',
-      'Estética',
     ]);
   });
   it('preselects everything but tasks and team for a personal trial', () => {
@@ -55,9 +32,7 @@ describe('section catalog', () => {
   it('adds team for clinics and tasks for paid plans', () => {
     expect(defaultSections('TRIAL', 'CLINIC')).toContain('core.team');
     expect(defaultSections('TRIAL', 'CLINIC')).not.toContain('core.tasks');
-    expect(defaultSections('CLINIC_BASIC', 'CLINIC')).toEqual(
-      SECTION_KEYS.filter((key) => key !== 'core.aesthetics'),
-    );
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC')).toEqual([...SECTION_KEYS]);
     expect(defaultSections('PERSONAL_PRO', 'PERSONAL')).not.toContain('core.team');
   });
   it('rejects unknown keys', () => {
@@ -84,6 +59,30 @@ describe('section catalog', () => {
   it('accepts an empty list and removes duplicates', () => {
     expect(validateSections([])).toEqual([]);
     expect(validateSections(['core.billing', 'core.billing'])).toEqual(['core.billing']);
+  });
+  it('leaves clinical notes off only when every specialty is non-health', () => {
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC', ['AESTHETICS'])).not.toContain(
+      'core.clinicalNotes',
+    );
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC', ['AESTHETICS'])).toEqual(
+      expect.arrayContaining(['core.patients', 'core.calendar', 'core.specialties', 'core.team']),
+    );
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC', ['AESTHETICS', 'GENERAL_MEDICINE'])).toContain(
+      'core.clinicalNotes',
+    );
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC')).toContain('core.clinicalNotes');
+  });
+  it('marks clinical notes as the only health-only section', () => {
+    expect(SECTION_CATALOG.filter((s) => s.healthOnly).map((s) => s.key)).toEqual([
+      'core.clinicalNotes',
+    ]);
+  });
+  it('rejects the retired aesthetic section an old client may still send', () => {
+    expect(() => validateSections(['core.team', 'core.aesthetics'])).toThrow(
+      expect.objectContaining({
+        response: expect.objectContaining({ code: 'SECTION_UNKNOWN', section: 'core.aesthetics' }),
+      }),
+    );
   });
   it('matches plans to tenant types', () => {
     expect(isPlanAllowedForTenantType('TRIAL', 'PERSONAL')).toBe(true);

@@ -30,11 +30,6 @@ enum TenantType {
   CLINIC // Clínica con múltiples psicólogos
 }
 
-enum TenantBusinessKind {
-  MEDICAL
-  AESTHETIC_STUDIO
-}
-
 enum PlanType {
   TRIAL // Trial 14 días (personal o clínica)
   PERSONAL_BASIC // Psicólogo individual - básico
@@ -232,12 +227,6 @@ enum SessionMediaPhase {
 model Tenant {
   invoicingConnection InvoicingConnection?
   invoiceRequests     InvoiceRequest[]
-  aestheticClients    AestheticClient[]
-  aestheticServices   AestheticService[]
-  aestheticBookings   AestheticBooking[]
-  aestheticSessions   AestheticSession[]
-  aestheticConsents   AestheticConsent[]
-  aestheticPhotos     AestheticPhoto[]
 
   id                      String     @id @default(cuid())
   name                    String
@@ -246,7 +235,6 @@ model Tenant {
   address                 String?
   logoUrl                 String?
   tenantType              TenantType @default(PERSONAL)
-  businessKind            TenantBusinessKind @default(MEDICAL)
   isActive                Boolean    @default(true)
   onboardingCompleted     Boolean    @default(false)
   isPlatform              Boolean    @default(false)
@@ -687,10 +675,6 @@ model User {
   receivedPayments         Payment[]               @relation("PaymentReceivedBy")
   refundedPayments         Payment[]               @relation("PaymentRefundedBy")
   consentSignaturesTaken   ConsentSignature[]
-  aestheticBookings        AestheticBooking[]      @relation("AestheticBookingStaff")
-  aestheticSessions        AestheticSession[]      @relation("AestheticSessionStaff")
-  aestheticConsents        AestheticConsent[]      @relation("AestheticConsentRecorder")
-  aestheticPhotos          AestheticPhoto[]        @relation("AestheticPhotoUploader")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -2108,130 +2092,3 @@ model InvoiceRequestEvent {
   @@index([invoiceRequestId, createdAt])
 }
 
-enum AestheticBookingStatus {
-  SCHEDULED
-  COMPLETED
-  CANCELLED
-}
-
-enum AestheticPhotoPhase {
-  BEFORE
-  AFTER
-}
-
-model AestheticClient {
-  id        String @id @default(cuid())
-  tenantId  String
-  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  firstName String
-  lastName  String
-  email     String?
-  phone     String?
-  isActive  Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  bookings AestheticBooking[]
-  sessions AestheticSession[]
-
-  @@index([tenantId, lastName])
-}
-
-model AestheticService {
-  id              String @id @default(cuid())
-  tenantId        String
-  tenant          Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name            String
-  description     String?
-  durationMinutes Int
-  price           Decimal @default(0) @db.Decimal(10, 2)
-  consentText     String?
-  isActive        Boolean @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  bookings AestheticBooking[]
-  sessions AestheticSession[]
-
-  @@index([tenantId, isActive, name])
-}
-
-model AestheticBooking {
-  id        String @id @default(cuid())
-  tenantId  String
-  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  clientId  String
-  client    AestheticClient @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  serviceId String
-  service   AestheticService @relation(fields: [serviceId], references: [id], onDelete: Restrict)
-  staffId   String
-  staff     User @relation("AestheticBookingStaff", fields: [staffId], references: [id], onDelete: Restrict)
-  startAt   DateTime
-  endAt     DateTime
-  status    AestheticBookingStatus @default(SCHEDULED)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  session AestheticSession?
-
-  @@index([tenantId, staffId, startAt, endAt])
-  @@index([tenantId, clientId, startAt])
-}
-
-model AestheticSession {
-  id          String @id @default(cuid())
-  tenantId    String
-  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  clientId    String
-  client      AestheticClient @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  serviceId   String
-  service     AestheticService @relation(fields: [serviceId], references: [id], onDelete: Restrict)
-  staffId     String
-  staff       User @relation("AestheticSessionStaff", fields: [staffId], references: [id], onDelete: Restrict)
-  bookingId   String? @unique
-  booking     AestheticBooking? @relation(fields: [bookingId], references: [id], onDelete: Restrict)
-  startedAt   DateTime @default(now())
-  completedAt DateTime?
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  consent AestheticConsent?
-  photos  AestheticPhoto[]
-
-  @@index([tenantId, clientId, startedAt])
-}
-
-model AestheticConsent {
-  id           String @id @default(cuid())
-  tenantId     String
-  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  sessionId    String @unique
-  session      AestheticSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  bodySnapshot String
-  signerName   String
-  acceptedAt   DateTime
-  recordedById String
-  recordedBy   User @relation("AestheticConsentRecorder", fields: [recordedById], references: [id], onDelete: Restrict)
-  createdAt    DateTime @default(now())
-
-  @@index([tenantId, acceptedAt])
-}
-
-model AestheticPhoto {
-  id           String @id @default(cuid())
-  tenantId     String
-  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  sessionId    String
-  session      AestheticSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  uploadedById String
-  uploadedBy   User @relation("AestheticPhotoUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
-  phase        AestheticPhotoPhase
-  mimeType     String
-  sizeBytes    Int
-  storageKey   String @unique
-  createdAt    DateTime @default(now())
-  deletedAt    DateTime?
-
-  @@index([tenantId, sessionId, createdAt])
-}

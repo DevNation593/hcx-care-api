@@ -13,6 +13,7 @@ import { DEMO_DOCUMENT_CODES } from '../prisma/seed-clinical-workflow';
 import { BILLING_RULES } from '../src/subscription/subscription-billing.rules';
 import { seedDatabase } from '../prisma/seed';
 import {
+  CLINICAL_MODULES,
   CUSTOM_MODULE_PREFIX,
   findClinicalModule,
   validateModuleData,
@@ -135,98 +136,100 @@ describe('demo seed', () => {
   const values = (model: string, field: string) =>
     [...new Set(rows(model).map((row) => row[field]))].sort();
 
-  it('creates only Los Arrayanes and the aesthetic studio as client demos', () => {
+  it('creates only Los Arrayanes and the Aurora studio as client demos', () => {
     expect(
       rows('tenant')
         .filter((tenant) => !tenant.isPlatform)
-        .map((tenant) => [tenant.name, tenant.businessKind ?? 'MEDICAL']),
-    ).toEqual([
-      ['Centro Médico Los Arrayanes', 'MEDICAL'],
-      ['Estudio Estético Aurora', 'AESTHETIC_STUDIO'],
-    ]);
+        .map((tenant) => tenant.name),
+    ).toEqual(['Centro Médico Los Arrayanes', 'Estudio Estético Aurora']);
   });
 
   describe('aesthetic studio', () => {
-    const studio = () => rows('tenant').find((tenant) => tenant.name === 'Estudio Estético Aurora');
-    const of = (model: string) => rows(model).filter((row) => row.tenantId === studio().id);
+    const studioId = () =>
+      rows('tenant').find((tenant) => tenant.name === 'Estudio Estético Aurora').id;
+    const of = (model: string) => rows(model).filter((row) => row.tenantId === studioId());
+    const aesthetics = () => rows('specialty').find((s) => s.code === 'AESTHETICS');
+    const sessions = () => of('treatmentSession');
+    const versionOf = (session: Row) => byId('treatmentVersion').get(session.treatmentVersionId);
+    const treatmentOf = (session: Row) => byId('treatment').get(versionOf(session).treatmentId);
 
-    it('has only its own sections, no specialties and no professional profiles', () => {
-      const enabled = of('tenantModule')
-        .filter((module) => module.enabled)
-        .map((module) => module.moduleKey)
-        .sort();
-      expect(enabled).toEqual(['core.aesthetics', 'core.team']);
-      expect(of('tenantSpecialty')).toEqual([]);
-      const staff = new Set(
-        rows('user')
-          .filter((u) => u.tenantId === studio().id)
-          .map((u) => u.id),
-      );
-      expect(rows('professionalProfile').filter((p) => staff.has(p.userId))).toEqual([]);
+    it('is a clinic with only Estética and without clinical notes', () => {
+      expect(of('tenantSpecialty').map((row) => row.specialtyId)).toEqual([aesthetics().id]);
+      const notes = of('tenantModule').find((m) => m.moduleKey === 'core.clinicalNotes');
+      expect(notes.enabled).toBe(false);
     });
 
-    it('books only active MASTER or PROFESIONAL staff, never twice at the same time', () => {
-      const users = byId('user');
-      const scheduled = of('aestheticBooking').filter((b) => b.status === 'SCHEDULED');
-      for (const booking of of('aestheticBooking')) {
-        expect(['MASTER', 'PROFESIONAL']).toContain(users.get(booking.staffId).role);
-      }
-      const overlaps = scheduled.filter((a) =>
-        scheduled.some(
-          (b) => a !== b && a.staffId === b.staffId && a.startAt < b.endAt && b.startAt < a.endAt,
-        ),
+    it('has Estética professionals and treatments only', () => {
+      const staff = new Set(of('user').map((user) => user.id));
+      const profiles = rows('professionalProfile').filter((p) => staff.has(p.userId));
+      expect(profiles).toHaveLength(2);
+      expect(profiles.every((p) => p.specialtyId === aesthetics().id)).toBe(true);
+      expect(of('treatment').every((t) => t.specialtyId === aesthetics().id)).toBe(true);
+      expect(of('treatment').find((t) => t.name === 'Radiofrecuencia corporal').isActive).toBe(
+        false,
       );
-      expect(overlaps).toEqual([]);
     });
 
-    it('closes a session only with the consent its service asks for, and links completed bookings', () => {
-      const services = byId('aestheticService');
-      const consents = new Set(of('aestheticConsent').map((consent) => consent.sessionId));
-      const sessions = of('aestheticSession');
-      for (const session of sessions.filter((s) => s.completedAt)) {
-        if (services.get(session.serviceId).consentText) {
-          expect([session.id, consents.has(session.id)]).toEqual([session.id, true]);
-        }
-      }
-      const bookings = byId('aestheticBooking');
-      for (const session of sessions.filter((s) => s.bookingId)) {
-        expect(bookings.get(session.bookingId).status).toBe(
-          session.completedAt ? 'COMPLETED' : 'SCHEDULED',
+    it('has sessions in every state the demo shows', () => {
+      expect(
+        sessions()
+          .map((s) => s.status)
+          .sort(),
+      ).toEqual(['CANCELLED', 'CLINICAL_COMPLETE', 'CLINICAL_COMPLETE', 'READY_FOR_CONSENT']);
+    });
+
+    it('signs the consent every completed session requires, and none for the one waiting', () => {
+      const documents = byId('consentDocument');
+      const signatures = new Set(rows('consentSignature').map((s) => s.documentId));
+      for (const session of sessions().filter((s) => s.status === 'CLINICAL_COMPLETE')) {
+        if (!versionOf(session).consentTemplateVersionId) continue;
+        const document = documents.get(session.consentDocumentId);
+        expect([treatmentOf(session).name, document?.status, signatures.has(document?.id)]).toEqual(
+          [treatmentOf(session).name, 'SIGNED', true],
         );
       }
-      expect(sessions.some((s) => !s.completedAt && !consents.has(s.id))).toBe(true);
-      expect(sessions.some((s) => !s.bookingId)).toBe(true);
+      const waiting = sessions().find((s) => s.status === 'READY_FOR_CONSENT');
+      expect(of('consentDocument').filter((d) => d.treatmentSessionId === waiting.id)).toEqual([]);
+      expect(waiting.formRecordId).toBeTruthy();
     });
 
-    it('keeps the consent text the service had and stores the photo bytes it counts', () => {
-      const services = byId('aestheticService');
-      const sessions = byId('aestheticSession');
-      for (const consent of of('aestheticConsent')) {
-        const session = sessions.get(consent.sessionId);
-        expect(consent.bodySnapshot).toBe(services.get(session.serviceId).consentText);
-      }
-      const photos = of('aestheticPhoto');
-      expect(photos.map((photo) => photo.phase).sort()).toEqual(['AFTER', 'BEFORE', 'BEFORE']);
-      for (const photo of photos) {
-        const bytes = stored.get(photo.storageKey);
-        expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-        expect(bytes.length).toBe(photo.sizeBytes);
-      }
-      const subscription = of('tenantSubscription')[0];
-      expect(subscription.storageUsedBytes).toBe(
-        BigInt(photos.reduce((total, photo) => total + photo.sizeBytes, 0)),
+    it('keeps the form and the before and after photos of the completed peeling', () => {
+      const peeling = sessions().find(
+        (s) => s.status === 'CLINICAL_COMPLETE' && treatmentOf(s).name === 'Peeling químico',
       );
+      expect(peeling.formRecordId).toBeTruthy();
+      const phases = of('patientFile')
+        .filter((file) => file.treatmentSessionId === peeling.id)
+        .map((file) => file.phase);
+      expect(phases).toEqual(expect.arrayContaining(['BEFORE', 'AFTER']));
     });
 
-    it('lets the front desk record consents through its role, set by the platform', () => {
-      expect(of('tenantRolePermission')).toEqual([
-        expect.objectContaining({
-          role: 'ASISTENTE',
-          permission: 'aesthetics.consents.manage',
-          granted: true,
-        }),
-      ]);
-      expect(grantablePermissions('ASISTENTE')).toContain('aesthetics.consents.manage');
+    it('stores every photo, signature and consent PDF, and counts the photos', () => {
+      const photos = of('patientFile');
+      const keys = [
+        ...photos.map((file) => file.storageKey),
+        ...of('consentDocument').map((d) => d.pdfStorageKey),
+        ...of('consentSignature').map((s) => s.signatureStorageKey),
+      ];
+      expect(keys.length).toBeGreaterThan(photos.length);
+      expect(keys.filter((key) => !stored.has(key))).toEqual([]);
+      const used = photos.reduce((total, file) => total + file.sizeBytes, 0);
+      expect(of('tenantSubscription')[0].storageUsedBytes).toBe(BigInt(used));
+    });
+
+    it('gives its form records verification codes the public page can find', () => {
+      const codes = of('specialtyRecord').map((record) => record.verificationCode);
+      expect(codes.length).toBeGreaterThan(0);
+      for (const code of codes) expect(normalizeVerificationCode(code)).toBe(code);
+      const everyCode = rows('specialtyRecord').map((record) => record.verificationCode);
+      expect(new Set(everyCode).size).toBe(everyCode.length);
+    });
+
+    it('writes no health-only module record', () => {
+      const healthOnly = new Set(
+        CLINICAL_MODULES.filter((m) => m.healthOnly).map((m) => m.moduleKey),
+      );
+      expect(of('specialtyRecord').filter((r) => healthOnly.has(r.moduleKey))).toEqual([]);
     });
   });
 
@@ -299,17 +302,6 @@ describe('demo seed', () => {
       ['invoice', 'issuerId', 'user'],
       ['notificationLog', 'userId', 'user'],
       ['pushSubscription', 'userId', 'user'],
-      ['aestheticBooking', 'clientId', 'aestheticClient'],
-      ['aestheticBooking', 'serviceId', 'aestheticService'],
-      ['aestheticBooking', 'staffId', 'user'],
-      ['aestheticSession', 'clientId', 'aestheticClient'],
-      ['aestheticSession', 'serviceId', 'aestheticService'],
-      ['aestheticSession', 'staffId', 'user'],
-      ['aestheticSession', 'bookingId', 'aestheticBooking'],
-      ['aestheticConsent', 'sessionId', 'aestheticSession'],
-      ['aestheticConsent', 'recordedById', 'user'],
-      ['aestheticPhoto', 'sessionId', 'aestheticSession'],
-      ['aestheticPhoto', 'uploadedById', 'user'],
     ];
 
     const broken: string[] = [];
@@ -725,7 +717,8 @@ describe('demo seed', () => {
         (p) => !rows('patientBillingProfile').some((link) => link.patientId === p.id),
       ),
     }).toEqual({
-      archived: false,
+      // Paula, of the Aurora studio, no longer comes.
+      archived: true,
       removed: false,
       unassigned: false,
       sharedByTwoProfessionals: true,

@@ -82,6 +82,40 @@ describe('ClinicalModulesService', () => {
     expect(dentist['general.prescriptions@1']).toEqual({ enabled: true, canRecord: true });
   });
 
+  describe('health-only modules', () => {
+    const asAesthetician = () =>
+      db.professionalProfile.findFirst.mockResolvedValue({
+        specialtyId: 'aesthetics',
+        specialty: { code: 'AESTHETICS' },
+      });
+    const clinicWith = (...codes: string[]) =>
+      db.tenantSpecialty.findMany.mockResolvedValue(codes.map((code) => ({ specialty: { code } })));
+
+    it('are off in a clinic that only has Estética, while shared modules stay usable', async () => {
+      asAesthetician();
+      clinicWith('AESTHETICS');
+      const modules = flags(await service.listForTenant('tenant-1', 'user-1'));
+
+      expect(modules['general.soap-note@1']).toEqual({ enabled: false, canRecord: false });
+      expect(modules['general.vital-signs@1']).toEqual({ enabled: false, canRecord: false });
+      expect(modules['general.allergies@1']).toEqual({ enabled: true, canRecord: true });
+    });
+
+    it('stay on in a mixed clinic but only for its health professionals', async () => {
+      asAesthetician();
+      clinicWith('AESTHETICS', 'GENERAL_MEDICINE');
+      const aesthetician = flags(await service.listForTenant('tenant-1', 'user-1'));
+      expect(aesthetician['general.soap-note@1']).toEqual({ enabled: true, canRecord: false });
+
+      db.professionalProfile.findFirst.mockResolvedValue({
+        specialtyId: 'general-medicine',
+        specialty: { code: 'GENERAL_MEDICINE' },
+      });
+      const physician = flags(await service.listForTenant('tenant-1', 'user-2'));
+      expect(physician['general.soap-note@1']).toEqual({ enabled: true, canRecord: true });
+    });
+  });
+
   it('lets an account without a professional profile read definitions but record nothing', async () => {
     db.professionalProfile.findFirst.mockResolvedValue(null);
 

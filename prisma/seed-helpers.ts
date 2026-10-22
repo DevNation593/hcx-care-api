@@ -13,7 +13,6 @@ import type {
   PrismaClient,
   SubscriptionStatus,
   Tenant,
-  TenantBusinessKind,
   TenantSubscription,
   TenantType,
   User,
@@ -43,8 +42,8 @@ const DAY_MS = 24 * HOUR_MS;
 // The demo clinics work in America/Guayaquil, which has no daylight saving time.
 const LOCAL_UTC_OFFSET_HOURS = -5;
 
-export type SeedSpecialtyKey = DemoSpecialtyKey | 'generalMedicine';
-export type SpecialtyCatalog = Record<SeedSpecialtyKey, { id: string }>;
+export type SeedSpecialtyKey = DemoSpecialtyKey | 'generalMedicine' | 'aesthetics';
+export type SpecialtyCatalog = Record<SeedSpecialtyKey, { id: string; code: string }>;
 
 /** The modules each specialty owns: the ones the clinical module registry defines for it. */
 export const SPECIALTY_MODULE_KEYS: Record<SeedSpecialtyKey, string[]> = {
@@ -53,6 +52,7 @@ export const SPECIALTY_MODULE_KEYS: Record<SeedSpecialtyKey, string[]> = {
   physiotherapy: specialtyModuleKeys('PHYSIOTHERAPY'),
   dentistry: specialtyModuleKeys('DENTISTRY'),
   generalMedicine: specialtyModuleKeys('GENERAL_MEDICINE'),
+  aesthetics: specialtyModuleKeys('AESTHETICS'),
 };
 
 /** Every date of the seed is relative to one instant, so a run is consistent with itself. */
@@ -200,8 +200,6 @@ export interface SeedTenantSpec {
   phone?: string;
   address?: string;
   tenantType: TenantType;
-  /** MEDICAL when omitted. An aesthetic studio has no specialties and only its own sections. */
-  businessKind?: TenantBusinessKind;
   isActive?: boolean;
   onboardingCompleted?: boolean;
   /** Omit for a clinic that has not completed its fiscal data and therefore cannot invoice. */
@@ -319,7 +317,6 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
       phone: spec.phone,
       address: spec.address,
       tenantType: spec.tenantType,
-      businessKind: spec.businessKind,
       isActive: spec.isActive ?? true,
       onboardingCompleted: spec.onboardingCompleted ?? true,
       ...spec.fiscal,
@@ -364,7 +361,11 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
   });
 
   const enabledSections = new Set<string>(
-    defaultSections(spec.planType, spec.tenantType, spec.businessKind),
+    defaultSections(
+      spec.planType,
+      spec.tenantType,
+      spec.specialties.map((key) => ctx.catalog[key].code),
+    ),
   );
   for (const section of spec.disabledSections ?? []) enabledSections.delete(section);
   await db.tenantModule.createMany({
@@ -394,25 +395,6 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
   };
   clinic.master = await createUser(ctx, clinic, { ...spec.master, role: 'MASTER' });
   return clinic;
-}
-
-/**
- * Runs `work` with the tenant set as the API sets it. Tables under forced row level security
- * (the aesthetic ones) only show and accept rows of that tenant, even to the table owner.
- */
-export function withTenantContext<T>(
-  db: PrismaClient,
-  tenantId: string,
-  work: (tx: Prisma.TransactionClient) => Promise<T>,
-): Promise<T> {
-  return db.$transaction(
-    async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
-      return work(tx);
-    },
-    // A remote database answers each statement slower than a local one.
-    { timeout: 120_000 },
-  );
 }
 
 /** Stores on the subscription the counters the API maintains as data is created. */

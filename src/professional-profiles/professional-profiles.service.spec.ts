@@ -3,8 +3,6 @@ import { PrismaService } from '../prisma/prisma.service';
 
 describe('ProfessionalProfilesService', () => {
   const db = {
-    tenant: { findUnique: jest.fn() },
-    user: { count: jest.fn() },
     tenantSpecialty: { findUnique: jest.fn() },
     professionalProfile: { count: jest.fn(), findUnique: jest.fn() },
     tenantSubscription: { findUnique: jest.fn(), update: jest.fn() },
@@ -13,7 +11,6 @@ describe('ProfessionalProfilesService', () => {
   let service: ProfessionalProfilesService;
   beforeEach(() => {
     jest.resetAllMocks();
-    db.tenant.findUnique.mockResolvedValue({ businessKind: 'MEDICAL' });
     service = new ProfessionalProfilesService(db as unknown as PrismaService);
   });
 
@@ -61,15 +58,6 @@ describe('ProfessionalProfilesService', () => {
     expect(db.professionalProfile.count).toHaveBeenCalledWith({
       where: { isActive: true, user: { tenantId: 't' } },
     });
-  });
-  it('counts active aesthetic professionals without a medical profile', async () => {
-    db.tenant.findUnique.mockResolvedValue({ businessKind: 'AESTHETIC_STUDIO' });
-    db.user.count.mockResolvedValue(3);
-    expect(await service.countActiveProfiles('t')).toBe(3);
-    expect(db.user.count).toHaveBeenCalledWith({
-      where: { tenantId: 't', role: 'PROFESIONAL', isActive: true },
-    });
-    expect(db.professionalProfile.count).not.toHaveBeenCalled();
   });
   it('blocks a specialty change with future appointments of the current specialty', async () => {
     db.professionalProfile.findUnique.mockResolvedValue({ specialtyId: 'old' });

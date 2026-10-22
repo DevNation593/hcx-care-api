@@ -49,6 +49,7 @@ const PRIORITY = { RUTINA: 'Rutina', PREFERENTE: 'Preferente', URGENTE: 'Urgente
 export const GENERAL_MODULES: ClinicalModuleDefinition[] = [
   general({
     moduleKey: 'general.soap-note',
+    healthOnly: true,
     name: 'Nota SOAP',
     description: 'Nota de atención en formato subjetivo, objetivo, análisis y plan.',
     schemaVersion: 1,
@@ -69,6 +70,7 @@ export const GENERAL_MODULES: ClinicalModuleDefinition[] = [
 
   general({
     moduleKey: 'general.vital-signs',
+    healthOnly: true,
     name: 'Signos vitales',
     description: 'Mediciones de la atención: antropometría, presión, frecuencias y saturación.',
     schemaVersion: 1,
@@ -115,6 +117,7 @@ export const GENERAL_MODULES: ClinicalModuleDefinition[] = [
 
   general({
     moduleKey: 'general.diagnoses',
+    healthOnly: true,
     name: 'Diagnósticos',
     description: 'Diagnósticos codificados de la atención (CIE-10 o CIE-11).',
     schemaVersion: 1,
@@ -201,6 +204,7 @@ export const GENERAL_MODULES: ClinicalModuleDefinition[] = [
 
   general({
     moduleKey: 'general.prescriptions',
+    healthOnly: true,
     name: 'Receta',
     description: 'Prescripción de medicamentos con dosis, frecuencia, vía y duración.',
     allowedSpecialtyCodes: PRESCRIBER_SPECIALTY_CODES,
@@ -252,6 +256,7 @@ export const GENERAL_MODULES: ClinicalModuleDefinition[] = [
 
   general({
     moduleKey: 'general.orders',
+    healthOnly: true,
     name: 'Orden',
     description: 'Orden de laboratorio, imagen, procedimiento, terapia o interconsulta.',
     schemaVersion: 1,
@@ -291,6 +296,7 @@ export const GENERAL_MODULES: ClinicalModuleDefinition[] = [
 
   general({
     moduleKey: 'general.referrals',
+    healthOnly: true,
     name: 'Referencia',
     description: 'Derivación del paciente a otra especialidad o profesional.',
     schemaVersion: 1,
@@ -321,6 +327,7 @@ export const GENERAL_MODULES: ClinicalModuleDefinition[] = [
 
   general({
     moduleKey: 'general.certificates',
+    healthOnly: true,
     name: 'Certificado',
     description: 'Certificado médico, psicológico, de reposo, aptitud, asistencia o tratamiento.',
     schemaVersion: 1,

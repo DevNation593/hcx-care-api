@@ -1,10 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { TenantBusinessKind, UserRole } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 import {
   effectivePermissions,
   grantablePermissions,
   isPermission,
-  isPermissionForBusinessKind,
   PERMISSION_CATALOG,
   rolePermissions,
 } from '../common/permissions/permission-catalog';
@@ -27,18 +26,16 @@ export class PlatformRolePermissionsService {
 
   async describe(tenantId: string, role: string) {
     this.assertRole(role);
-    const businessKind = await this.assertClinic(tenantId);
+    await this.assertClinic(tenantId);
     const rows = await this.prisma.tenantRolePermission.findMany({
       where: { tenantId, role: role as UserRole },
       select: { permission: true, granted: true },
     });
     const revoked = rows.filter((row) => !row.granted).map((row) => row.permission);
     const granted = rows.filter((row) => row.granted).map((row) => row.permission);
-    const belongs = (permission: (typeof PERMISSION_CATALOG)[number]['key']) =>
-      isPermissionForBusinessKind(permission, businessKind);
-    const byRole = rolePermissions(role).filter(belongs);
-    const grantable = grantablePermissions(role).filter(belongs);
-    const effective = effectivePermissions(role, revoked, granted).filter(belongs);
+    const byRole = rolePermissions(role);
+    const grantable = grantablePermissions(role);
+    const effective = effectivePermissions(role, revoked, granted);
     return {
       tenantId,
       role,
@@ -57,11 +54,9 @@ export class PlatformRolePermissionsService {
 
   async replace(tenantId: string, role: string, actorId: string, allowed: string[]) {
     this.assertRole(role);
-    const businessKind = await this.assertClinic(tenantId);
-    const belongs = (permission: (typeof PERMISSION_CATALOG)[number]['key']) =>
-      isPermissionForBusinessKind(permission, businessKind);
-    const byRole = rolePermissions(role).filter(belongs);
-    const grantable = grantablePermissions(role).filter(belongs);
+    await this.assertClinic(tenantId);
+    const byRole = rolePermissions(role);
+    const grantable = grantablePermissions(role);
     const selectable = new Set<string>([...byRole, ...grantable]);
     const unique = [...new Set(allowed)];
     const invalid = unique.find(
@@ -103,12 +98,12 @@ export class PlatformRolePermissionsService {
         role,
         previous.filter((row) => !row.granted).map((row) => row.permission),
         previous.filter((row) => row.granted).map((row) => row.permission),
-      ).filter(belongs);
+      );
       const allowedAfter = effectivePermissions(
         role,
         rows.filter((row) => !row.granted).map((row) => row.permission),
         rows.filter((row) => row.granted).map((row) => row.permission),
-      ).filter(belongs);
+      );
       await this.audit.record(
         {
           tenantId,
@@ -136,12 +131,11 @@ export class PlatformRolePermissionsService {
     }
   }
 
-  private async assertClinic(tenantId: string): Promise<TenantBusinessKind> {
+  private async assertClinic(tenantId: string) {
     const tenant = await this.prisma.tenant.findFirst({
       where: { id: tenantId, isPlatform: false },
-      select: { id: true, businessKind: true },
+      select: { id: true },
     });
     if (!tenant) throw new NotFoundException('Consultorio no encontrado');
-    return tenant.businessKind ?? TenantBusinessKind.MEDICAL;
   }
 }
