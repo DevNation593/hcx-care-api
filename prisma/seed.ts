@@ -18,9 +18,7 @@ import {
   SeedLogin,
   SPECIALTY_MODULE_KEYS,
   SpecialtyCatalog,
-  withTenantContext,
 } from './seed-helpers';
-import { seedAestheticStudio } from './seed-aesthetic-studio';
 import { seedClinicalWorkflow } from './seed-clinical-workflow';
 
 export const DEMO_PASSWORD = 'Password123!';
@@ -147,25 +145,6 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
     // The rows are about to go: their bytes would be left behind with nothing pointing at them.
     const files = await db.patientFile.findMany({ select: { storageKey: true } });
     await Promise.all(files.map(({ storageKey }) => storage.remove(storageKey)));
-  }
-  // The aesthetic tables only show their rows inside the context of the tenant that owns them,
-  // and they restrict deleting the users they point to.
-  for (const { id } of await db.tenant.findMany({ select: { id: true } })) {
-    await withTenantContext(db, id, async (tx) => {
-      if (storage) {
-        const photos = await tx.aestheticPhoto.findMany({
-          where: { tenantId: id },
-          select: { storageKey: true },
-        });
-        await Promise.all(photos.map(({ storageKey }) => storage.remove(storageKey)));
-      }
-      await tx.aestheticPhoto.deleteMany({ where: { tenantId: id } });
-      await tx.aestheticConsent.deleteMany({ where: { tenantId: id } });
-      await tx.aestheticSession.deleteMany({ where: { tenantId: id } });
-      await tx.aestheticBooking.deleteMany({ where: { tenantId: id } });
-      await tx.aestheticService.deleteMany({ where: { tenantId: id } });
-      await tx.aestheticClient.deleteMany({ where: { tenantId: id } });
-    });
   }
   // The seed writes none of what follows, but a database in use has it, and it restricts
   // deleting the encounters, records, users and branches below.
@@ -294,8 +273,6 @@ export async function seedDatabase(
   };
 
   await seedClinicalWorkflow(ctx);
-  // Writes its clinical text and photos already encrypted: the step below covers medical tables.
-  await seedAestheticStudio(ctx);
 
   // The rows above are written as plain text; with a key configured they are stored as the
   // API stores them, so the demo data is readable by the API and nothing else.

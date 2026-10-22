@@ -68,7 +68,6 @@ describe('PlatformTenantsService', () => {
       phone: tenant.phone ?? null,
       address: tenant.address ?? null,
       tenantType: tenant.tenantType,
-      businessKind: tenant.businessKind ?? 'MEDICAL',
       isActive: tenant.isActive ?? true,
       createdAt: new Date('2026-10-01T00:00:00Z'),
       subscription: subscription && {
@@ -281,7 +280,7 @@ describe('PlatformTenantsService', () => {
     );
   });
 
-  it('creates tenant, settings, subscription, master and section rows in one transaction', async () => {
+  it('creates tenant, settings, subscription, master and eight section rows in one transaction', async () => {
     const result = await service.create(input(), 'admin-1');
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(state.tenants).toHaveLength(1);
@@ -297,35 +296,15 @@ describe('PlatformTenantsService', () => {
     ]);
     expect(state.subscriptions).toHaveLength(1);
     expect(state.users).toHaveLength(1);
-    expect(state.modules).toHaveLength(9);
+    expect(state.modules).toHaveLength(8);
     expect(state.modules.map((m) => m.moduleKey).sort()).toEqual([...SECTION_KEYS].sort());
     expect(result.tenant).toMatchObject({ id: 'tenant-1', name: 'Clínica Centro' });
-    expect(result.sections).toHaveLength(9);
+    expect(result.sections).toHaveLength(8);
     expect(prisma.applyRlsContext).toHaveBeenCalledWith(prisma.lastTx, { tenantId: 'tenant-1' });
     expect(selection.applySelection.mock.calls[0][0]).toBe(prisma.lastTx);
     expect(result.specialties).toEqual([
       { id: 'specialty-1', code: 'PSYCHOLOGY', name: 'Psicología' },
     ]);
-  });
-
-  it('creates an aesthetic studio with no medical specialty or section', async () => {
-    const result = await service.create(
-      input({ businessKind: 'AESTHETIC_STUDIO', specialtyCodes: [] } as any),
-      'admin-1',
-    );
-    expect((result.tenant as { businessKind?: string }).businessKind).toBe('AESTHETIC_STUDIO');
-    expect(result.specialties).toEqual([]);
-    expect(
-      result.sections.filter((section) => section.enabled).map((section) => section.key),
-    ).toEqual(['core.team', 'core.aesthetics']);
-    expect(selection.applySelection).not.toHaveBeenCalled();
-  });
-
-  it('rejects medical specialties for an aesthetic studio', async () => {
-    await expect(
-      service.create(input({ businessKind: 'AESTHETIC_STUDIO' } as any), 'admin-1'),
-    ).rejects.toMatchObject({ response: { code: 'SPECIALTY_BUSINESS_KIND_MISMATCH' } });
-    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('creates the master with role MASTER, mustChangePassword true and no professional profile', async () => {
@@ -371,7 +350,7 @@ describe('PlatformTenantsService', () => {
 
     const detail = await service.findOne('tenant-1');
 
-    expect(detail.sections).toHaveLength(9);
+    expect(detail.sections).toHaveLength(8);
     expect(detail.modules).toEqual([{ key: 'psychology.assessments', enabled: false }]);
     expect(detail.subscription).toMatchObject({ includedSpecialties: 1, specialtyPrice: 15 });
   });
@@ -380,7 +359,7 @@ describe('PlatformTenantsService', () => {
     await service.create(input({ sections: ['core.patients', 'core.calendar'] }), 'a');
     const enabled = state.modules.filter((m) => m.enabled).map((m) => m.moduleKey);
     expect(enabled.sort()).toEqual(['core.calendar', 'core.patients']);
-    expect(state.modules).toHaveLength(9);
+    expect(state.modules).toHaveLength(8);
   });
 
   it('rejects an unknown section and an unmet dependency before writing', async () => {
@@ -392,6 +371,14 @@ describe('PlatformTenantsService', () => {
     );
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(auth.hashPassword).not.toHaveBeenCalled();
+  });
+
+  it('requires at least one specialty for every clinic, aesthetic ones included', async () => {
+    await expect(service.create(input({ specialtyCodes: [] }), 'a')).rejects.toMatchObject({
+      status: 400,
+      response: { code: 'SPECIALTY_SELECTION_REQUIRED' },
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('rejects a plan that does not match the tenant type with PLAN_TYPE_MISMATCH', async () => {
@@ -495,10 +482,7 @@ describe('PlatformTenantsService', () => {
   it('builds the catalog defaults for every plan and tenant type that match', () => {
     const catalogResult = service.getSectionCatalog();
     expect(catalogResult.sections.map((s) => s.key)).toEqual([...SECTION_KEYS]);
-    const pairs = catalogResult.defaults
-      .filter((d) => d.businessKind === 'MEDICAL')
-      .map((d) => `${d.planType}/${d.tenantType}`)
-      .sort();
+    const pairs = catalogResult.defaults.map((d) => `${d.planType}/${d.tenantType}`).sort();
     expect(pairs).toEqual(
       [
         'TRIAL/PERSONAL',
@@ -585,7 +569,6 @@ describe('PlatformTenantsService', () => {
       name: 'Clínica Norte',
       email: 'norte@example.com',
       tenantType: 'CLINIC',
-      businessKind: 'MEDICAL',
       ...overrides,
     });
     state.subscriptions.push({
@@ -720,16 +703,7 @@ describe('PlatformTenantsService', () => {
       await service.list({ page: 1, pageSize: 20 });
       const select = prisma.tenant.findMany.mock.calls[0][0].select;
       expect(Object.keys(select).sort()).toEqual(
-        [
-          'businessKind',
-          'createdAt',
-          'id',
-          'isActive',
-          'name',
-          'subscription',
-          'tenantType',
-          'users',
-        ].sort(),
+        ['createdAt', 'id', 'isActive', 'name', 'subscription', 'tenantType', 'users'].sort(),
       );
       expect(Object.keys(select.subscription.select).sort()).toEqual(
         [
@@ -835,9 +809,9 @@ describe('PlatformTenantsService', () => {
         ['core.patients', 'core.billing', 'core.patients'],
         'admin-1',
       );
-      expect(state.modules).toHaveLength(9);
+      expect(state.modules).toHaveLength(8);
       expect(activeKeys()).toEqual(['core.billing', 'core.patients']);
-      expect(prisma.lastTx.tenantModule.upsert).toHaveBeenCalledTimes(9);
+      expect(prisma.lastTx.tenantModule.upsert).toHaveBeenCalledTimes(8);
       expect(
         result.sections
           .filter((s) => s.enabled)

@@ -135,99 +135,12 @@ describe('demo seed', () => {
   const values = (model: string, field: string) =>
     [...new Set(rows(model).map((row) => row[field]))].sort();
 
-  it('creates only Los Arrayanes and the aesthetic studio as client demos', () => {
+  it('creates only Los Arrayanes as a client demo', () => {
     expect(
       rows('tenant')
         .filter((tenant) => !tenant.isPlatform)
-        .map((tenant) => [tenant.name, tenant.businessKind ?? 'MEDICAL']),
-    ).toEqual([
-      ['Centro Médico Los Arrayanes', 'MEDICAL'],
-      ['Estudio Estético Aurora', 'AESTHETIC_STUDIO'],
-    ]);
-  });
-
-  describe('aesthetic studio', () => {
-    const studio = () => rows('tenant').find((tenant) => tenant.name === 'Estudio Estético Aurora');
-    const of = (model: string) => rows(model).filter((row) => row.tenantId === studio().id);
-
-    it('has only its own sections, no specialties and no professional profiles', () => {
-      const enabled = of('tenantModule')
-        .filter((module) => module.enabled)
-        .map((module) => module.moduleKey)
-        .sort();
-      expect(enabled).toEqual(['core.aesthetics', 'core.team']);
-      expect(of('tenantSpecialty')).toEqual([]);
-      const staff = new Set(
-        rows('user')
-          .filter((u) => u.tenantId === studio().id)
-          .map((u) => u.id),
-      );
-      expect(rows('professionalProfile').filter((p) => staff.has(p.userId))).toEqual([]);
-    });
-
-    it('books only active MASTER or PROFESIONAL staff, never twice at the same time', () => {
-      const users = byId('user');
-      const scheduled = of('aestheticBooking').filter((b) => b.status === 'SCHEDULED');
-      for (const booking of of('aestheticBooking')) {
-        expect(['MASTER', 'PROFESIONAL']).toContain(users.get(booking.staffId).role);
-      }
-      const overlaps = scheduled.filter((a) =>
-        scheduled.some(
-          (b) => a !== b && a.staffId === b.staffId && a.startAt < b.endAt && b.startAt < a.endAt,
-        ),
-      );
-      expect(overlaps).toEqual([]);
-    });
-
-    it('closes a session only with the consent its service asks for, and links completed bookings', () => {
-      const services = byId('aestheticService');
-      const consents = new Set(of('aestheticConsent').map((consent) => consent.sessionId));
-      const sessions = of('aestheticSession');
-      for (const session of sessions.filter((s) => s.completedAt)) {
-        if (services.get(session.serviceId).consentText) {
-          expect([session.id, consents.has(session.id)]).toEqual([session.id, true]);
-        }
-      }
-      const bookings = byId('aestheticBooking');
-      for (const session of sessions.filter((s) => s.bookingId)) {
-        expect(bookings.get(session.bookingId).status).toBe(
-          session.completedAt ? 'COMPLETED' : 'SCHEDULED',
-        );
-      }
-      expect(sessions.some((s) => !s.completedAt && !consents.has(s.id))).toBe(true);
-      expect(sessions.some((s) => !s.bookingId)).toBe(true);
-    });
-
-    it('keeps the consent text the service had and stores the photo bytes it counts', () => {
-      const services = byId('aestheticService');
-      const sessions = byId('aestheticSession');
-      for (const consent of of('aestheticConsent')) {
-        const session = sessions.get(consent.sessionId);
-        expect(consent.bodySnapshot).toBe(services.get(session.serviceId).consentText);
-      }
-      const photos = of('aestheticPhoto');
-      expect(photos.map((photo) => photo.phase).sort()).toEqual(['AFTER', 'BEFORE', 'BEFORE']);
-      for (const photo of photos) {
-        const bytes = stored.get(photo.storageKey);
-        expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-        expect(bytes.length).toBe(photo.sizeBytes);
-      }
-      const subscription = of('tenantSubscription')[0];
-      expect(subscription.storageUsedBytes).toBe(
-        BigInt(photos.reduce((total, photo) => total + photo.sizeBytes, 0)),
-      );
-    });
-
-    it('lets the front desk record consents through its role, set by the platform', () => {
-      expect(of('tenantRolePermission')).toEqual([
-        expect.objectContaining({
-          role: 'ASISTENTE',
-          permission: 'aesthetics.consents.manage',
-          granted: true,
-        }),
-      ]);
-      expect(grantablePermissions('ASISTENTE')).toContain('aesthetics.consents.manage');
-    });
+        .map((tenant) => tenant.name),
+    ).toEqual(['Centro Médico Los Arrayanes']);
   });
 
   it('includes a general physician with an active professional profile', () => {
@@ -299,17 +212,6 @@ describe('demo seed', () => {
       ['invoice', 'issuerId', 'user'],
       ['notificationLog', 'userId', 'user'],
       ['pushSubscription', 'userId', 'user'],
-      ['aestheticBooking', 'clientId', 'aestheticClient'],
-      ['aestheticBooking', 'serviceId', 'aestheticService'],
-      ['aestheticBooking', 'staffId', 'user'],
-      ['aestheticSession', 'clientId', 'aestheticClient'],
-      ['aestheticSession', 'serviceId', 'aestheticService'],
-      ['aestheticSession', 'staffId', 'user'],
-      ['aestheticSession', 'bookingId', 'aestheticBooking'],
-      ['aestheticConsent', 'sessionId', 'aestheticSession'],
-      ['aestheticConsent', 'recordedById', 'user'],
-      ['aestheticPhoto', 'sessionId', 'aestheticSession'],
-      ['aestheticPhoto', 'uploadedById', 'user'],
     ];
 
     const broken: string[] = [];

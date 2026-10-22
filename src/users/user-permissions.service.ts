@@ -1,9 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { TenantBusinessKind } from '@prisma/client';
 import {
   effectivePermissions,
   grantablePermissions,
-  isPermissionForBusinessKind,
   PERMISSION_CATALOG,
   rolePermissions,
 } from '../common/permissions/permission-catalog';
@@ -17,20 +15,16 @@ export class UserPermissionsService {
   async describe(tenantId: string, userId: string) {
     const user = await this.findUser(tenantId, userId);
     const { revoked, granted } = await this.overridesOf(tenantId, user.role);
-    const businessKind = user.tenant.businessKind ?? TenantBusinessKind.MEDICAL;
-    const belongs = (permission: (typeof PERMISSION_CATALOG)[number]['key']) =>
-      isPermissionForBusinessKind(permission, businessKind);
-    const byRole = rolePermissions(user.role).filter(belongs);
-    const grantable = grantablePermissions(user.role).filter(belongs);
-    const effective = effectivePermissions(user.role, revoked, granted).filter(belongs);
+    const byRole = rolePermissions(user.role);
+    const grantable = grantablePermissions(user.role);
+    const effective = effectivePermissions(user.role, revoked, granted);
 
     return {
       userId,
       role: user.role,
       effective,
       permissions: PERMISSION_CATALOG.filter(
-        (entry) =>
-          belongs(entry.key) && (byRole.includes(entry.key) || grantable.includes(entry.key)),
+        (entry) => byRole.includes(entry.key) || grantable.includes(entry.key),
       ).map(({ key, group, label }) => ({
         key,
         group,
@@ -45,7 +39,7 @@ export class UserPermissionsService {
   private async findUser(tenantId: string, userId: string) {
     const user = await this.prisma.user.findFirst({
       where: { id: userId, tenantId },
-      select: { id: true, role: true, tenant: { select: { businessKind: true } } },
+      select: { id: true, role: true },
     });
     if (!user) throw new NotFoundException('Usuario no encontrado');
     return user;

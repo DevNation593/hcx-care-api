@@ -3,7 +3,6 @@ import { Reflector } from '@nestjs/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AppointmentsController } from '../../appointments/appointments.controller';
-import { AestheticsController } from '../../aesthetics/aesthetics.controller';
 import { BillingController } from '../../billing/billing.controller';
 import { ClinicalNotesController } from '../../clinical-notes/clinical-notes.controller';
 import { ClinicalTimelineController } from '../../clinical-timeline/clinical-timeline.controller';
@@ -41,7 +40,6 @@ type Controller = { name: string; prototype: object };
 const controllers: Controller[] = [
   PatientsController,
   AppointmentsController,
-  AestheticsController,
   BillingController,
   SpecialtyRecordsController,
   ClinicalNotesController,
@@ -83,9 +81,6 @@ describe('permission catalog', () => {
       'appointments.create',
       'appointments.update',
       'appointments.cancel',
-      'aesthetics.view',
-      'aesthetics.clients.manage',
-      'aesthetics.bookings.manage',
     ]);
     expect(rolePermissions('MASTER')).toHaveLength(PERMISSION_CATALOG.length);
     expect(rolePermissions('PACIENTE')).toEqual([]);
@@ -99,11 +94,6 @@ describe('permission catalog', () => {
       'treatments.manage',
       'billing.adjust',
       'cash.manage',
-      'aesthetics.services.manage',
-      'aesthetics.sessions.manage',
-      'aesthetics.consents.manage',
-      'aesthetics.photos.view',
-      'aesthetics.photos.manage',
     ]);
     expect(grantablePermissions('PROFESIONAL')).toEqual([
       'billing.view',
@@ -111,7 +101,6 @@ describe('permission catalog', () => {
       'treatments.manage',
       'billing.adjust',
       'cash.manage',
-      'aesthetics.services.manage',
     ]);
     expect(effectivePermissions('ASISTENTE', [], ['billing.view'])).toContain('billing.view');
     expect(effectivePermissions('ASISTENTE', [], ['clinical_records.view'])).not.toContain(
@@ -150,9 +139,6 @@ describe('permission catalog', () => {
       'patients.update',
       'appointments.create',
       'appointments.update',
-      'aesthetics.view',
-      'aesthetics.clients.manage',
-      'aesthetics.bookings.manage',
     ]);
     expect(effectivePermissions('MASTER', ['billing.create'])).not.toContain('billing.create');
   });
@@ -163,13 +149,9 @@ describe('permission catalog', () => {
   });
 
   it.each(guardedHandlers)(
-    '$route ($permission) is open only to roles that have or may receive the permission',
+    '$route ($permission) is open only to roles that have the permission',
     ({ permission, roles }) => {
-      const entry = PERMISSION_CATALOG.find((candidate) => candidate.key === permission)!;
-      const allowed: readonly string[] = [
-        ...entry.roles,
-        ...('grantable' in entry ? entry.grantable : []),
-      ];
+      const allowed = PERMISSION_CATALOG.find((entry) => entry.key === permission)!.roles;
 
       expect(roles.length).toBeGreaterThan(0);
       for (const role of roles) expect(allowed).toContain(role);
@@ -189,7 +171,6 @@ describe('permission catalog', () => {
 
     expect(annotated.sort()).toEqual(
       [
-        'aesthetics.controller.ts',
         'appointments.controller.ts',
         'billing-profiles.controller.ts',
         'billing.controller.ts',

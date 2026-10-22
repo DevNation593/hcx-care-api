@@ -18,8 +18,7 @@ async function clearingOrder(): Promise<string[]> {
     {
       get: (_target, model: string) =>
         special[model] ?? {
-          // One tenant, so the per-tenant cleanup of the aesthetic tables runs too.
-          findMany: async () => (model === 'tenant' ? [{ id: 'tenant-1' }] : []),
+          findMany: async () => [],
           deleteMany: async () => {
             if (!deleted.includes(model)) deleted.push(model);
             return { count: 0 };
