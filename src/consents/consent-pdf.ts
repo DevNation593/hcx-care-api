@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import '../common/pdf/standard-fonts';
 import { printable } from '../record-documents/record-pdf';
 
 export interface ConsentPdfInput {

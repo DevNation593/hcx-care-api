@@ -1,5 +1,6 @@
 import PDFDocument from 'pdfkit';
 import * as QRCode from 'qrcode';
+import '../common/pdf/standard-fonts';
 import { DocumentRow, DocumentSection } from './document-content';
 
 export interface RecordPdfInput {
