@@ -418,13 +418,105 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
     expect(entries.filter((entry: { type: string }) => entry.type === 'ENCOUNTER')).toHaveLength(2);
   });
 
+  describe('aesthetic studio', () => {
+    const studio: Record<string, string> = {};
+    const studioUrl = (path: string) => `/api/v1/tenants/${studio.tenantId}/${path}`;
+    const asCosmetologist = () => ({ Authorization: `Bearer ${studio.token}` });
+
+    beforeAll(async () => {
+      const login = await request(server())
+        .post('/api/v1/auth/login')
+        .send({ email: 'cosmiatra.aurora@psic.com', password: DEMO_PASSWORD })
+        .expect(200);
+      studio.token = login.body.accessToken;
+      studio.tenantId = login.body.user.tenantId;
+      studio.valentina = (
+        await prisma.patient.findFirstOrThrow({
+          where: { tenantId: studio.tenantId, firstName: 'Valentina' },
+        })
+      ).id;
+      studio.mariana = (
+        await prisma.patient.findFirstOrThrow({
+          where: { tenantId: studio.tenantId, firstName: 'Mariana' },
+        })
+      ).id;
+    });
+
+    it('lists the treatment sessions and serves the photo and the signed consent', async () => {
+      const sessions = await request(server())
+        .get(studioUrl(`patients/${studio.valentina}/treatment-sessions`))
+        .set(asCosmetologist())
+        .expect(200);
+      const peeling = sessions.body.find(
+        (s: { status: string }) => s.status === 'CLINICAL_COMPLETE',
+      );
+      expect(peeling).toBeDefined();
+
+      const files = await request(server())
+        .get(studioUrl(`patients/${studio.valentina}/files`))
+        .set(asCosmetologist())
+        .expect(200);
+      const items = Array.isArray(files.body) ? files.body : files.body.items;
+      const photo = items.find((f: { phase?: string }) => f.phase === 'BEFORE');
+      const image = await binary(
+        request(server())
+          .get(studioUrl(`patients/${studio.valentina}/files/${photo.id}/download`))
+          .set(asCosmetologist()),
+      ).expect(200);
+      expect(image.body.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+      const session = await prisma.treatmentSession.findUniqueOrThrow({
+        where: { id: peeling.id },
+      });
+      const pdf = await binary(
+        request(server())
+          .get(studioUrl(`consent-documents/${session.consentDocumentId}/pdf`))
+          .set(asCosmetologist()),
+      ).expect(200);
+      expect(pdf.body.subarray(0, 4).toString()).toBe('%PDF');
+    });
+
+    it('refuses to start the session that still waits for its consent', async () => {
+      const waiting = await prisma.treatmentSession.findFirstOrThrow({
+        where: { tenantId: studio.tenantId, status: 'READY_FOR_CONSENT' },
+      });
+      const refused = await request(server())
+        .post(studioUrl(`treatment-sessions/${waiting.id}/start`))
+        .set(asCosmetologist())
+        .send({})
+        .expect(409);
+      expect(refused.body.code).toBe('TREATMENT_SESSION_INVALID_TRANSITION');
+    });
+
+    it('refuses the medical modules and the clinical notes to the cosmetologist', async () => {
+      const soap = await request(server())
+        .post(studioUrl(`patients/${studio.mariana}/specialty-records`))
+        .set(asCosmetologist())
+        .send({
+          moduleKey: 'general.soap-note',
+          data: { subjective: 'Refiere', assessment: 'A', plan: 'P' },
+        })
+        .expect(403);
+      expect(soap.body.code).toBe('CLINICAL_RECORD_FORBIDDEN');
+
+      await request(server())
+        .post(studioUrl('clinical-notes'))
+        .set(asCosmetologist())
+        .send({ patientId: studio.mariana, content: 'Nota' })
+        .expect(403);
+    });
+  });
+
   it('can be run again: it replaces the rows and leaves no file behind', async () => {
     const before = storedFiles(storageRoot).length;
-    expect(before).toBe(await prisma.patientFile.count());
+    const signed = await prisma.consentDocument.count({ where: { status: 'SIGNED' } });
+    // Each signed consent keeps its PDF and its signature drawing next to the patient files.
+    expect(before).toBe((await prisma.patientFile.count()) + signed * 2);
 
     await seed();
 
     expect(storedFiles(storageRoot)).toHaveLength(before);
     expect(await prisma.tenant.count({ where: { name: 'Centro Médico Los Arrayanes' } })).toBe(1);
+    expect(await prisma.tenant.count({ where: { name: 'Estudio Estético Aurora' } })).toBe(1);
   });
 });

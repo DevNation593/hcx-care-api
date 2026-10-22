@@ -540,9 +540,10 @@ npm run prisma:generate
 
 ### 3. (Optional) Load the Demo Data
 
-The seed **deletes every row** (and the stored clinical files and studio photos) of the database
-in `DATABASE_URL`, production included, and loads the demos: Centro Médico Los Arrayanes and
-Estudio Estético Aurora. It prints that database's host when it starts. Every account it creates,
+The seed **deletes every row** (and the stored clinical files, session photos and signed consents)
+of the database in `DATABASE_URL`, production included, and loads the demos: Centro Médico Los
+Arrayanes and Estudio Estético Aurora, an Estética clinic on treatments, consents and patient files.
+It prints that database's host when it starts. Every account it creates,
 including `admin@plataforma.test`, uses the demo password; create the real platform administrator
 afterwards with `npm run platform:create-admin`, since the seed deletes it too.
 

@@ -19,6 +19,7 @@ import {
   SPECIALTY_MODULE_KEYS,
   SpecialtyCatalog,
 } from './seed-helpers';
+import { seedAestheticStudio } from './seed-aesthetic-studio';
 import { seedClinicalWorkflow } from './seed-clinical-workflow';
 
 export const DEMO_PASSWORD = 'Password123!';
@@ -92,6 +93,16 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
         isActive: true,
       },
     }),
+    db.specialty.upsert({
+      where: { code: 'AESTHETICS' },
+      update: { name: 'Estética', isActive: true },
+      create: {
+        code: 'AESTHETICS',
+        name: 'Estética',
+        description: 'Procedimientos estéticos faciales y corporales.',
+        isActive: true,
+      },
+    }),
   ]);
   // Retired from the catalog: no plan offers it and no clinic can select it.
   await db.specialty.upsert({
@@ -105,13 +116,15 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
     },
   });
 
-  const [psychology, nutrition, physiotherapy, dentistry, generalMedicine] = specialties;
+  const [psychology, nutrition, physiotherapy, dentistry, generalMedicine, aesthetics] =
+    specialties;
   const catalog: SpecialtyCatalog = {
     psychology,
     nutrition,
     physiotherapy,
     dentistry,
     generalMedicine,
+    aesthetics,
   };
 
   await db.specialtyModule.createMany({
@@ -144,7 +157,16 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   if (storage) {
     // The rows are about to go: their bytes would be left behind with nothing pointing at them.
     const files = await db.patientFile.findMany({ select: { storageKey: true } });
-    await Promise.all(files.map(({ storageKey }) => storage.remove(storageKey)));
+    const documents = await db.consentDocument.findMany({ select: { pdfStorageKey: true } });
+    const signatures = await db.consentSignature.findMany({
+      select: { signatureStorageKey: true },
+    });
+    const keys = [
+      ...files.map(({ storageKey }) => storageKey),
+      ...documents.map(({ pdfStorageKey }) => pdfStorageKey),
+      ...signatures.map(({ signatureStorageKey }) => signatureStorageKey),
+    ].filter((key): key is string => Boolean(key));
+    await Promise.all(keys.map((key) => storage.remove(key)));
   }
   // The seed writes none of what follows, but a database in use has it, and it restricts
   // deleting the encounters, records, users and branches below.
@@ -228,9 +250,9 @@ export interface SeedResult {
 
 /**
  * Replaces every row with the demo data set: the platform account, Los Arrayanes with its
- * clinical workflow (branches, encounters, documents and files) and the aesthetic studio Aurora.
- * All dates hang from `now`. Patient files and studio photos are seeded only when a `storage` is
- * given for their bytes.
+ * clinical workflow (branches, encounters, documents and files) and the aesthetic studio Aurora
+ * with its treatments. All dates hang from `now`. Patient files, session photos and signed
+ * consents are seeded only when a `storage` is given for their bytes.
  */
 export async function seedDatabase(
   db: PrismaClient,
@@ -273,6 +295,7 @@ export async function seedDatabase(
   };
 
   await seedClinicalWorkflow(ctx);
+  await seedAestheticStudio(ctx);
 
   // The rows above are written as plain text; with a key configured they are stored as the
   // API stores them, so the demo data is readable by the API and nothing else.

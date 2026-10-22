@@ -13,6 +13,7 @@ import { DEMO_DOCUMENT_CODES } from '../prisma/seed-clinical-workflow';
 import { BILLING_RULES } from '../src/subscription/subscription-billing.rules';
 import { seedDatabase } from '../prisma/seed';
 import {
+  CLINICAL_MODULES,
   CUSTOM_MODULE_PREFIX,
   findClinicalModule,
   validateModuleData,
@@ -135,12 +136,93 @@ describe('demo seed', () => {
   const values = (model: string, field: string) =>
     [...new Set(rows(model).map((row) => row[field]))].sort();
 
-  it('creates only Los Arrayanes as a client demo', () => {
+  it('creates only Los Arrayanes and the Aurora studio as client demos', () => {
     expect(
       rows('tenant')
         .filter((tenant) => !tenant.isPlatform)
         .map((tenant) => tenant.name),
-    ).toEqual(['Centro Médico Los Arrayanes']);
+    ).toEqual(['Centro Médico Los Arrayanes', 'Estudio Estético Aurora']);
+  });
+
+  describe('aesthetic studio', () => {
+    const studioId = () =>
+      rows('tenant').find((tenant) => tenant.name === 'Estudio Estético Aurora').id;
+    const of = (model: string) => rows(model).filter((row) => row.tenantId === studioId());
+    const aesthetics = () => rows('specialty').find((s) => s.code === 'AESTHETICS');
+    const sessions = () => of('treatmentSession');
+    const versionOf = (session: Row) => byId('treatmentVersion').get(session.treatmentVersionId);
+    const treatmentOf = (session: Row) => byId('treatment').get(versionOf(session).treatmentId);
+
+    it('is a clinic with only Estética and without clinical notes', () => {
+      expect(of('tenantSpecialty').map((row) => row.specialtyId)).toEqual([aesthetics().id]);
+      const notes = of('tenantModule').find((m) => m.moduleKey === 'core.clinicalNotes');
+      expect(notes.enabled).toBe(false);
+    });
+
+    it('has Estética professionals and treatments only', () => {
+      const staff = new Set(of('user').map((user) => user.id));
+      const profiles = rows('professionalProfile').filter((p) => staff.has(p.userId));
+      expect(profiles).toHaveLength(2);
+      expect(profiles.every((p) => p.specialtyId === aesthetics().id)).toBe(true);
+      expect(of('treatment').every((t) => t.specialtyId === aesthetics().id)).toBe(true);
+      expect(of('treatment').find((t) => t.name === 'Radiofrecuencia corporal').isActive).toBe(
+        false,
+      );
+    });
+
+    it('has sessions in every state the demo shows', () => {
+      expect(
+        sessions()
+          .map((s) => s.status)
+          .sort(),
+      ).toEqual(['CANCELLED', 'CLINICAL_COMPLETE', 'CLINICAL_COMPLETE', 'READY_FOR_CONSENT']);
+    });
+
+    it('signs the consent every completed session requires, and none for the one waiting', () => {
+      const documents = byId('consentDocument');
+      const signatures = new Set(rows('consentSignature').map((s) => s.documentId));
+      for (const session of sessions().filter((s) => s.status === 'CLINICAL_COMPLETE')) {
+        if (!versionOf(session).consentTemplateVersionId) continue;
+        const document = documents.get(session.consentDocumentId);
+        expect([treatmentOf(session).name, document?.status, signatures.has(document?.id)]).toEqual(
+          [treatmentOf(session).name, 'SIGNED', true],
+        );
+      }
+      const waiting = sessions().find((s) => s.status === 'READY_FOR_CONSENT');
+      expect(of('consentDocument').filter((d) => d.treatmentSessionId === waiting.id)).toEqual([]);
+      expect(waiting.formRecordId).toBeTruthy();
+    });
+
+    it('keeps the form and the before and after photos of the completed peeling', () => {
+      const peeling = sessions().find(
+        (s) => s.status === 'CLINICAL_COMPLETE' && treatmentOf(s).name === 'Peeling químico',
+      );
+      expect(peeling.formRecordId).toBeTruthy();
+      const phases = of('patientFile')
+        .filter((file) => file.treatmentSessionId === peeling.id)
+        .map((file) => file.phase);
+      expect(phases).toEqual(expect.arrayContaining(['BEFORE', 'AFTER']));
+    });
+
+    it('stores every photo, signature and consent PDF, and counts the photos', () => {
+      const photos = of('patientFile');
+      const keys = [
+        ...photos.map((file) => file.storageKey),
+        ...of('consentDocument').map((d) => d.pdfStorageKey),
+        ...of('consentSignature').map((s) => s.signatureStorageKey),
+      ];
+      expect(keys.length).toBeGreaterThan(photos.length);
+      expect(keys.filter((key) => !stored.has(key))).toEqual([]);
+      const used = photos.reduce((total, file) => total + file.sizeBytes, 0);
+      expect(of('tenantSubscription')[0].storageUsedBytes).toBe(BigInt(used));
+    });
+
+    it('writes no health-only module record', () => {
+      const healthOnly = new Set(
+        CLINICAL_MODULES.filter((m) => m.healthOnly).map((m) => m.moduleKey),
+      );
+      expect(of('specialtyRecord').filter((r) => healthOnly.has(r.moduleKey))).toEqual([]);
+    });
   });
 
   it('includes a general physician with an active professional profile', () => {
@@ -627,7 +709,8 @@ describe('demo seed', () => {
         (p) => !rows('patientBillingProfile').some((link) => link.patientId === p.id),
       ),
     }).toEqual({
-      archived: false,
+      // Paula, of the Aurora studio, no longer comes.
+      archived: true,
       removed: false,
       unassigned: false,
       sharedByTwoProfessionals: true,

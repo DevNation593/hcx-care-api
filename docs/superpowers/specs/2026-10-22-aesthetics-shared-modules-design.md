@@ -159,7 +159,7 @@ Reescribe `prisma/seed-aesthetic-studio.ts` sobre los módulos compartidos. Los 
 | Ficha | Formulario "Ficha estética facial" v1: fototipo, tipo de piel, zona a tratar, contraindicaciones, embarazo, medicación fotosensibilizante |
 | Consentimientos | Plantillas "Peeling químico" y "Depilación láser", versión 1 publicada |
 | Tratamientos (Estética) | Limpieza facial (sin requisitos); Peeling químico (ficha, consentimiento, 1 foto antes y 1 después, notas al cerrar); Depilación láser (consentimiento); Microdermoabrasión; Radiofrecuencia (inactivo) |
-| Sesiones | Peeling `CLINICAL_COMPLETE` con ficha, consentimiento firmado (firma PNG y PDF), fotos y notas; depilación `CLINICAL_COMPLETE`; peeling `READY_FOR_CONSENT` (iniciarlo responde 422); una `CANCELLED` |
+| Sesiones | Peeling `CLINICAL_COMPLETE` con ficha, consentimiento firmado (firma PNG y PDF), fotos y notas; depilación `CLINICAL_COMPLETE`; peeling `READY_FOR_CONSENT` (iniciarlo responde 409 `TREATMENT_SESSION_INVALID_TRANSITION`); una `CANCELLED` |
 | Agenda | Citas pasadas ligadas a las sesiones, una cancelada y tres próximas |
 | Cobro | No se siembra caja ni órdenes, igual que Los Arrayanes |
 
@@ -179,7 +179,7 @@ API:
   sesiones en estados coherentes con sus requisitos, fotos guardadas y contadas, firma y PDF del
   consentimiento. `seed-clear` sigue cubriendo todas las tablas.
 - E2E: el de la seed entra como la cosmiatra, lista sesiones, descarga una foto y el PDF del
-  consentimiento, recibe 422 al iniciar la sesión sin consentimiento y 403 al crear una Nota SOAP o
+  consentimiento, recibe 409 al iniciar la sesión sin consentimiento y 403 al crear una Nota SOAP o
   una receta. El de plataforma crea un consultorio solo de Estética y comprueba sus secciones.
 - Migración: se aplica sobre una base local con datos `Aesthetic*` de prueba y un consultorio
   `AESTHETIC_STUDIO`; termina, Estética queda en el catálogo y `migrate diff` no muestra cambios.
