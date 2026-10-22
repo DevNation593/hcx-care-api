@@ -17,6 +17,13 @@ const psychology = {
   description: null,
   modules: [{ id: 'module-1', moduleKey: 'psychology.notes' }],
 };
+const aesthetics = {
+  id: 'specialty-aesthetics',
+  code: 'AESTHETICS',
+  name: 'Estética',
+  description: null,
+  modules: [],
+};
 
 function input(overrides: Partial<CreatePlatformTenantDto> = {}): CreatePlatformTenantDto {
   return {
@@ -257,7 +264,7 @@ describe('PlatformTenantsService', () => {
     audit = { record: jest.fn(async () => undefined) };
     catalog = {
       resolveActiveCodes: jest.fn(async (codes) => {
-        const rows = [psychology].filter((row) => codes.includes(row.code));
+        const rows = [psychology, aesthetics].filter((row) => codes.includes(row.code));
         if (rows.length !== codes.length)
           throw new NotFoundException({ code: 'SPECIALTY_NOT_AVAILABLE' });
         return rows;
@@ -353,6 +360,23 @@ describe('PlatformTenantsService', () => {
     expect(detail.sections).toHaveLength(8);
     expect(detail.modules).toEqual([{ key: 'psychology.assessments', enabled: false }]);
     expect(detail.subscription).toMatchObject({ includedSpecialties: 1, specialtyPrice: 15 });
+  });
+
+  it('leaves clinical notes off by default for an aesthetic-only clinic', async () => {
+    await service.create(input({ specialtyCodes: ['aesthetics'] }), 'a');
+    const enabled = Object.fromEntries(state.modules.map((m) => [m.moduleKey, m.enabled]));
+    expect(enabled['core.clinicalNotes']).toBe(false);
+    expect(enabled['core.patients']).toBe(true);
+    expect(enabled['core.specialties']).toBe(true);
+  });
+
+  it('keeps clinical notes when the platform sends them for an aesthetic-only clinic', async () => {
+    await service.create(
+      input({ specialtyCodes: ['aesthetics'], sections: ['core.patients', 'core.clinicalNotes'] }),
+      'a',
+    );
+    const enabled = state.modules.filter((m) => m.enabled).map((m) => m.moduleKey);
+    expect(enabled.sort()).toEqual(['core.clinicalNotes', 'core.patients']);
   });
 
   it('stores the explicit section list and disables the rest', async () => {
@@ -482,6 +506,10 @@ describe('PlatformTenantsService', () => {
   it('builds the catalog defaults for every plan and tenant type that match', () => {
     const catalogResult = service.getSectionCatalog();
     expect(catalogResult.sections.map((s) => s.key)).toEqual([...SECTION_KEYS]);
+    expect(catalogResult.nonHealthSpecialtyCodes).toEqual(['AESTHETICS']);
+    expect(catalogResult.sections.find((s) => s.key === 'core.clinicalNotes')?.healthOnly).toBe(
+      true,
+    );
     const pairs = catalogResult.defaults.map((d) => `${d.planType}/${d.tenantType}`).sort();
     expect(pairs).toEqual(
       [

@@ -43,7 +43,7 @@ const DAY_MS = 24 * HOUR_MS;
 const LOCAL_UTC_OFFSET_HOURS = -5;
 
 export type SeedSpecialtyKey = DemoSpecialtyKey | 'generalMedicine';
-export type SpecialtyCatalog = Record<SeedSpecialtyKey, { id: string }>;
+export type SpecialtyCatalog = Record<SeedSpecialtyKey, { id: string; code: string }>;
 
 /** The modules each specialty owns: the ones the clinical module registry defines for it. */
 export const SPECIALTY_MODULE_KEYS: Record<SeedSpecialtyKey, string[]> = {
@@ -359,7 +359,13 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
     })),
   });
 
-  const enabledSections = new Set<string>(defaultSections(spec.planType, spec.tenantType));
+  const enabledSections = new Set<string>(
+    defaultSections(
+      spec.planType,
+      spec.tenantType,
+      spec.specialties.map((key) => ctx.catalog[key].code),
+    ),
+  );
   for (const section of spec.disabledSections ?? []) enabledSections.delete(section);
   await db.tenantModule.createMany({
     data: [

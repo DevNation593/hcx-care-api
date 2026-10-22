@@ -60,6 +60,23 @@ describe('section catalog', () => {
     expect(validateSections([])).toEqual([]);
     expect(validateSections(['core.billing', 'core.billing'])).toEqual(['core.billing']);
   });
+  it('leaves clinical notes off only when every specialty is non-health', () => {
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC', ['AESTHETICS'])).not.toContain(
+      'core.clinicalNotes',
+    );
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC', ['AESTHETICS'])).toEqual(
+      expect.arrayContaining(['core.patients', 'core.calendar', 'core.specialties', 'core.team']),
+    );
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC', ['AESTHETICS', 'GENERAL_MEDICINE'])).toContain(
+      'core.clinicalNotes',
+    );
+    expect(defaultSections('CLINIC_BASIC', 'CLINIC')).toContain('core.clinicalNotes');
+  });
+  it('marks clinical notes as the only health-only section', () => {
+    expect(SECTION_CATALOG.filter((s) => s.healthOnly).map((s) => s.key)).toEqual([
+      'core.clinicalNotes',
+    ]);
+  });
   it('rejects the retired aesthetic section an old client may still send', () => {
     expect(() => validateSections(['core.team', 'core.aesthetics'])).toThrow(
       expect.objectContaining({
