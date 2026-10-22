@@ -85,6 +85,25 @@ export function demoRadiograph(): Buffer {
   });
 }
 
+/** A patch of skin, with spots before the treatment and almost none after it. */
+export function demoSkinPhoto(phase: 'BEFORE' | 'AFTER'): Buffer {
+  const width = 320;
+  const height = 240;
+  const spots = phase === 'BEFORE' ? 14 : 3;
+  return encodePng(width, height, (x, y) => {
+    let spot = 0;
+    for (let index = 0; index < spots; index += 1) {
+      const dx = x - ((index * 97) % width);
+      const dy = y - ((index * 61 + 30) % height);
+      if (dx * dx + dy * dy < 36) spot = 1;
+    }
+    const grain = (x * 7 + y * 13) % 6;
+    return spot
+      ? [168 + grain, 96 + grain, 84 + grain, 255]
+      : [232 + (grain % 3), 190 + grain, 160 + grain, 255];
+  });
+}
+
 /** A one-page PDF with a made-up laboratory result. */
 export function demoLabReport(patientName: string, date: string): Promise<Buffer> {
   const doc = new PDFDocument({

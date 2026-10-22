@@ -13,6 +13,7 @@ import type {
   PrismaClient,
   SubscriptionStatus,
   Tenant,
+  TenantBusinessKind,
   TenantSubscription,
   TenantType,
   User,
@@ -199,6 +200,8 @@ export interface SeedTenantSpec {
   phone?: string;
   address?: string;
   tenantType: TenantType;
+  /** MEDICAL when omitted. An aesthetic studio has no specialties and only its own sections. */
+  businessKind?: TenantBusinessKind;
   isActive?: boolean;
   onboardingCompleted?: boolean;
   /** Omit for a clinic that has not completed its fiscal data and therefore cannot invoice. */
@@ -316,6 +319,7 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
       phone: spec.phone,
       address: spec.address,
       tenantType: spec.tenantType,
+      businessKind: spec.businessKind,
       isActive: spec.isActive ?? true,
       onboardingCompleted: spec.onboardingCompleted ?? true,
       ...spec.fiscal,
@@ -359,7 +363,9 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
     })),
   });
 
-  const enabledSections = new Set<string>(defaultSections(spec.planType, spec.tenantType));
+  const enabledSections = new Set<string>(
+    defaultSections(spec.planType, spec.tenantType, spec.businessKind),
+  );
   for (const section of spec.disabledSections ?? []) enabledSections.delete(section);
   await db.tenantModule.createMany({
     data: [
@@ -388,6 +394,25 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
   };
   clinic.master = await createUser(ctx, clinic, { ...spec.master, role: 'MASTER' });
   return clinic;
+}
+
+/**
+ * Runs `work` with the tenant set as the API sets it. Tables under forced row level security
+ * (the aesthetic ones) only show and accept rows of that tenant, even to the table owner.
+ */
+export function withTenantContext<T>(
+  db: PrismaClient,
+  tenantId: string,
+  work: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  return db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
+      return work(tx);
+    },
+    // A remote database answers each statement slower than a local one.
+    { timeout: 120_000 },
+  );
 }
 
 /** Stores on the subscription the counters the API maintains as data is created. */

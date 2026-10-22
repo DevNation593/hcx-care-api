@@ -1,18 +1,17 @@
-import { assertDemoSeedTarget } from '../prisma/seed';
+import { demoSeedTarget } from '../prisma/seed';
 
 describe('demo seed target', () => {
-  it('refuses production and remote databases before deleting any data', () => {
-    expect(() =>
-      assertDemoSeedTarget('postgresql://u:p@db.supabase.co:5432/prod', 'development'),
-    ).toThrow('solo se puede ejecutar en PostgreSQL local');
-    expect(() =>
-      assertDemoSeedTarget('postgresql://u:p@127.0.0.1:5432/test', 'production'),
-    ).toThrow('solo se puede ejecutar en PostgreSQL local');
+  it('runs on the database of DATABASE_URL, production included, with no other variable', () => {
+    expect(
+      demoSeedTarget('postgresql://u:p@AWS-1-us-east-1.pooler.supabase.com:5432/postgres'),
+    ).toBe('aws-1-us-east-1.pooler.supabase.com');
+    expect(demoSeedTarget('postgresql://u:p@127.0.0.1:5432/test')).toBe('127.0.0.1');
   });
 
-  it('allows an explicit local database for demo work', () => {
-    expect(() =>
-      assertDemoSeedTarget('postgresql://u:p@127.0.0.1:5432/test', 'development'),
-    ).not.toThrow();
+  it('refuses a missing or non-PostgreSQL url', () => {
+    expect(() => demoSeedTarget(undefined)).toThrow('DATABASE_URL de PostgreSQL válido');
+    expect(() => demoSeedTarget('mysql://u:p@localhost/x')).toThrow(
+      'DATABASE_URL de PostgreSQL válido',
+    );
   });
 });
