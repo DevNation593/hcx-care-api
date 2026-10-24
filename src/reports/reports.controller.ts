@@ -34,7 +34,7 @@ export class ActivityReportQueryDto {
 
 @ApiTags('reports')
 @ApiBearerAuth('access-token')
-@RequireSection('core.calendar')
+@RequireSection('core.admin.reports')
 @Controller('tenants/:tenantId/reports')
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}

@@ -8,7 +8,7 @@ import { CreateDocumentTemplateDto, UpdateDocumentTemplateDto } from './dto/docu
 
 @ApiTags('document-templates')
 @ApiBearerAuth('access-token')
-@RequireSection('core.specialties')
+@RequireSection('core.clinical.specialties')
 @Controller('tenants/:tenantId/document-templates')
 export class DocumentTemplatesController {
   constructor(private readonly templatesService: DocumentTemplatesService) {}
@@ -32,6 +32,7 @@ export class DocumentTemplatesController {
   }
 
   @Post()
+  @RequireSection('core.clinical.templates')
   @Roles('MASTER')
   @ApiOperation({ summary: 'Add a template' })
   create(
@@ -43,6 +44,7 @@ export class DocumentTemplatesController {
   }
 
   @Patch(':templateId')
+  @RequireSection('core.clinical.templates')
   @Roles('MASTER')
   @ApiOperation({ summary: 'Update a template or take it out of use' })
   update(

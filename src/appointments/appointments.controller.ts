@@ -16,7 +16,7 @@ import { PermissionChecker } from '../common/permissions/permission-checker.serv
 
 @ApiTags('appointments')
 @ApiBearerAuth('access-token')
-@RequireSection('core.calendar')
+@RequireSection('core.agenda.calendar')
 @Roles('MASTER', 'ASISTENTE', 'PROFESIONAL')
 @Controller('tenants/:tenantId/appointments')
 export class AppointmentsController {

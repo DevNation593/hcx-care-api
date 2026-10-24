@@ -10,7 +10,7 @@ import { RequirePermission } from '../common/permissions/permission-catalog';
 
 @ApiTags('clinical-timeline')
 @ApiBearerAuth('access-token')
-@RequireSection('core.clinicalNotes')
+@RequireSection('core.clinical.timeline')
 @Roles('MASTER', 'PROFESIONAL')
 @UseGuards(ClinicalProfileGuard)
 @Controller('tenants/:tenantId/patients/:patientId/clinical-timeline')

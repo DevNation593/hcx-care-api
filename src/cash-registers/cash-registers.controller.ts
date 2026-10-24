@@ -13,7 +13,7 @@ import {
 
 @ApiTags('cash-registers')
 @ApiBearerAuth('access-token')
-@RequireSection('core.billing')
+@RequireSection('core.billing.cash')
 @Controller('tenants/:tenantId/cash-registers')
 export class CashRegistersController {
   constructor(private readonly service: CashRegistersService) {}

@@ -10,7 +10,7 @@ import { RecordDocumentsService } from './record-documents.service';
 
 @ApiTags('specialty-records')
 @ApiBearerAuth('access-token')
-@RequireSection('core.storage')
+@RequireSection('core.patients.files')
 @UseGuards(ClinicalProfileGuard)
 @Controller('tenants/:tenantId/patients/:patientId/specialty-records/:recordId/document')
 export class RecordDocumentsController {

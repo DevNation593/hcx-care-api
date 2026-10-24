@@ -25,7 +25,7 @@ import { RequirePermission } from '../common/permissions/permission-catalog';
 
 @ApiTags('clinical-notes')
 @ApiBearerAuth('access-token')
-@RequireSection('core.clinicalNotes')
+@RequireSection('core.clinical.notes')
 @UseGuards(ClinicalProfileGuard)
 @Controller('tenants/:tenantId/clinical-notes')
 export class ClinicalNotesController {
