@@ -155,7 +155,7 @@ describe('demo seed', () => {
 
     it('is a clinic with only Estética and without clinical notes', () => {
       expect(of('tenantSpecialty').map((row) => row.specialtyId)).toEqual([aesthetics().id]);
-      const notes = of('tenantModule').find((m) => m.moduleKey === 'core.clinicalNotes');
+      const notes = of('tenantModule').find((m) => m.moduleKey === 'core.clinical.notes');
       expect(notes.enabled).toBe(false);
     });
 

@@ -7,7 +7,7 @@ import { CreateMedicationDto, UpdateMedicationDto } from './dto/medication.dto';
 
 @ApiTags('catalogs')
 @ApiBearerAuth('access-token')
-@RequireSection('core.specialties')
+@RequireSection('core.clinical.specialties')
 @Controller('tenants/:tenantId')
 export class CatalogsController {
   constructor(private readonly catalogsService: CatalogsService) {}

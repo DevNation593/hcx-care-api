@@ -30,7 +30,7 @@ import {
   TestConnectionDto,
 } from './dto/invoicing.dto';
 @Controller('tenants/:tenantId')
-@RequireSection('core.billing')
+@RequireSection('core.billing.invoicing')
 export class InvoicingController {
   constructor(
     private readonly connections: ConnectionService,

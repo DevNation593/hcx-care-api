@@ -9,7 +9,7 @@ import { CreateConsentTemplateDto, SaveConsentDraftDto } from './dto/consent-tem
 
 @ApiTags('consent-templates')
 @ApiBearerAuth('access-token')
-@RequireSection('core.specialties')
+@RequireSection('core.treatments.consents')
 @Controller('tenants/:tenantId')
 export class ConsentTemplatesController {
   constructor(private readonly templatesService: ConsentTemplatesService) {}

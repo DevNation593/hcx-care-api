@@ -8,7 +8,7 @@ import { RequireSection } from '../common/decorators/require-section.decorator';
 
 @ApiTags('tasks')
 @ApiBearerAuth('access-token')
-@RequireSection('core.tasks')
+@RequireSection('core.agenda.tasks')
 @Controller('tenants/:tenantId/tasks')
 export class TasksController {
   constructor(private readonly tasksService: TasksService) {}

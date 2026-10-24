@@ -115,14 +115,14 @@ describe('Platform admin panel (E2E)', () => {
         temporaryPassword,
         planType: 'TRIAL',
         specialtyCodes: ['PSYCHOLOGY'],
-        sections: SECTION_KEYS.filter((key) => key !== 'core.tasks'),
+        sections: SECTION_KEYS.filter((key) => key !== 'core.agenda.tasks'),
       })
       .expect(201);
 
     tenantId = response.body.tenant.id;
     const sections = response.body.sections as { key: string; enabled: boolean }[];
     expect(sections).toHaveLength(SECTION_KEYS.length);
-    expect(sections.find((section) => section.key === 'core.tasks')?.enabled).toBe(false);
+    expect(sections.find((section) => section.key === 'core.agenda.tasks')?.enabled).toBe(false);
     expect(sections.filter((section) => section.enabled)).toHaveLength(SECTION_KEYS.length - 1);
     expect(response.body.master).toMatchObject({ email: masterEmail, mustChangePassword: true });
     expect(response.body.master.password).toBeUndefined();
@@ -161,10 +161,10 @@ describe('Platform admin panel (E2E)', () => {
         ]),
       );
       expect(enabled).toMatchObject({
-        'core.clinicalNotes': false,
+        'core.clinical.notes': false,
         'core.patients': true,
-        'core.calendar': true,
-        'core.specialties': true,
+        'core.agenda.calendar': true,
+        'core.clinical.specialties': true,
       });
       expect(response.body.specialties.map((s: { code: string }) => s.code)).toEqual([
         'AESTHETICS',
@@ -199,7 +199,10 @@ describe('Platform admin panel (E2E)', () => {
       .get(api(`/tenants/${tenantId}/tasks`))
       .set(bearer(masterToken))
       .expect(403);
-    expect(response.body).toMatchObject({ code: 'SECTION_NOT_ENABLED', section: 'core.tasks' });
+    expect(response.body).toMatchObject({
+      code: 'SECTION_NOT_ENABLED',
+      section: 'core.agenda.tasks',
+    });
   });
 
   it('opens tasks after the ADMIN enables the section', async () => {

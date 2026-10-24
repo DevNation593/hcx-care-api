@@ -15,7 +15,7 @@ import { RequirePermission } from '../common/permissions/permission-catalog';
 
 @ApiTags('encounters')
 @ApiBearerAuth('access-token')
-@RequireSection('core.specialties')
+@RequireSection('core.clinical.specialties')
 @UseGuards(ClinicalProfileGuard)
 @Controller('tenants/:tenantId/patients/:patientId/encounters')
 export class EncountersController {

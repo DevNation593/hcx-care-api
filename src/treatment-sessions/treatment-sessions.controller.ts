@@ -30,7 +30,7 @@ import { TreatmentSessionsService } from './treatment-sessions.service';
 
 @ApiTags('treatment-sessions')
 @ApiBearerAuth('access-token')
-@RequireSection('core.specialties')
+@RequireSection('core.treatments.sessions')
 @Controller('tenants/:tenantId')
 export class TreatmentSessionsController {
   constructor(

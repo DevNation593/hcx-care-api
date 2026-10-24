@@ -4,7 +4,12 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { PLATFORM_ROUTE_KEY } from '../decorators/platform-route.decorator';
 import { REQUIRE_SECTION_KEY } from '../decorators/require-section.decorator';
-import { SectionKey } from '../sections/section-catalog';
+import { SectionKey, isSectionInEffect, sectionDefinition } from '../sections/section-catalog';
+
+function sectionWithParent(section: SectionKey): SectionKey[] {
+  const { parent } = sectionDefinition(section);
+  return parent ? [parent, section] : [section];
+}
 
 @Injectable()
 export class SectionGuard implements CanActivate {
@@ -28,15 +33,16 @@ export class SectionGuard implements CanActivate {
 
     const tenantId = context.switchToHttp().getRequest().user?.tenantId;
 
-    // Fail closed: a missing row is treated exactly like a disabled section.
-    const row = tenantId
-      ? await this.prisma.tenantModule.findUnique({
-          where: { tenantId_moduleKey: { tenantId, moduleKey: section } },
-          select: { enabled: true },
+    // Fail closed: a missing row is treated exactly like a disabled section. A submodule
+    // also needs its module's row on.
+    const rows = tenantId
+      ? await this.prisma.tenantModule.findMany({
+          where: { tenantId, moduleKey: { in: sectionWithParent(section) }, enabled: true },
+          select: { moduleKey: true },
         })
-      : null;
+      : [];
 
-    if (!row?.enabled) {
+    if (!isSectionInEffect(section, new Set(rows.map(({ moduleKey }) => moduleKey)))) {
       throw new ForbiddenException({
         statusCode: 403,
         code: 'SECTION_NOT_ENABLED',

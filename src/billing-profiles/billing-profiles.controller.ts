@@ -14,7 +14,7 @@ import {
 
 @ApiTags('billing-profiles')
 @ApiBearerAuth('access-token')
-@RequireSection('core.billing')
+@RequireSection('core.billing.profiles')
 @Controller('tenants/:tenantId')
 export class BillingProfilesController {
   constructor(private readonly service: BillingProfilesService) {}

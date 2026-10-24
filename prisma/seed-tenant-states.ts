@@ -242,7 +242,7 @@ async function seedPersonalPro(ctx: SeedContext): Promise<SeedTenant> {
     },
     specialties: ['psychology'],
     addOns: ['apiAccess', 'whatsAppIntegration'],
-    disabledSections: ['core.billing', 'core.storage'],
+    disabledSections: ['core.billing', 'core.patients.files'],
     disabledModules: ['psychology.assessments'],
     master: {
       email: 'titular.online@psic.com',
@@ -283,8 +283,8 @@ async function seedPersonalPro(ctx: SeedContext): Promise<SeedTenant> {
     action: 'UPDATE',
     entity: 'TENANT',
     entityId: clinic.tenant.id,
-    before: { sections: { 'core.billing': true, 'core.storage': true } },
-    after: { sections: { 'core.billing': false, 'core.storage': false } },
+    before: { sections: { 'core.billing': true, 'core.patients.files': true } },
+    after: { sections: { 'core.billing': false, 'core.patients.files': false } },
     reason: 'El consultorio factura con otro sistema y no usa archivos.',
     at: clock.days(-40),
   });

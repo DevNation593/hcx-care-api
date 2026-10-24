@@ -28,7 +28,7 @@ import {
 
 @ApiTags('patient-files')
 @ApiBearerAuth('access-token')
-@RequireSection('core.storage')
+@RequireSection('core.patients.files')
 @UseGuards(ClinicalProfileGuard)
 @Controller('tenants/:tenantId/patients/:patientId/files')
 export class PatientFilesController {
@@ -109,7 +109,7 @@ export class PatientFilesController {
 
 @ApiTags('storage')
 @ApiBearerAuth('access-token')
-@RequireSection('core.storage')
+@RequireSection('core.patients.files')
 @Controller('tenants/:tenantId/storage')
 export class StorageController {
   constructor(private readonly filesService: PatientFilesService) {}

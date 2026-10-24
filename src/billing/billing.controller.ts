@@ -10,7 +10,7 @@ import { RequirePermission } from '../common/permissions/permission-catalog';
 
 @ApiTags('billing')
 @ApiBearerAuth('access-token')
-@RequireSection('core.billing')
+@RequireSection('core.billing.invoicing')
 @Controller('tenants/:tenantId/billing')
 @UseGuards(JwtAuthGuard, TenantGuard, RolesGuard)
 export class BillingController {

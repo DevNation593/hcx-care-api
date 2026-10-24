@@ -9,7 +9,7 @@ import { FormDefinitionsService } from './form-definitions.service';
 
 @ApiTags('clinical-modules')
 @ApiBearerAuth('access-token')
-@RequireSection('core.specialties')
+@RequireSection('core.clinical.specialties')
 @Controller('tenants/:tenantId')
 export class ClinicalModulesController {
   constructor(
@@ -43,6 +43,7 @@ export class ClinicalModulesController {
   }
 
   @Post('form-definitions')
+  @RequireSection('core.clinical.forms')
   @Roles('MASTER')
   @ApiOperation({ summary: 'Create a form (version 1)' })
   createForm(
@@ -54,6 +55,7 @@ export class ClinicalModulesController {
   }
 
   @Patch('form-definitions/:formId')
+  @RequireSection('core.clinical.forms')
   @Roles('MASTER')
   @ApiOperation({
     summary: 'Update a form',
