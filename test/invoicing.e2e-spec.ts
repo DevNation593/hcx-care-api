@@ -143,6 +143,7 @@ describe('durable invoicing HTTP / PostgreSQL / provider simulator', () => {
       data: {
         tenantId,
         name: 'Service ' + randomUUID(),
+        code: 'SRV-' + randomUUID().slice(0, 8).toUpperCase(),
         versions: {
           create: {
             tenantId,

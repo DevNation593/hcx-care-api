@@ -1480,6 +1480,8 @@ model Treatment {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   name        String
+  // The main code (código principal) of its invoice lines. Uppercase, unique per tenant.
+  code        String
   category    String?
   // Null: any professional of the tenant can open sessions. Set: only that specialty.
   specialtyId String?
@@ -1494,6 +1496,7 @@ model Treatment {
   versions TreatmentVersion[]
 
   @@unique([tenantId, name])
+  @@unique([tenantId, code])
   @@index([tenantId, isActive])
 }
 

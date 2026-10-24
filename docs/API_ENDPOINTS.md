@@ -424,14 +424,14 @@ All of these routes need the section `core.specialties`. Under `/tenants/{tenant
 | POST | `/consent-templates/{id}/publish` | MASTER + `treatments.manage` | 200, the draft is published | 409 `CONSENT_VERSION_LOCKED` without a draft |
 | POST | `/consent-template-versions/{versionId}/retire` | MASTER + `treatments.manage` | 200, the version is retired; what already uses it keeps it | 409 `CONSENT_VERSION_LOCKED` |
 
-**Treatments.** Price and requirements live in immutable versions; a session pins the version it was opened with.
+**Treatments.** Price and requirements live in immutable versions; a session pins the version it was opened with. `code` (1 to 20 of `A-Z 0-9 . _ -`, starting with a letter or digit, stored in uppercase, unique per clinic) is the main code (código principal) of the treatment's invoice lines. The provider cannot edit a product, so once a rename or a new tax rate no longer matches the product already created under the code, the line goes out as the code plus `.` and four hex characters.
 
 | Method | Path | Who | Result | Errors |
 |---|---|---|---|---|
 | GET | `/treatments?active=` | MASTER, PROFESIONAL, ASISTENTE | Treatments with their current version | |
-| POST | `/treatments` | MASTER + `treatments.manage` | 201, treatment with version 1 (`{ name, category?, specialtyId?, version: { price, taxRatePercent, durationMinutes, formDefinitionId?, formVersion?, consentTemplateVersionId?, requirements? } }`) | 400 `TREATMENT_REQUIREMENTS_INVALID` (with `issues`), 409 `TREATMENT_NAME_TAKEN` |
+| POST | `/treatments` | MASTER + `treatments.manage` | 201, treatment with version 1 (`{ name, code, category?, specialtyId?, version: { price, taxRatePercent, durationMinutes, formDefinitionId?, formVersion?, consentTemplateVersionId?, requirements? } }`) | 400 `TREATMENT_REQUIREMENTS_INVALID` (with `issues`), 409 `TREATMENT_NAME_TAKEN`, 409 `TREATMENT_CODE_TAKEN` |
 | GET | `/treatments/{id}` | MASTER, PROFESIONAL, ASISTENTE | Treatment with every version | 404 `TREATMENT_NOT_FOUND` |
-| PATCH | `/treatments/{id}` | MASTER + `treatments.manage` | Name, category, specialty or `isActive` | 404 `TREATMENT_NOT_FOUND`, 409 `TREATMENT_NAME_TAKEN` |
+| PATCH | `/treatments/{id}` | MASTER + `treatments.manage` | Name, code, category, specialty or `isActive` | 404 `TREATMENT_NOT_FOUND`, 409 `TREATMENT_NAME_TAKEN`, 409 `TREATMENT_CODE_TAKEN` |
 | POST | `/treatments/{id}/versions` | MASTER + `treatments.manage` | 201, new version, which becomes the current one | 400 `TREATMENT_REQUIREMENTS_INVALID`, 409 `TREATMENT_VERSION_CONFLICT` |
 
 `requirements` takes `medicalForm.required`, `informedConsent.{ required, validityDays }`, `photos.{ minimumBefore, minimumAfter }` and `clinicalNotes.requiredForCompletion`; keys left out take their defaults (nothing required).

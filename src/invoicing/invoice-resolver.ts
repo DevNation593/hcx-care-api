@@ -4,7 +4,13 @@ import { Prisma, InvoiceRequest } from '@prisma/client';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FiscalSnapshot } from './invoice-snapshot';
-import { InvoicingProvider, InvoiceBody, ProviderError } from './provider/invoicing-provider';
+import {
+  InvoicingProvider,
+  InvoiceBody,
+  Product,
+  ProductInput,
+  ProviderError,
+} from './provider/invoicing-provider';
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 @Injectable()
 export class InvoiceResolver {
@@ -61,20 +67,19 @@ export class InvoiceResolver {
       );
       if (!rate) throw new ProviderError('data', 'TAX_RATE_UNSUPPORTED');
       const definition = { name: l.name, unitPrice: l.unitPrice, ivaRateCode: rate.rateCode };
-      const sku = 'HCX.' + hash({ localId: l.localId, ...definition }).slice(0, 21);
-      let product = await client.findProduct(sku);
-      if (!product) {
-        try {
-          await this.assertLease(row);
-          product = await client.createProduct({ sku, ...definition });
-        } catch (e) {
-          if (!(e instanceof ProviderError) || e.code !== 'PRODUCT_SKU_TAKEN') throw e;
-          product = await client.findProduct(sku);
-        }
+      // A treatment's code is the main code of its line. The provider cannot edit a product, so
+      // when a rename or a new tax rate no longer matches the product under the code, the line
+      // goes under the code plus a short hash of its name and rate.
+      const skus = l.code
+        ? [l.code, `${l.code}.${hash({ name: l.name, ivaRateCode: rate.rateCode }).slice(0, 4)}`]
+        : ['HCX.' + hash({ localId: l.localId, ...definition }).slice(0, 21)];
+      const matches = (p: Product) => p.name === l.name && p.ivaRateCode === rate.rateCode;
+      let product: Product | null = null;
+      for (const sku of skus) {
+        product = await this.product(row, client, { sku, ...definition });
+        if (matches(product)) break;
       }
-      if (!product) throw new ProviderError('transient', 'PRODUCT_SYNC_PENDING');
-      if (product.name !== l.name || product.ivaRateCode !== rate.rateCode)
-        throw new ProviderError('data', 'PRODUCT_SYNC_REQUIRED');
+      if (!product || !matches(product)) throw new ProviderError('data', 'PRODUCT_SYNC_REQUIRED');
       await this.ref(row, 'PRODUCT', l.localId, product.id, hash(definition));
       lines.push({
         productId: product.id,
@@ -94,6 +99,20 @@ export class InvoiceResolver {
       payments: s.payments,
       ...(s.replacesDocumentId ? { replacesDocumentId: s.replacesDocumentId } : {}),
     };
+  }
+  private async product(row: InvoiceRequest, client: InvoicingProvider, input: ProductInput) {
+    let product = await client.findProduct(input.sku);
+    if (!product) {
+      try {
+        await this.assertLease(row);
+        product = await client.createProduct(input);
+      } catch (e) {
+        if (!(e instanceof ProviderError) || e.code !== 'PRODUCT_SKU_TAKEN') throw e;
+        product = await client.findProduct(input.sku);
+      }
+    }
+    if (!product) throw new ProviderError('transient', 'PRODUCT_SYNC_PENDING');
+    return product;
   }
   private lease(row: InvoiceRequest) {
     return { id: row.id, leaseToken: row.leaseToken, leaseUntil: { gt: new Date() } };

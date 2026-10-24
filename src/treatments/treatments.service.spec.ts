@@ -91,12 +91,18 @@ describe('TreatmentsService', () => {
     it('stores version 1 as the current version, with its author, and returns plain numbers', async () => {
       const result = await service.create('tenant-1', 'user-1', {
         name: ' Botox ',
+        code: ' btx-01 ',
         version: input({ requirements: { photos: { minimumBefore: 2 } } }),
       });
 
       expect(prisma.applyRlsContext).toHaveBeenCalledWith(prisma);
       const { data } = prisma.treatment.create.mock.calls[0][0];
-      expect(data).toMatchObject({ tenantId: 'tenant-1', name: 'Botox', currentVersion: 1 });
+      expect(data).toMatchObject({
+        tenantId: 'tenant-1',
+        name: 'Botox',
+        code: 'BTX-01',
+        currentVersion: 1,
+      });
       expect(data.versions.create).toMatchObject({
         tenantId: 'tenant-1',
         version: 1,
@@ -111,14 +117,31 @@ describe('TreatmentsService', () => {
     });
 
     it('maps a taken name to 409 TREATMENT_NAME_TAKEN', async () => {
-      prisma.treatment.create.mockRejectedValue({ code: 'P2002' });
+      prisma.treatment.create.mockRejectedValue({
+        code: 'P2002',
+        meta: { target: ['tenantId', 'name'] },
+      });
 
       const error = await failure(
-        service.create('tenant-1', 'user-1', { name: 'Botox', version: input() }),
+        service.create('tenant-1', 'user-1', { name: 'Botox', code: 'BTX-01', version: input() }),
       );
 
       expect(error.getStatus()).toBe(409);
       expect(error.getResponse()).toMatchObject({ code: 'TREATMENT_NAME_TAKEN' });
+    });
+
+    it('maps a taken code to 409 TREATMENT_CODE_TAKEN', async () => {
+      prisma.treatment.create.mockRejectedValue({
+        code: 'P2002',
+        meta: { target: ['tenantId', 'code'] },
+      });
+
+      const error = await failure(
+        service.create('tenant-1', 'user-1', { name: 'Botox', code: 'BTX-01', version: input() }),
+      );
+
+      expect(error.getStatus()).toBe(409);
+      expect(error.getResponse()).toMatchObject({ code: 'TREATMENT_CODE_TAKEN' });
     });
 
     it('rejects a specialty the tenant does not have', async () => {
@@ -127,6 +150,7 @@ describe('TreatmentsService', () => {
       const issues = await invalidIssues(
         service.create('tenant-1', 'user-1', {
           name: 'Botox',
+          code: 'BTX-01',
           specialtyId: 'other',
           version: input(),
         }),
@@ -150,6 +174,7 @@ describe('TreatmentsService', () => {
 
       await service.create('tenant-1', 'user-1', {
         name: 'Botox',
+        code: 'BTX-01',
         version: input({
           formDefinitionId: 'form-1',
           formVersion: 3,
@@ -169,7 +194,7 @@ describe('TreatmentsService', () => {
 
   describe('version validation', () => {
     const create = (version: TreatmentVersionInput) =>
-      service.create('tenant-1', 'user-1', { name: 'Botox', version });
+      service.create('tenant-1', 'user-1', { name: 'Botox', code: 'BTX-01', version });
 
     it('requires a consent version when the consent is required', async () => {
       const issues = await invalidIssues(
@@ -404,6 +429,19 @@ describe('TreatmentsService', () => {
       const error = await failure(service.update('tenant-1', 'treatment-1', { name: 'Botox' }));
 
       expect(error.getResponse()).toMatchObject({ code: 'TREATMENT_NAME_TAKEN' });
+    });
+
+    it('stores a new code in uppercase and maps a taken one to 409 TREATMENT_CODE_TAKEN', async () => {
+      await service.update('tenant-1', 'treatment-1', { code: ' tox-02 ' });
+      expect(prisma.treatment.update.mock.calls[0][0].data).toEqual({ code: 'TOX-02' });
+
+      prisma.treatment.update.mockRejectedValue({
+        code: 'P2002',
+        meta: { target: 'Treatment_tenantId_code_key' },
+      });
+      const error = await failure(service.update('tenant-1', 'treatment-1', { code: 'TOX-01' }));
+
+      expect(error.getResponse()).toMatchObject({ code: 'TREATMENT_CODE_TAKEN' });
     });
   });
 
