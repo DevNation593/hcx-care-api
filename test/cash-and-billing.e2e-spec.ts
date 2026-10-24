@@ -123,6 +123,7 @@ describe('Cash register, orders, payments and billing eligibility (E2E)', () => 
       .set(as('master'))
       .send({
         name: unique(name),
+        code: `CAJA-${counter}`,
         specialtyId,
         version: { price: 120, taxRatePercent: 15, durationMinutes: 30, requirements, ...version },
       })

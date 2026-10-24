@@ -58,7 +58,14 @@ export class InvoiceRequestsService {
             items: {
               where: { releasedAt: null },
               orderBy: { id: 'asc' },
-              include: { treatmentSession: { select: { treatmentVersionId: true } } },
+              include: {
+                treatmentSession: {
+                  select: {
+                    treatmentVersionId: true,
+                    treatmentVersion: { select: { treatment: { select: { code: true } } } },
+                  },
+                },
+              },
             },
             payments: { where: { status: 'RECORDED' } },
           },
@@ -122,6 +129,9 @@ export class InvoiceRequestsService {
           issueDate: new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10),
           lines: order.items.map((i) => ({
             localId: i.kind === 'TREATMENT_SESSION' ? i.treatmentSession!.treatmentVersionId : i.id,
+            ...(i.kind === 'TREATMENT_SESSION'
+              ? { code: i.treatmentSession!.treatmentVersion.treatment.code }
+              : {}),
             name: i.description,
             quantity: i.quantity.toFixed(6),
             unitPrice: i.unitPrice.toFixed(2),
