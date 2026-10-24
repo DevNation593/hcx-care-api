@@ -101,7 +101,6 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
   afterAll(async () => {
     // The seed also fills catalogs shared by every clinic; nothing of it is left for other suites.
     await clearDatabase(prisma, storage);
-    await prisma.planSpecialty.deleteMany();
     await prisma.specialtyModule.deleteMany();
     await app.close();
   });

@@ -8,7 +8,7 @@ import type {
   BillingProfile,
   BillingProfileKind,
   Patient,
-  PlanType,
+  Plan,
   Prisma,
   PrismaClient,
   SubscriptionStatus,
@@ -18,15 +18,9 @@ import type {
   User,
   UserRole,
 } from '@prisma/client';
-import { defaultSections, SECTION_KEYS, SectionKey } from '../src/common/sections/section-catalog';
-import type { ModuleName } from '../src/subscription/dto/customize-features.dto';
-import {
-  calculateSubscriptionPrice,
-  getPlanFeatureFlags,
-  getPlanIncludedModules,
-  getPlanLimits,
-  moduleToDbKey,
-} from '../src/subscription/subscription-pricing';
+import { SECTION_KEYS, SectionKey } from '../src/common/sections/section-catalog';
+import { DEFAULT_PLANS } from '../src/plans/default-plans';
+import { planModuleDefaults, subscriptionValuesFromPlan } from '../src/plans/plan-values';
 import {
   assertValidTaxIdentification,
   normalizeIdNumber,
@@ -148,10 +142,16 @@ export interface SeedLogin {
   note: string;
 }
 
+/** A plan of the catalog with the module keys it includes. */
+export type SeedPlan = Plan & { modules: { moduleKey: string }[] };
+export type SeedPlanCode = (typeof DEFAULT_PLANS)[number]['code'];
+
 export interface SeedContext {
   db: PrismaClient;
   clock: SeedClock;
   catalog: SpecialtyCatalog;
+  /** The default plans, by code. */
+  plans: Map<string, SeedPlan>;
   hashedPassword: string;
   platformAdminId: string;
   logins: SeedLogin[];
@@ -209,46 +209,48 @@ export interface SeedTenantSpec {
     taxIdentificationNumber: string;
   };
   settings?: Partial<Prisma.TenantSettingsUncheckedCreateInput>;
-  planType: PlanType;
+  plan: SeedPlanCode;
   status: SubscriptionStatus;
-  /** Dates, usage and any limit that differs from the plan catalog. */
+  /** Dates and usage. A price or limit set here is recorded as an override of the plan. */
   subscription?: Partial<Prisma.TenantSubscriptionUncheckedCreateInput>;
   specialties: SeedSpecialtyKey[];
-  /** Paid modules on top of the ones the plan includes. */
-  addOns?: ModuleName[];
+  /** Modules the plan gives that this clinic has turned off (overrides). */
   disabledSections?: SectionKey[];
   disabledModules?: string[];
   master: Omit<SeedUserSpec, 'role'>;
 }
 
-/** Subscription columns for a plan, priced the way the API prices a plan change. */
-export function planSubscriptionData(
-  planType: PlanType,
-  specialtyCount: number,
-  addOns: ModuleName[] = [],
-) {
-  const limits = getPlanLimits(planType);
-  const featureFlags = getPlanFeatureFlags(planType);
-  for (const module of addOns) featureFlags[moduleToDbKey(module)] = true;
-  const pricing = calculateSubscriptionPrice({
-    planType,
-    selectedModules: [...getPlanIncludedModules(planType), ...addOns],
-    specialtyCount,
-  });
+/** Creates the default plans with the ids the editable-plans migration gives them. */
+export async function seedPlans(db: PrismaClient): Promise<Map<string, SeedPlan>> {
+  const plans = new Map<string, SeedPlan>();
+  for (const { modules, ...plan } of DEFAULT_PLANS) {
+    const created = await db.plan.create({
+      data: { id: `plan_${plan.code.toLowerCase()}`, ...plan },
+    });
+    await db.planModule.createMany({
+      data: modules.map((moduleKey) => ({ planId: created.id, moduleKey })),
+    });
+    plans.set(created.code, { ...created, modules: modules.map((moduleKey) => ({ moduleKey })) });
+  }
+  return plans;
+}
 
-  return {
-    planType,
-    basePrice: pricing.totalMonthly,
-    pricePerSeat: limits.pricePerSeat,
-    seatsPsychologistsMax: limits.seatsIncluded,
-    maxActivePatients: limits.maxActivePatients,
-    storageGB: limits.storageGB,
-    monthlyNotificationsLimit: limits.monthlyNotificationsLimit,
-    includedSpecialties: limits.includedSpecialties,
-    specialtyPrice: limits.specialtyPrice,
-    monthlyElectronicInvoicesLimit: limits.monthlyElectronicInvoicesLimit,
-    ...featureFlags,
-  };
+export function seedPlan(ctx: Pick<SeedContext, 'plans'>, code: SeedPlanCode): SeedPlan {
+  const plan = ctx.plans.get(code);
+  if (!plan) throw new Error(`Unknown seed plan ${code}`);
+  return plan;
+}
+
+/** The plan a payment charged for, named as it was then. */
+export function planRef(ctx: Pick<SeedContext, 'plans'>, code: SeedPlanCode) {
+  const plan = seedPlan(ctx, code);
+  return { planId: plan.id, planName: plan.name };
+}
+
+/** Subscription columns for a plan, as the platform panel sets them. */
+export function planSubscriptionData(ctx: Pick<SeedContext, 'plans'>, code: SeedPlanCode) {
+  const plan = seedPlan(ctx, code);
+  return { planId: plan.id, ...subscriptionValuesFromPlan(plan) };
 }
 
 export async function createUser(
@@ -337,6 +339,8 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
     },
   });
 
+  const plan = seedPlan(ctx, spec.plan);
+  const planValues = planSubscriptionData(ctx, spec.plan);
   const subscription = await db.tenantSubscription.create({
     data: {
       tenantId: tenant.id,
@@ -344,8 +348,15 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
       startDate: clock.days(-30),
       currentPeriodStart: clock.days(-10),
       currentPeriodEnd: clock.days(20),
-      ...planSubscriptionData(spec.planType, spec.specialties.length, spec.addOns),
+      ...planValues,
       ...spec.subscription,
+      // A price or limit the spec sets apart from the plan is an override, as in the panel.
+      overriddenFields: Object.entries(planValues)
+        .filter(([field, value]) => {
+          const own = spec.subscription?.[field as keyof typeof spec.subscription];
+          return field !== 'planId' && own !== undefined && String(own) !== String(value);
+        })
+        .map(([field]) => field),
     },
   });
 
@@ -360,13 +371,11 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
     })),
   });
 
-  const enabledSections = new Set<string>(
-    defaultSections(
-      spec.planType,
-      spec.tenantType,
-      spec.specialties.map((key) => ctx.catalog[key].code),
-    ),
+  const planSections = planModuleDefaults(
+    plan.modules.map(({ moduleKey }) => moduleKey),
+    spec.specialties.map((key) => ctx.catalog[key].code),
   );
+  const enabledSections = new Set<string>(planSections);
   for (const section of spec.disabledSections ?? []) enabledSections.delete(section);
   await db.tenantModule.createMany({
     data: [
@@ -377,11 +386,13 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
           moduleKey,
           enabled: !spec.disabledModules?.includes(moduleKey),
         })),
-      ...SECTION_KEYS.map((moduleKey) => ({
+      ...(SECTION_KEYS.map((moduleKey) => ({
         tenantId: tenant.id,
         moduleKey,
         enabled: enabledSections.has(moduleKey),
-      })),
+        source:
+          enabledSections.has(moduleKey) === planSections.has(moduleKey) ? 'PLAN' : 'OVERRIDE',
+      })) satisfies Prisma.TenantModuleCreateManyInput[]),
     ],
   });
 

@@ -10,6 +10,7 @@ import { PlatformTenantsService } from '../src/platform/platform-tenants.service
 import { PrismaService } from '../src/prisma/prisma.service';
 import { TenantSpecialtiesService } from '../src/specialties/tenant-specialties.service';
 import { assertSpecialtyStageDatabaseSafety } from './helpers/assert-e2e-database';
+import { ensureDefaultPlans } from './helpers/ensure-default-plans';
 
 jest.setTimeout(60000);
 
@@ -36,7 +37,7 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
     masterLastName: label,
     masterEmail: `MASTER-${label}-${suffix}@example.test`,
     temporaryPassword: password,
-    planType: 'TRIAL' as const,
+    planId: 'plan_clinic_basic',
     specialtyCodes: [' psychology '],
   });
 
@@ -63,6 +64,7 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
     platformTenants = app.get(PlatformTenantsService);
     selections = app.get(TenantSpecialtiesService);
     await prisma.cleanDatabase();
+    await ensureDefaultPlans(prisma);
     const platformAdmin = await createPlatformAdmin(prisma, {
       email: `platform-${suffix}@example.test`,
       password: platformPassword,
@@ -124,7 +126,10 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
       email: `master-primary-${suffix}@example.test`,
       mustChangePassword: true,
     });
-    expect(created.body.subscription).toMatchObject({ planType: 'TRIAL', status: 'TRIALING' });
+    expect(created.body.subscription).toMatchObject({
+      plan: { code: 'CLINIC_BASIC' },
+      status: 'TRIALING',
+    });
     // `mustChangePassword` is expected; a password field or a bcrypt hash is not.
     expect(JSON.stringify(created.body)).not.toMatch(/"(temporary)?password"|\$2[aby]\$/i);
     expect(created.body.specialties.map((item: { code: string }) => item.code)).toEqual([
@@ -172,18 +177,20 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
       .send(selection)
       .expect(200);
     expect(first.body.pricing).toEqual(second.body.pricing);
+    // Clínica Básico includes 2 specialties at 99 a month.
     expect(second.body.pricing).toMatchObject({
       selectedSpecialties: 2,
-      billableSpecialties: 1,
-      specialtyAddonsPrice: 15,
-      totalMonthly: 15,
+      billableSpecialties: 0,
+      specialtyAddonsPrice: 0,
+      totalMonthly: 99,
     });
     expect(second.body.specialties.map((item: { code: string }) => item.code)).toEqual([
       'PSYCHOLOGY',
       'NUTRITION',
     ]);
     const subscription = await prisma.tenantSubscription.findUniqueOrThrow({ where: { tenantId } });
-    expect(Number(subscription.basePrice)).toBe(15);
+    // The plan price stays; extra specialties are added when charging.
+    expect(Number(subscription.basePrice)).toBe(99);
     expect(await prisma.tenantSpecialty.count({ where: { tenantId } })).toBe(2);
     expect(
       await prisma.subscriptionSpecialty.count({
@@ -240,7 +247,7 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
     expect(nutritionOnly.body.specialties.map((item: { code: string }) => item.code)).toEqual([
       'NUTRITION',
     ]);
-    expect(nutritionOnly.body.pricing).toMatchObject({ selectedSpecialties: 1, totalMonthly: 0 });
+    expect(nutritionOnly.body.pricing).toMatchObject({ selectedSpecialties: 1, totalMonthly: 99 });
     expect(await prisma.tenantSpecialty.count({ where: { tenantId } })).toBe(1);
     expect(
       await prisma.subscriptionSpecialty.count({

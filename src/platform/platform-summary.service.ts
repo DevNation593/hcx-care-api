@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { PlanType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface PlatformSummary {
@@ -8,7 +7,7 @@ export interface PlatformSummary {
   subscriptions: { trialing: number; active: number; pastDue: number; blocked: number };
   pendingPayments: { count: number; amount: number; currency: string };
   trialsEndingSoon: { id: string; name: string; trialEndsAt: Date }[];
-  recentTenants: { id: string; name: string; planType: PlanType | null; createdAt: Date }[];
+  recentTenants: { id: string; name: string; planName: string | null; createdAt: Date }[];
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -50,7 +49,7 @@ export class PlatformSummaryService {
           id: true,
           name: true,
           createdAt: true,
-          subscription: { select: { planType: true } },
+          subscription: { select: { plan: { select: { name: true } } } },
         },
       }),
     ]);
@@ -81,7 +80,7 @@ export class PlatformSummaryService {
       recentTenants: recent.map((tenant) => ({
         id: tenant.id,
         name: tenant.name,
-        planType: tenant.subscription?.planType ?? null,
+        planName: tenant.subscription?.plan.name ?? null,
         createdAt: tenant.createdAt,
       })),
     };

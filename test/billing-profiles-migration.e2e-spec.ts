@@ -45,7 +45,7 @@ describe('Billing profiles deployment script (E2E)', () => {
     masterId = tenant.master!.id;
     await prisma.tenantSubscription.updateMany({
       where: { tenantId },
-      data: { planType: 'CLINIC_BASIC', status: 'ACTIVE', seatsPsychologistsMax: 5 },
+      data: { planId: 'plan_clinic_basic', status: 'ACTIVE', seatsPsychologistsMax: 5 },
     });
     const specialtyId = (
       await prisma.specialty.findUniqueOrThrow({ where: { code: 'PSYCHOLOGY' } })
