@@ -7,7 +7,7 @@ import { RequireSection } from '../common/decorators/require-section.decorator';
 
 @ApiTags('patient-team')
 @ApiBearerAuth('access-token')
-@RequireSection('core.patients')
+@RequireSection('core.patients.team')
 @Roles('MASTER', 'ASISTENTE', 'PROFESIONAL')
 @Controller('tenants/:tenantId/patients/:patientId/team')
 export class PatientTeamController {

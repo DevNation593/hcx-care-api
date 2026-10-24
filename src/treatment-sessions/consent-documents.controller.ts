@@ -10,7 +10,7 @@ import { ConsentReasonDto, SignConsentDto } from './dto/consent-document.dto';
 
 @ApiTags('treatment-sessions')
 @ApiBearerAuth('access-token')
-@RequireSection('core.specialties')
+@RequireSection('core.treatments.sessions')
 @Controller('tenants/:tenantId/consent-documents')
 export class ConsentDocumentsController {
   constructor(private readonly consentsService: ConsentDocumentsService) {}

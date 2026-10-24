@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Put } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../common/decorators/roles.decorator';
+import { RequireSection } from '../common/decorators/require-section.decorator';
 import { BranchesService } from './branches.service';
 import { CreateBranchDto, SetBranchProfessionalsDto, UpdateBranchDto } from './dto/branch.dto';
 
@@ -18,6 +19,7 @@ export class BranchesController {
   }
 
   @Post()
+  @RequireSection('core.admin.branches')
   @Roles('MASTER')
   @ApiOperation({
     summary: 'Create a branch',
@@ -28,6 +30,7 @@ export class BranchesController {
   }
 
   @Patch(':branchId')
+  @RequireSection('core.admin.branches')
   @Roles('MASTER')
   @ApiOperation({
     summary: 'Update, activate or deactivate a branch, or make it the main one',
@@ -42,6 +45,7 @@ export class BranchesController {
   }
 
   @Put(':branchId/professionals')
+  @RequireSection('core.admin.branches')
   @Roles('MASTER')
   @ApiOperation({
     summary: 'Set the professionals who attend in a branch',

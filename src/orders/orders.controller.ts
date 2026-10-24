@@ -35,7 +35,7 @@ const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{1,100}$/;
 
 @ApiTags('orders')
 @ApiBearerAuth('access-token')
-@RequireSection('core.billing')
+@RequireSection('core.billing.orders')
 @Controller('tenants/:tenantId/orders')
 export class OrdersController {
   constructor(
@@ -200,7 +200,7 @@ export class OrdersController {
  */
 @ApiTags('orders')
 @ApiBearerAuth('access-token')
-@RequireSection('core.billing')
+@RequireSection('core.billing.orders')
 @Controller('tenants/:tenantId/treatment-sessions')
 export class BillableSessionsController {
   constructor(private readonly service: OrdersService) {}
@@ -220,7 +220,7 @@ export class BillableSessionsController {
 
 @ApiTags('orders')
 @ApiBearerAuth('access-token')
-@RequireSection('core.billing')
+@RequireSection('core.billing.orders')
 @Controller('tenants/:tenantId/payments')
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
