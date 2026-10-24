@@ -1,22 +1,4 @@
-import {
-  AppointmentStatus,
-  AuditAction,
-  AuditEntity,
-  EncounterStatus,
-  InvoiceDocumentType,
-  InvoiceStatus,
-  NotificationStatus,
-  NotificationType,
-  PlanType,
-  PrismaClient,
-  SubscriptionEventType,
-  SubscriptionPaymentKind,
-  SubscriptionPaymentStatus,
-  SubscriptionStatus,
-  TaskPriority,
-  TaskStatus,
-  TenantType,
-} from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { validateFormData, validateFormSchema } from '../src/clinical-forms/form-schema';
 import {
   grantablePermissions,
@@ -30,7 +12,6 @@ import { normalizeVerificationCode } from '../src/specialty-records/verification
 import { DEMO_DOCUMENT_CODES } from '../prisma/seed-clinical-workflow';
 import { BILLING_RULES } from '../src/subscription/subscription-billing.rules';
 import { seedDatabase } from '../prisma/seed';
-import { SPECIALTY_MODULE_KEYS } from '../prisma/seed-helpers';
 import {
   CLINICAL_MODULES,
   CUSTOM_MODULE_PREFIX,
@@ -117,8 +98,16 @@ function createMemoryDatabase() {
     },
   });
 
-  const db = new Proxy({}, { get: (_target, model: string) => delegate(model) });
-  return { db: db as unknown as PrismaClient, rows };
+  // Transactions run their work at once; setting the tenant context has nothing to filter here.
+  const special: Record<string, unknown> = {
+    $transaction: async (work: (tx: unknown) => Promise<unknown>) => work(db),
+    $executeRaw: async () => 0,
+  };
+  const db: unknown = new Proxy(
+    {},
+    { get: (_target, model: string) => special[model] ?? delegate(model) },
+  );
+  return { db: db as PrismaClient, rows };
 }
 
 const NOW = new Date('2026-10-02T15:30:00.000Z');
@@ -146,51 +135,119 @@ describe('demo seed', () => {
 
   const values = (model: string, field: string) =>
     [...new Set(rows(model).map((row) => row[field]))].sort();
-  const all = (enumeration: Record<string, string>) => Object.values(enumeration).sort();
 
-  it('has at least one row for every value of every state enum', () => {
-    expect(values('tenant', 'tenantType')).toEqual(all(TenantType));
-    expect(values('tenantSubscription', 'planType')).toEqual(all(PlanType));
-    expect(values('tenantSubscription', 'status')).toEqual(all(SubscriptionStatus));
-    expect(values('subscriptionPayment', 'kind')).toEqual(all(SubscriptionPaymentKind));
-    expect(values('subscriptionPayment', 'status')).toEqual(all(SubscriptionPaymentStatus));
-    expect(values('subscriptionEvent', 'eventType')).toEqual(all(SubscriptionEventType));
-    expect(values('appointment', 'status')).toEqual(all(AppointmentStatus));
-    expect(values('task', 'status')).toEqual(all(TaskStatus));
-    expect(values('task', 'priority')).toEqual(all(TaskPriority));
-    expect(values('notificationLog', 'type')).toEqual(all(NotificationType));
-    expect(values('notificationLog', 'status')).toEqual(all(NotificationStatus));
-    expect(values('auditLog', 'action')).toEqual(all(AuditAction));
-    // TODO(treatment-sessions, cash-and-billing): the demo seed has no treatment sessions,
-    // consent documents, orders, payments, cash registers, billing profiles or invoice requests
-    // yet; drop this exemption when it gains them.
-    const unseededEntities = [
-      'TREATMENT_SESSION',
-      'CONSENT_DOCUMENT',
-      'BILLING_PROFILE',
-      'CASH_REGISTER',
-      'INVOICE_REQUEST',
-      'ORDER',
-      'PAYMENT',
-    ];
-    expect(values('auditLog', 'entity')).toEqual(
-      all(AuditEntity).filter((entity) => !unseededEntities.includes(entity)),
-    );
-    expect(values('encounter', 'status')).toEqual(all(EncounterStatus));
-    expect(values('invoice', 'status')).toEqual(all(InvoiceStatus));
-    expect(values('invoice', 'documentType')).toEqual(all(InvoiceDocumentType));
+  it('creates only Los Arrayanes and the Aurora studio as client demos', () => {
+    expect(
+      rows('tenant')
+        .filter((tenant) => !tenant.isPlatform)
+        .map((tenant) => tenant.name),
+    ).toEqual(['Centro Médico Los Arrayanes', 'Estudio Estético Aurora']);
   });
 
-  it('covers every role in use and leaves the retired ones out or closed', () => {
-    // CLIENTE and PSICOLOGO were migrated away and PACIENTE has no login: none is seeded.
-    expect(values('user', 'role')).toEqual([
-      'ADMIN',
-      'ASISTENTE',
-      'MASTER',
-      'PROFESIONAL',
-      'SOPORTE',
-    ]);
-    expect(rows('user').filter((user) => user.role === 'SOPORTE' && user.isActive)).toEqual([]);
+  describe('aesthetic studio', () => {
+    const studioId = () =>
+      rows('tenant').find((tenant) => tenant.name === 'Estudio Estético Aurora').id;
+    const of = (model: string) => rows(model).filter((row) => row.tenantId === studioId());
+    const aesthetics = () => rows('specialty').find((s) => s.code === 'AESTHETICS');
+    const sessions = () => of('treatmentSession');
+    const versionOf = (session: Row) => byId('treatmentVersion').get(session.treatmentVersionId);
+    const treatmentOf = (session: Row) => byId('treatment').get(versionOf(session).treatmentId);
+
+    it('is a clinic with only Estética and without clinical notes', () => {
+      expect(of('tenantSpecialty').map((row) => row.specialtyId)).toEqual([aesthetics().id]);
+      const notes = of('tenantModule').find((m) => m.moduleKey === 'core.clinicalNotes');
+      expect(notes.enabled).toBe(false);
+    });
+
+    it('has Estética professionals and treatments only', () => {
+      const staff = new Set(of('user').map((user) => user.id));
+      const profiles = rows('professionalProfile').filter((p) => staff.has(p.userId));
+      expect(profiles).toHaveLength(2);
+      expect(profiles.every((p) => p.specialtyId === aesthetics().id)).toBe(true);
+      expect(of('treatment').every((t) => t.specialtyId === aesthetics().id)).toBe(true);
+      expect(of('treatment').find((t) => t.name === 'Radiofrecuencia corporal').isActive).toBe(
+        false,
+      );
+    });
+
+    it('has sessions in every state the demo shows', () => {
+      expect(
+        sessions()
+          .map((s) => s.status)
+          .sort(),
+      ).toEqual(['CANCELLED', 'CLINICAL_COMPLETE', 'CLINICAL_COMPLETE', 'READY_FOR_CONSENT']);
+    });
+
+    it('signs the consent every completed session requires, and none for the one waiting', () => {
+      const documents = byId('consentDocument');
+      const signatures = new Set(rows('consentSignature').map((s) => s.documentId));
+      for (const session of sessions().filter((s) => s.status === 'CLINICAL_COMPLETE')) {
+        if (!versionOf(session).consentTemplateVersionId) continue;
+        const document = documents.get(session.consentDocumentId);
+        expect([treatmentOf(session).name, document?.status, signatures.has(document?.id)]).toEqual(
+          [treatmentOf(session).name, 'SIGNED', true],
+        );
+      }
+      const waiting = sessions().find((s) => s.status === 'READY_FOR_CONSENT');
+      expect(of('consentDocument').filter((d) => d.treatmentSessionId === waiting.id)).toEqual([]);
+      expect(waiting.formRecordId).toBeTruthy();
+    });
+
+    it('keeps the form and the before and after photos of the completed peeling', () => {
+      const peeling = sessions().find(
+        (s) => s.status === 'CLINICAL_COMPLETE' && treatmentOf(s).name === 'Peeling químico',
+      );
+      expect(peeling.formRecordId).toBeTruthy();
+      const phases = of('patientFile')
+        .filter((file) => file.treatmentSessionId === peeling.id)
+        .map((file) => file.phase);
+      expect(phases).toEqual(expect.arrayContaining(['BEFORE', 'AFTER']));
+    });
+
+    it('stores every photo, signature and consent PDF, and counts the photos', () => {
+      const photos = of('patientFile');
+      const keys = [
+        ...photos.map((file) => file.storageKey),
+        ...of('consentDocument').map((d) => d.pdfStorageKey),
+        ...of('consentSignature').map((s) => s.signatureStorageKey),
+      ];
+      expect(keys.length).toBeGreaterThan(photos.length);
+      expect(keys.filter((key) => !stored.has(key))).toEqual([]);
+      const used = photos.reduce((total, file) => total + file.sizeBytes, 0);
+      expect(of('tenantSubscription')[0].storageUsedBytes).toBe(BigInt(used));
+    });
+
+    it('gives its form records verification codes the public page can find', () => {
+      const codes = of('specialtyRecord').map((record) => record.verificationCode);
+      expect(codes.length).toBeGreaterThan(0);
+      for (const code of codes) expect(normalizeVerificationCode(code)).toBe(code);
+      const everyCode = rows('specialtyRecord').map((record) => record.verificationCode);
+      expect(new Set(everyCode).size).toBe(everyCode.length);
+    });
+
+    it('writes no health-only module record', () => {
+      const healthOnly = new Set(
+        CLINICAL_MODULES.filter((m) => m.healthOnly).map((m) => m.moduleKey),
+      );
+      expect(of('specialtyRecord').filter((r) => healthOnly.has(r.moduleKey))).toEqual([]);
+    });
+  });
+
+  it('includes a general physician with an active professional profile', () => {
+    const specialty = rows('specialty').find((item) => item.code === 'GENERAL_MEDICINE');
+    expect(specialty).toEqual(
+      expect.objectContaining({ name: 'Medicina General', isActive: true }),
+    );
+    const physician = rows('user').find((user) => user.email === 'medicina.arrayanes@psic.com');
+    expect(physician).toEqual(expect.objectContaining({ role: 'PROFESIONAL' }));
+    expect(rows('professionalProfile')).toContainEqual(
+      expect.objectContaining({ userId: physician.id, specialtyId: specialty.id, isActive: true }),
+    );
+  });
+
+  it('seeds only active platform and clinic roles', () => {
+    expect(values('user', 'role')).toEqual(['ADMIN', 'ASISTENTE', 'MASTER', 'PROFESIONAL']);
+    expect(rows('user').every((user) => user.isActive)).toBe(true);
   });
 
   it('gives every clinic one MASTER and the eight sections, and keeps ADMIN on the platform', () => {
@@ -298,8 +355,7 @@ describe('demo seed', () => {
         .map((second) => `${first.id} / ${second.id}`),
     );
     expect(overlaps).toEqual([]);
-    // The clinic that allows it has a pair to show.
-    expect(allowsDoubleBooking.size).toBe(1);
+    expect(allowsDoubleBooking.size).toBe(0);
   });
 
   it('stores the usage counters the API would have computed, within the plan limits', () => {
@@ -325,19 +381,6 @@ describe('demo seed', () => {
         subscription.monthlyElectronicInvoicesLimit,
       );
     }
-  });
-
-  it('has a clinic at each limit: seats, patients and monthly invoices', () => {
-    const subscriptions = rows('tenantSubscription');
-    expect(subscriptions.some((s) => s.seatsPsychologistsUsed === s.seatsPsychologistsMax)).toBe(
-      true,
-    );
-    expect(subscriptions.some((s) => s.activePatientsCount === s.maxActivePatients)).toBe(true);
-    expect(
-      subscriptions.some(
-        (s) => s.monthlyElectronicInvoicesUsed === s.monthlyElectronicInvoicesLimit,
-      ),
-    ).toBe(true);
   });
 
   it('leaves every subscription in a state the hourly lifecycle job will not change at once', () => {
@@ -402,24 +445,21 @@ describe('demo seed', () => {
     ).toEqual([]);
   });
 
-  it('has a record for every specialty module and for general modules', () => {
-    const specialtyKeys = Object.values(SPECIALTY_MODULE_KEYS).flat().sort();
+  it('keeps clinical records in modules enabled for Los Arrayanes', () => {
+    const enabled = new Set(
+      rows('tenantModule')
+        .filter((module) => module.enabled)
+        .map((module) => module.moduleKey),
+    );
     const seeded = values('specialtyRecord', 'moduleKey');
 
     const isOwnForm = (moduleKey: string) => moduleKey.startsWith(CUSTOM_MODULE_PREFIX);
     expect(
-      seeded.filter((moduleKey) => !moduleKey.startsWith('general.') && !isOwnForm(moduleKey)),
-    ).toEqual(specialtyKeys);
-    // Every general module has a record, and so have the forms designed by a clinic.
-    expect(seeded.filter((moduleKey) => moduleKey.startsWith('general.'))).toEqual(
-      [
-        ...new Set(
-          CLINICAL_MODULES.map(({ moduleKey }) => moduleKey).filter((moduleKey) =>
-            moduleKey.startsWith('general.'),
-          ),
-        ),
-      ].sort(),
-    );
+      seeded
+        .filter((moduleKey) => !moduleKey.startsWith('general.') && !isOwnForm(moduleKey))
+        .every((key) => enabled.has(key)),
+    ).toBe(true);
+    expect(seeded.some((moduleKey) => moduleKey.startsWith('general.'))).toBe(true);
     expect(seeded.some(isOwnForm)).toBe(true);
   });
 
@@ -446,37 +486,6 @@ describe('demo seed', () => {
       });
       expect(validateModuleData(definition, record.data)).toEqual(record.data);
     }
-  });
-
-  it('keeps corrected and removed clinical records with their audit trail', () => {
-    const notes = rows('clinicalNote');
-    const corrected = notes.find((note) => note.version === 3);
-    const removed = notes.find((note) => note.deletedAt);
-    const audit = (entityId: string) =>
-      rows('auditLog')
-        .filter((log) => log.entityId === entityId)
-        .map((log) => log.action);
-
-    expect(audit(corrected.id)).toEqual(['CREATE', 'UPDATE', 'UPDATE']);
-    expect(audit(removed.id)).toEqual(['CREATE', 'DELETE']);
-    expect(removed.deletionReason).toBeTruthy();
-    // A mistyped assessment and a certificate withdrawn after it was issued.
-    const removedRecords = rows('specialtyRecord').filter((record) => record.deletedAt);
-    expect(removedRecords).toHaveLength(2);
-    for (const record of removedRecords) {
-      expect(record.deletionReason).toBeTruthy();
-      expect(audit(record.id)).toContain('DELETE');
-    }
-
-    const clinical = rows('auditLog').filter(
-      (log) => log.entity === 'CLINICAL_NOTE' || log.entity === 'SPECIALTY_RECORD',
-    );
-    expect(clinical.every((log) => log.patientId)).toBe(true);
-    expect(
-      clinical
-        .filter((log) => log.action === 'UPDATE' || log.action === 'DELETE')
-        .every((log) => log.reason),
-    ).toBe(true);
   });
 
   describe('clinical workflow clinic', () => {
@@ -663,7 +672,7 @@ describe('demo seed', () => {
     });
   });
 
-  it('covers the account and patient states the access rules depend on', () => {
+  it('keeps the master nonclinical and the demo patients varied', () => {
     const users = rows('user');
     const profiles = new Map(rows('professionalProfile').map((row) => [row.userId, row]));
     const hasProfile = (user: Row, isActive: boolean) =>
@@ -679,14 +688,14 @@ describe('demo seed', () => {
       mustChangePassword: users.some((u) => u.mustChangePassword),
       suspendedTenant: rows('tenant').some((tenant) => !tenant.isActive),
     }).toEqual({
-      masterWithProfile: true,
+      masterWithProfile: false,
       masterWithoutProfile: true,
-      activeWithInactiveProfile: true,
-      deactivated: true,
-      pendingInvitation: true,
-      pendingLegacyAccess: true,
-      mustChangePassword: true,
-      suspendedTenant: true,
+      activeWithInactiveProfile: false,
+      deactivated: false,
+      pendingInvitation: false,
+      pendingLegacyAccess: false,
+      mustChangePassword: false,
+      suspendedTenant: false,
     });
 
     const patients = rows('patient');
@@ -708,12 +717,13 @@ describe('demo seed', () => {
         (p) => !rows('patientBillingProfile').some((link) => link.patientId === p.id),
       ),
     }).toEqual({
+      // Paula, of the Aurora studio, no longer comes.
       archived: true,
-      removed: true,
-      unassigned: true,
+      removed: false,
+      unassigned: false,
       sharedByTwoProfessionals: true,
-      formerProfessional: true,
-      billingProfileIdTypes: ['04', '05', '06'],
+      formerProfessional: false,
+      billingProfileIdTypes: [],
       defaultProfileLinks: true,
       withoutBillingProfile: true,
     });

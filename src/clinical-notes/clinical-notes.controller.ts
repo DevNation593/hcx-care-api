@@ -20,6 +20,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { ClinicalActor, CurrentClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalProfileGuard } from '../clinical-access/clinical-profile.guard';
+import { HealthSpecialtyGuard } from '../clinical-access/health-specialty.guard';
 import { RequirePermission } from '../common/permissions/permission-catalog';
 
 @ApiTags('clinical-notes')
@@ -38,6 +39,7 @@ export class ClinicalNotesController {
   })
   @ApiResponse({ status: 201, description: 'Clinical note created' })
   @RequirePermission('clinical_records.create')
+  @UseGuards(HealthSpecialtyGuard)
   async create(
     @Param('tenantId') tenantId: string,
     @Body() createDto: CreateClinicalNoteDto,

@@ -1,4 +1,15 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { HealthSpecialtyGuard } from '../clinical-access/health-specialty.guard';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { NextSessionPlansService } from './next-session-plans.service';
 import { CreateNextSessionPlanDto, UpdateNextSessionPlanDto } from './dto/next-session-plan.dto';
@@ -20,6 +31,7 @@ export class NextSessionPlansController {
   @ApiResponse({ status: 201, description: 'Plan created' })
   @ApiResponse({ status: 409, description: 'Plan already exists for this patient' })
   @RequirePermission('clinical_records.create')
+  @UseGuards(HealthSpecialtyGuard)
   async create(
     @Param('tenantId') tenantId: string,
     @Body() createDto: CreateNextSessionPlanDto,
@@ -56,6 +68,7 @@ export class NextSessionPlansController {
   @ApiOperation({ summary: 'Update session plan for patient' })
   @ApiResponse({ status: 200, description: 'Plan updated' })
   @RequirePermission('clinical_records.update')
+  @UseGuards(HealthSpecialtyGuard)
   async update(
     @Param('tenantId') tenantId: string,
     @Param('patientId') patientId: string,
@@ -70,6 +83,7 @@ export class NextSessionPlansController {
   @ApiOperation({ summary: 'Delete session plan' })
   @ApiResponse({ status: 200, description: 'Plan deleted' })
   @RequirePermission('clinical_records.update')
+  @UseGuards(HealthSpecialtyGuard)
   async remove(@Param('tenantId') tenantId: string, @Param('patientId') patientId: string) {
     return this.nextSessionPlansService.delete(tenantId, patientId);
   }

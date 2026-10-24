@@ -20,6 +20,7 @@ import { assertOpenEncounter } from '../encounters/encounters.service';
 import {
   CUSTOM_MODULE_PREFIX,
   findClinicalModule,
+  isHealthSpecialty,
   latestClinicalModule,
   resolveWriteVersion,
   STANDING_ALERT_MODULES,
@@ -545,12 +546,16 @@ export class SpecialtyRecordsService {
     const target = { definition, formDefinitionId: null };
 
     if (definition.scope === 'GENERAL') {
-      if (definition.allowedSpecialtyCodes) {
+      if (definition.allowedSpecialtyCodes || definition.healthOnly) {
         const own = await this.prisma.specialty.findFirst({
           where: { id: actor.specialtyId },
           select: { code: true },
         });
-        if (!own || !definition.allowedSpecialtyCodes.includes(own.code)) {
+        const allowed =
+          (!definition.allowedSpecialtyCodes ||
+            (!!own && definition.allowedSpecialtyCodes.includes(own.code))) &&
+          (!definition.healthOnly || isHealthSpecialty(own?.code));
+        if (!allowed) {
           throw clinicalRecordForbidden('Tu especialidad no puede registrar este módulo');
         }
       }

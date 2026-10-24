@@ -4,6 +4,7 @@ import { FormSchema } from '../clinical-forms/form-schema';
 import {
   CLINICAL_MODULES,
   CUSTOM_MODULE_PREFIX,
+  isHealthSpecialty,
   latestClinicalModule,
 } from './clinical-module-registry';
 import { ClinicalModuleRenderer } from './module-builders';
@@ -61,17 +62,21 @@ export class ClinicalModulesService {
     const ownCode = profile?.specialty.code ?? null;
     const enabledSpecialties = new Set(tenantSpecialties.map(({ specialty }) => specialty.code));
     const enabledModules = new Set(tenantModules.map(({ moduleKey }) => moduleKey));
+    const offersHealthCare = [...enabledSpecialties].some((code) => isHealthSpecialty(code));
 
     const defined = CLINICAL_MODULES.map((definition): TenantClinicalModule => {
       const isLatest =
         latestClinicalModule(definition.moduleKey)?.schemaVersion === definition.schemaVersion;
       const enabled =
-        definition.scope === 'GENERAL' ||
-        (enabledSpecialties.has(definition.specialtyCode!) &&
-          enabledModules.has(definition.moduleKey));
+        definition.scope === 'GENERAL'
+          ? !definition.healthOnly || offersHealthCare
+          : enabledSpecialties.has(definition.specialtyCode!) &&
+            enabledModules.has(definition.moduleKey);
       const withinSpecialty =
         definition.scope === 'GENERAL'
-          ? !definition.allowedSpecialtyCodes || definition.allowedSpecialtyCodes.includes(ownCode!)
+          ? (!definition.allowedSpecialtyCodes ||
+              definition.allowedSpecialtyCodes.includes(ownCode!)) &&
+            (!definition.healthOnly || isHealthSpecialty(ownCode))
           : definition.specialtyCode === ownCode;
 
       return {
