@@ -252,12 +252,10 @@ export class PatientsService {
         if (updated.count === 0) {
           throw new ForbiddenException({
             error: 'PATIENT_LIMIT_REACHED',
-            message: `Límite de pacientes alcanzado. El plan actual (${subscription.planType}) permite ${subscription.maxActivePatients} paciente(s) activo(s). Por favor actualiza tu plan.`,
+            message: `Límite de pacientes alcanzado. Tu plan permite ${subscription.maxActivePatients} paciente(s) activo(s). Contacta a soporte para ampliarlo.`,
             details: {
               maxActivePatients: subscription.maxActivePatients,
               activePatientsCount: subscription.activePatientsCount,
-              planType: subscription.planType,
-              upgradeUrl: `/tenants/${tenantId}/subscription/upgrade`,
             },
           });
         }
@@ -286,12 +284,10 @@ export class PatientsService {
     if (subscription.activePatientsCount >= subscription.maxActivePatients) {
       throw new ForbiddenException({
         error: 'PATIENT_LIMIT_REACHED',
-        message: `Límite de pacientes alcanzado. El plan actual (${subscription.planType}) permite ${subscription.maxActivePatients} paciente(s) activo(s). Por favor actualiza tu plan.`,
+        message: `Límite de pacientes alcanzado. Tu plan permite ${subscription.maxActivePatients} paciente(s) activo(s). Contacta a soporte para ampliarlo.`,
         details: {
           maxActivePatients: subscription.maxActivePatients,
           activePatientsCount: subscription.activePatientsCount,
-          planType: subscription.planType,
-          upgradeUrl: `/tenants/${tenantId}/subscription/upgrade`,
         },
       });
     }

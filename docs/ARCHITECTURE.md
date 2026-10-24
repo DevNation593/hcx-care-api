@@ -349,7 +349,7 @@ POST /platform/tenants
    ├─> Serializable transaction (advisory lock on the owner email, with retries):
    │   ├─> Check the owner email is unique across the platform (409)
    │   ├─> Create Tenant + TenantSettings
-   │   ├─> Create TenantSubscription (TRIAL: 14 days; paid plan: ACTIVE, one month)
+   │   ├─> Create TenantSubscription on the chosen plan (trial days: TRIALING; none: ACTIVE, one month)
    │   ├─> Create MASTER user (mustChangePassword = true)
    │   ├─> Apply the specialty selection
    │   └─> Create the eight core.* TenantModule rows

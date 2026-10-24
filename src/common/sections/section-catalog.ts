@@ -1,7 +1,4 @@
 import { BadRequestException } from '@nestjs/common';
-import { PlanType, TenantType } from '@prisma/client';
-import { isHealthSpecialty } from '../../clinical-modules/clinical-module-registry';
-import { getPlanIncludedModules } from '../../subscription/subscription-pricing';
 
 // Modules and their submodules, in the order the platform panel shows them. A key with two
 // segments is a module; one with three is a submodule of the module its first two name.
@@ -180,9 +177,6 @@ export const SECTION_CATALOG: readonly SectionDefinition[] = [
   },
 ];
 
-const PERSONAL_PLANS: readonly PlanType[] = ['PERSONAL_BASIC', 'PERSONAL_PRO'];
-const CLINIC_PLANS: readonly PlanType[] = ['CLINIC_BASIC', 'CLINIC_PRO', 'CLINIC_ENTERPRISE'];
-
 export function isSectionKey(value: string): value is SectionKey {
   return (SECTION_KEYS as readonly string[]).includes(value);
 }
@@ -198,24 +192,6 @@ export function sectionDefinition(key: SectionKey): SectionDefinition {
 export function isSectionInEffect(key: SectionKey, enabled: ReadonlySet<string>): boolean {
   const { parent } = sectionDefinition(key);
   return enabled.has(key) && (!parent || enabled.has(parent));
-}
-
-/** `specialtyCodes`: the clinic's; when all are non-health, health-only sections start off. */
-export function defaultSections(
-  planType: PlanType,
-  tenantType: TenantType,
-  specialtyCodes: readonly string[] = [],
-): SectionKey[] {
-  const includesTasks = (getPlanIncludedModules(planType) as string[]).includes('tasks');
-  const healthCare =
-    specialtyCodes.length === 0 || specialtyCodes.some((code) => isHealthSpecialty(code));
-  const healthOnly = new Set(SECTION_CATALOG.filter((s) => s.healthOnly).map((s) => s.key));
-  return SECTION_KEYS.filter((key) => {
-    if (healthOnly.has(key) && !healthCare) return false;
-    if (key === 'core.agenda.tasks') return includesTasks;
-    if (key === 'core.admin.team') return tenantType === 'CLINIC';
-    return true;
-  });
 }
 
 /**
@@ -248,9 +224,4 @@ export function validateSections(keys: string[]): SectionKey[] {
     }
   }
   return SECTION_KEYS.filter((key) => selected.has(key));
-}
-
-export function isPlanAllowedForTenantType(planType: PlanType, tenantType: TenantType): boolean {
-  if (planType === 'TRIAL') return true;
-  return (tenantType === 'PERSONAL' ? PERSONAL_PLANS : CLINIC_PLANS).includes(planType);
 }

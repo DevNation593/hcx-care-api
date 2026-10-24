@@ -15,7 +15,6 @@ import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagg
 import { ClinicalActor, CurrentClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalProfileGuard } from '../clinical-access/clinical-profile.guard';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
-import { RequireFeature } from '../common/decorators/require-feature.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
@@ -51,7 +50,6 @@ export class PatientFilesController {
 
   @Post()
   @Roles('MASTER', 'PROFESIONAL')
-  @RequireFeature('attachments')
   @RequirePermission('clinical_records.create')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_PATIENT_FILE_BYTES } }))
   @ApiConsumes('multipart/form-data')

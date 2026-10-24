@@ -2,7 +2,6 @@ import { Controller, Get, Post, Put, Delete, Param, Body, Query, Headers } from 
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { RequireFeature } from '../common/decorators/require-feature.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { NotificationPreferencesService } from './notification-preferences.service';
 import { WebPushService } from './web-push/web-push.service';
@@ -45,7 +44,6 @@ export class NotificationsController {
   }
 
   @Post('web-push/subscriptions')
-  @RequireFeature('webPush')
   @RequireSection('core.agenda.notifications')
   @ApiOperation({
     summary: 'Register this browser for Web Push',

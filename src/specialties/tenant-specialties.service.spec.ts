@@ -43,13 +43,11 @@ describe('TenantSpecialtiesService', () => {
     subscription = {
       id: 'sub-1',
       tenantId: 'tenant-1',
-      planType: 'TRIAL',
+      planId: 'plan_personal_basic',
       currency: 'USD',
       specialtyPrice: new Decimal(15),
-      basePrice: new Decimal(999),
-      featureClinicalNotes: true,
-      featureAdvancedAnalytics: true,
-      featureAPIAccess: true,
+      basePrice: new Decimal(25),
+      includedSpecialties: 1,
     } as TenantSubscription;
     const joins = (read: () => string[], write: (ids: string[]) => void) => ({
       findMany: jest.fn(async () => read().map((specialtyId) => ({ specialtyId }))),
@@ -140,8 +138,7 @@ describe('TenantSpecialtiesService', () => {
         selectedSpecialties: 2,
         billableSpecialties: 1,
         specialtyUnitPrice: 15,
-        basePlanPrice: 0,
-        featureAddonsPrice: 25,
+        basePlanPrice: 25,
         specialtyAddonsPrice: 15,
         totalMonthly: 40,
         currency: 'USD',
@@ -149,13 +146,9 @@ describe('TenantSpecialtiesService', () => {
     });
     expect(selected.sort()).toEqual(['nut', 'psy']);
     expect(billed.sort()).toEqual(['nut', 'psy']);
-    expect(subscription.basePrice.toNumber()).toBe(40);
-    expect(subscription.featureAdvancedAnalytics).toBe(true);
-    expect(subscription.featureAPIAccess).toBe(true);
-    expect(tx.tenantSubscription.update).toHaveBeenCalledWith({
-      where: { tenantId: 'tenant-1' },
-      data: { basePrice: new Decimal(40) },
-    });
+    // The plan price stays; the extra specialty is added when charging.
+    expect(subscription.basePrice.toNumber()).toBe(25);
+    expect(tx.tenantSubscription.update).not.toHaveBeenCalled();
     expect(db.$transaction).toHaveBeenCalledWith(expect.any(Function), {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     });
@@ -195,7 +188,7 @@ describe('TenantSpecialtiesService', () => {
               { moduleKey: 'obsolete', enabled: true },
               { moduleKey: 'psychology.notes', enabled: false },
             ],
-            monthlyPrice: 999,
+            monthlyPrice: 25,
           },
           after: {
             specialtyIds: ['nut'],

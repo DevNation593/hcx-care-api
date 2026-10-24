@@ -1,81 +1,90 @@
-# Cobro y ciclo de vida de la suscripción
+# Planes, cobro y ciclo de vida de la suscripción
 
-**Fecha:** 2026-10-01 · **Tareas:** T-05 y T-06
+**Fecha:** 2026-10-25 · **Antes:** 2026-10-01 (T-05 y T-06)
 
 ## Decisión
 
-No hay proveedor de cobro integrado. El cobro es **manual con aprobación explícita**: el consultorio solicita, paga por fuera (transferencia, depósito) y el `ADMIN` de la plataforma confirma el pago con su referencia. **Ningún plan de pago se habilita al solicitarlo**; solo al confirmarse su pago.
+Los planes viven en la base de datos (`Plan`, `PlanModule`) y **solo el `ADMIN` de la plataforma** los crea, edita y asigna. El consultorio no cambia su plan ni compra módulos: ve su plan, su uso y lo que debe, y paga por fuera.
 
-El diseño deja el punto de entrada listo para un proveedor: su webhook llamaría a `SubscriptionBillingService.confirmPayment` con `provider` propio y el identificador del evento como `reference`. La idempotencia ya está resuelta en ese método.
+No hay proveedor de cobro integrado. El cobro es **manual con aprobación explícita**: el consultorio paga (transferencia, depósito) y el `ADMIN` confirma el pago con su referencia. El punto de entrada queda listo para un proveedor: su webhook llamaría a `SubscriptionBillingService.confirmPayment` con `provider` propio y el identificador del evento como `reference`.
+
+## Planes
+
+Un plan tiene código (fijo), nombre, tipo de consultorio (`PERSONAL` o `CLINIC`), precio base, precio por profesional y por especialidad adicional, límites (profesionales, pacientes activos, GB, facturas electrónicas al mes, especialidades incluidas), días de prueba sugeridos y los módulos/submódulos del catálogo que incluye.
+
+| Ruta | Uso |
+| --- | --- |
+| `GET /platform/plans` | Todos los planes, archivados incluidos, con cuántos consultorios lo usan |
+| `POST /platform/plans` | Crea un plan (`409 PLAN_CODE_TAKEN`) |
+| `PATCH /platform/plans/:planId` | Edita un plan: **todos sus consultorios toman los cambios al instante**, salvo lo ajustado en cada uno. `409 PLAN_IN_USE` al cambiar el tipo de un plan con consultorios |
+| `POST /platform/plans/:planId/archive` · `/restore` | Un plan archivado conserva sus consultorios pero no se puede asignar (`409 PLAN_ARCHIVED`) |
+
+Las ediciones se auditan en el tenant de la plataforma con la entidad `PLAN`.
+
+### Valores de cada consultorio
+
+`TenantSubscription` guarda los valores vigentes (`basePrice`, `pricePerSeat`, `specialtyPrice`, `currency`, `seatsPsychologistsMax`, `maxActivePatients`, `storageGB`, `monthlyElectronicInvoicesLimit`, `includedSpecialties`); los bloqueos leen esas columnas. `overriddenFields` lista las que el `ADMIN` fijó para ese consultorio: editar el plan no las toca.
+
+- `PUT /platform/tenants/:tenantId/subscription/overrides` — `{ values, reset?, reason }`: fija valores propios o los devuelve al plan.
+- `PUT /platform/tenants/:tenantId/sections` — módulos del consultorio. Una fila que coincide con lo que da el plan queda `source = PLAN`; una que difiere, `OVERRIDE`, y sobrevive a las ediciones del plan.
+- Los submódulos solo de salud quedan apagados por defecto si todas las especialidades del consultorio son estéticas.
+
+Bajar un límite por debajo del uso actual no borra nada: el consultorio solo no puede crear más.
+
+### Cambiar de plan
+
+`PATCH /platform/tenants/:tenantId/subscription` — `{ planId, trialDays?, reason }`. El consultorio toma precio, límites y módulos del plan nuevo y **se descartan sus ajustes**. Con `trialDays` entra en prueba de ese plan; sin ellos paga desde hoy, o conserva un período pagado en curso. El alta de un consultorio (`POST /platform/tenants`) recibe `planId` y `trialDays` (por defecto, los del plan).
+
+## Precio mensual
+
+`basePrice` es el precio del plan (o el ajustado). Lo que se cobra cada mes es `basePrice + (especialidades − incluidas) × specialtyPrice` (`monthlyTotal` en `src/plans/plan-values.ts`). Cambiar especialidades ya no reescribe `basePrice`.
 
 ## Pagos (`SubscriptionPayment`)
 
 | Tipo | Lo crea | Efecto al confirmarse |
 | --- | --- | --- |
-| `PLAN_UPGRADE` | El titular, con `POST /tenants/:tenantId/subscription/upgrade` | Activa el plan solicitado y deja la suscripción `ACTIVE` |
-| `RENEWAL` | El proceso programado, 7 días antes del fin del período | Extiende el período un mes y deja la suscripción `ACTIVE` |
+| `RENEWAL` | El proceso programado, 7 días antes del fin del período o de la prueba | Fija el período que cubre y deja la suscripción `ACTIVE` |
+| `PLAN_UPGRADE` | Ya no se crea; queda en el historial | `409 PAYMENT_NO_LONGER_APPLICABLE` |
 
-Estados: `PENDING` → `CONFIRMED` · `REJECTED` · `CANCELED` (reemplazada por una solicitud más reciente) · `EXPIRED` (mejora sin pagar tras 7 días).
-
-Importe de una mejora: la diferencia prorrateada por los días que quedan si hay un período pagado en curso; un mes completo si viene de prueba o de un período vencido. En ese segundo caso el mes pagado empieza el día de la confirmación.
-
-### Endpoints
+Cada pago guarda `planId` y `planName` (el nombre del plan cuando se cobró). Estados: `PENDING` → `CONFIRMED` · `REJECTED` · `CANCELED` · `EXPIRED`.
 
 | Ruta | Rol | Uso |
 | --- | --- | --- |
-| `POST /tenants/:tenantId/subscription/upgrade` | MASTER | Registra la solicitud; responde `status: PENDING_PAYMENT` y el pago |
 | `GET /tenants/:tenantId/subscription/payments` | MASTER | Pagos del consultorio, incluidos los pendientes |
 | `GET /platform/subscription-payments?status=PENDING` | ADMIN | Pagos de todos los consultorios |
 | `POST /platform/subscription-payments/:paymentId/confirm` | ADMIN | `{ reference, note? }` — aplica el pago |
-| `POST /platform/subscription-payments/:paymentId/reject` | ADMIN | `{ reason }` — cierra la solicitud sin cambios |
-
-Los pagos los confirma o rechaza solo el `ADMIN`, en `/platform/subscription-payments`; el titular no puede confirmar el suyo (`403`). La ruta antigua `/subscription-payments` y el rol `SOPORTE` ya no existen para esto.
+| `POST /platform/subscription-payments/:paymentId/reject` | ADMIN | `{ reason }` — cierra el cobro sin cambios |
 
 ### Idempotencia
 
 - Confirmar dos veces con la misma referencia devuelve `alreadyConfirmed: true` y no vuelve a tocar la suscripción.
 - Una referencia confirma un solo pago: índice único `(provider, providerReference)`; el segundo intento responde `409 PAYMENT_REFERENCE_ALREADY_USED`.
 - Un pago que no está `PENDING` responde `409 PAYMENT_NOT_PENDING`.
-- Si el plan del consultorio cambió desde la solicitud y ya no es una mejora: `409 PAYMENT_NO_LONGER_APPLICABLE`.
 - La confirmación corre en una transacción serializable.
 
 ## Proceso programado
 
-`SubscriptionLifecycleService` se ejecuta cada hora (ya no depende de Redis) y hace, en este orden:
+`SubscriptionLifecycleService` se ejecuta cada hora y hace, en este orden:
 
-1. **Degradaciones programadas vencidas.** Aplica `scheduledPlanChange` cuando llega `scheduledPlanChangeAt`. Si el uso actual ya no cabe en el plan nuevo, cancela la degradación y registra el evento `LIMIT_REACHED` con el motivo.
-2. **Solicitudes de mejora vencidas** → `EXPIRED`.
-3. **Renovaciones.** Emite un pago `RENEWAL` por consultorio y período. Si hay una degradación programada para el inicio de ese período, cobra el precio del plan nuevo.
-4. **Fin de prueba o de período sin pago** → `PAST_DUE` (solo lectura).
-5. **7 días después** → `UNPAID` (acceso bloqueado).
+1. **Cobros.** Emite un `RENEWAL` por consultorio y período, al precio vigente: 7 días antes del fin de un período pagado, o del fin de una prueba (el primer mes del plan).
+2. **Fin de prueba o de período sin pago** → `PAST_DUE` (solo lectura).
+3. **7 días después** → `UNPAID` (acceso bloqueado).
 
-Cada paso reclama su fila con una actualización condicional (o un índice único), de modo que repetir la ejecución, o correrla en dos instancias a la vez, no aplica nada dos veces.
+Cada paso reclama su fila con una actualización condicional (o un índice único): repetir la ejecución, o correrla en dos instancias, no aplica nada dos veces. Los planes con precio 0 (el personalizado) no vencen solos. Un consultorio `PAST_DUE` o `UNPAID` sigue viendo su suscripción (`@AllowInactiveSubscription`). Los plazos están en `BILLING_RULES` (`src/subscription/subscription-billing.rules.ts`).
 
-Los planes con precio 0 fuera de la prueba (el plan personalizado) no vencen solos: los gestiona el `ADMIN` desde el panel.
+## Migración (`20261025000000_editable_plans`)
 
-Un consultorio `PAST_DUE` o `UNPAID` sigue pudiendo usar las rutas de suscripción para ver su estado y solicitar un plan (`@AllowInactiveSubscription`).
+Crea los cinco planes que el código definía (los mismos valores que `src/plans/default-plans.ts`, con ids `plan_<código>`) y conserva lo que cada consultorio tenía:
 
-Los plazos están en `BILLING_RULES` (`src/subscription/subscription-billing.rules.ts`).
+- Una prueba pasa a días de prueba del plan básico de su tipo, con sus límites.
+- `basePrice` deja de incluir las especialidades extra; lo que difiere del plan (módulos comprados, límites propios) queda en `overriddenFields`.
+- Las filas de módulos que difieren de lo que da el plan quedan `OVERRIDE`.
+- Las mejoras pendientes de pago se cancelan; los eventos conservan los códigos de plan.
+- Se eliminan el enum `PlanType`, los 15 `feature*`, `scheduledPlanChange*` y `PlanSpecialty`.
 
 ## Lo que no cubre
 
-- **Módulos adicionales y especialidades extra** se siguen habilitando al seleccionarlos y suben el precio mensual; se cobran en la siguiente renovación, sin prorrateo ni pago previo.
-- **Avisos al consultorio** (correo de renovación emitida, pago confirmado, vencimiento): dependen del servicio de correo (T-07).
-- **Cambio de plan sin pago:** el `ADMIN` puede cambiar el plan de un consultorio al instante con `PATCH /platform/tenants/:tenantId/subscription` (motivo obligatorio, sin `SubscriptionPayment`); ver `API_ENDPOINTS.md`.
-- **Instrucciones de pago** (cuenta bancaria, a quién enviar el comprobante): la web muestra un texto genérico.
-- **Facturación anual:** no existe en la API; se retiró del panel.
-
-## Precios (T-06)
-
-La única fuente de precios y límites es `subscription-pricing.ts`, servida por `GET /tenants/:tenantId/subscription/plans`.
-
-- El panel de la web lee ese endpoint; ya no tiene precios escritos.
-- El sitio público es estático. `docs/plan-catalog.contract.json` es la forma publicada del catálogo: `test/plan-catalog-contract.spec.ts` falla si el código deja de coincidir con ella, y la web compara su copia con el sitio público y con el panel.
-
-Para cambiar un precio o límite:
-
-```bash
-npm run contract:plan-catalog
-```
-
-y copiar `docs/plan-catalog.contract.json` a `web/src/features/subscription/plan-catalog.contract.json`. Las pruebas de la web indican qué valores del sitio público hay que actualizar.
+- **Sitio público de precios:** es estático (`web/src/content/site.ts`) y no lee los planes de la base.
+- **Avisos al consultorio** (cobro emitido, pago confirmado, vencimiento): dependen del servicio de correo (T-07).
+- **Instrucciones de pago:** la web muestra un texto genérico.
+- **Facturación anual:** no existe.

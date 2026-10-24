@@ -448,7 +448,7 @@ integration('Users - PostgreSQL serializable seat race', () => {
         email: 'race@test.invalid',
         tenantType: 'CLINIC',
         subscription: {
-          create: { planType: 'CLINIC_BASIC', status: 'ACTIVE', seatsPsychologistsMax: 1 },
+          create: { planId: 'plan_clinic_basic', status: 'ACTIVE', seatsPsychologistsMax: 1 },
         },
         specialties: { create: { specialtyId: specialty.id } },
       },

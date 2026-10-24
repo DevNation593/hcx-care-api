@@ -1,14 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { PlanType, TenantType } from '@prisma/client';
+import { TenantType } from '@prisma/client';
 import { Transform } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
   IsEmail,
   IsEnum,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Max,
+  Min,
   MinLength,
 } from 'class-validator';
 
@@ -82,9 +85,19 @@ export class CreatePlatformTenantDto {
   @MinLength(8)
   temporaryPassword: string;
 
-  @ApiProperty({ enum: PlanType })
-  @IsEnum(PlanType)
-  planType: PlanType;
+  @ApiProperty({ description: 'A plan of the same tenant type that is not archived.' })
+  @IsString()
+  @IsNotEmpty()
+  planId: string;
+
+  @ApiPropertyOptional({
+    description: 'Days of trial on the plan; the plan suggests its own. 0 starts a paid month.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(365)
+  trialDays?: number;
 
   @ApiProperty({ type: [String] })
   @Transform(({ value }) =>
@@ -96,7 +109,10 @@ export class CreatePlatformTenantDto {
   @IsNotEmpty({ each: true })
   specialtyCodes: string[];
 
-  @ApiPropertyOptional({ type: [String] })
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Modules to turn on; what differs from the plan becomes an override.',
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })

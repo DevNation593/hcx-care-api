@@ -1,35 +1,40 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
-import { PlanType, SubscriptionEventType, SubscriptionStatus } from '@prisma/client';
-import { isPlanAllowedForTenantType } from '../common/sections/section-catalog';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { Prisma, SubscriptionEventType, SubscriptionStatus } from '@prisma/client';
+import {
+  PLAN_VALUE_FIELDS,
+  PlanValueData,
+  PlanValueField,
+  isPlanValueField,
+  subscriptionValuesFromPlan,
+} from '../plans/plan-values';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
 import {
   addDays,
   addMonth,
   hasRunningPaidPeriod,
-  planChangeData,
 } from '../subscription/subscription-billing.rules';
-import { getPlanLimits } from '../subscription/subscription-pricing';
-import { ChangePlanDto } from './dto/change-plan.dto';
+import { ChangePlanDto, SetPlanOverridesDto } from './dto/change-plan.dto';
 import { PlatformAuditService } from './platform-audit.service';
-import {
-  PlatformTenantDetail,
-  PlatformTenantsService,
-  TRIAL_DAYS,
-  TRIAL_LIMITS,
-} from './platform-tenants.service';
+import { PlatformPlansService } from './platform-plans.service';
+import { PlatformTenantDetail, PlatformTenantsService } from './platform-tenants.service';
+
+const MONEY_FIELDS: readonly PlanValueField[] = ['basePrice', 'pricePerSeat', 'specialtyPrice'];
 
 @Injectable()
 export class PlatformSubscriptionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenants: PlatformTenantsService,
+    private readonly plans: PlatformPlansService,
     private readonly audit: PlatformAuditService,
   ) {}
 
   /**
-   * Moves a clinic to another plan and limits right away, with no payment. Modules (sections)
-   * are never touched: they are managed apart from the plan.
+   * Moves a clinic to another plan right away, with no payment: price, limits and modules become
+   * the new plan's and the clinic's overrides are dropped. With trial days the clinic tries the
+   * plan for free; otherwise it pays from today, or keeps a paid period that is still running.
+   * A limit below current usage deletes nothing: the clinic just cannot add more.
    */
   async changePlan(
     tenantId: string,
@@ -37,97 +42,39 @@ export class PlatformSubscriptionService {
     actorId: string,
   ): Promise<PlatformTenantDetail> {
     // Answers 404 for a missing or platform tenant before opening a transaction.
-    await this.tenants.findOne(tenantId);
+    const { tenant } = await this.tenants.findOne(tenantId);
 
     await runSerializableTransaction(this.prisma, tenantId, actorId, async (tx) => {
-      const tenant = await tx.tenant.findFirst({
-        where: { id: tenantId, isPlatform: false },
-        select: { tenantType: true },
+      const plan = await this.plans.findAssignable(tx, dto.planId, tenant.tenantType);
+      const subscription = await tx.tenantSubscription.findUniqueOrThrow({
+        where: { tenantId },
+        include: { plan: { select: { code: true, basePrice: true } } },
       });
-      const subscription = await tx.tenantSubscription.findUniqueOrThrow({ where: { tenantId } });
-      if (!tenant || !isPlanAllowedForTenantType(dto.planType, tenant.tenantType)) {
-        throw new BadRequestException({
-          statusCode: 400,
-          code: 'PLAN_TYPE_MISMATCH',
-          message: 'El plan no corresponde al tipo de consultorio.',
-        });
-      }
-
-      const isTrial = dto.planType === PlanType.TRIAL;
-      const samePlan = subscription.planType === dto.planType;
-      const specialtyCount = await tx.tenantSpecialty.count({ where: { tenantId } });
-      const { data } = planChangeData(subscription, dto.planType, specialtyCount);
-
-      const planSeats = isTrial
-        ? TRIAL_LIMITS[tenant.tenantType].seats
-        : data.seatsPsychologistsMax;
-      const planPatients = isTrial
-        ? TRIAL_LIMITS[tenant.tenantType].patients
-        : data.maxActivePatients;
-      // Staying on the same plan only adjusts what was explicitly sent.
-      const seats =
-        dto.seatsPsychologistsMax ?? (samePlan ? subscription.seatsPsychologistsMax : planSeats);
-      const patients =
-        dto.maxActivePatients ?? (samePlan ? subscription.maxActivePatients : planPatients);
-
-      if (
-        samePlan &&
-        seats === subscription.seatsPsychologistsMax &&
-        patients === subscription.maxActivePatients
-      ) {
+      if (subscription.planId === plan.id && !dto.trialDays) {
         throw new BadRequestException({
           statusCode: 400,
           code: 'PLAN_UNCHANGED',
-          message: 'El consultorio ya tiene ese plan y esos límites.',
+          message: 'El consultorio ya tiene ese plan.',
         });
       }
-
-      if (subscription.seatsPsychologistsUsed > seats) {
-        throw new ConflictException({
-          statusCode: 409,
-          code: 'PLAN_BELOW_USAGE',
-          message:
-            'El consultorio usa más cupos de profesionales de los que permite el nuevo plan.',
-          details: {
-            seatsPsychologistsUsed: subscription.seatsPsychologistsUsed,
-            seatsPsychologistsMax: seats,
-          },
-        });
-      }
-      if (subscription.activePatientsCount > patients) {
-        throw new ConflictException({
-          statusCode: 409,
-          code: 'PLAN_BELOW_USAGE',
-          message: 'El consultorio tiene más pacientes activos de los que permite el nuevo plan.',
-          details: {
-            activePatientsCount: subscription.activePatientsCount,
-            maxActivePatients: patients,
-          },
-        });
-      }
-
+      const now = new Date();
       let period: {
         status: SubscriptionStatus;
         trialEndsAt?: Date | null;
         currentPeriodStart?: Date;
         currentPeriodEnd?: Date | null;
       };
-      if (samePlan) {
-        // Same plan: only the limits move; status and period belong to the billing cycle.
-        period = { status: subscription.status };
-      } else if (isTrial) {
-        const now = new Date();
+      if (dto.trialDays) {
         period = {
           status: SubscriptionStatus.TRIALING,
-          trialEndsAt: addDays(now, TRIAL_DAYS),
+          trialEndsAt: addDays(now, dto.trialDays),
           currentPeriodStart: now,
           currentPeriodEnd: null,
         };
-      } else if (hasRunningPaidPeriod(subscription, new Date())) {
+      } else if (hasRunningPaidPeriod(subscription, now)) {
         period = { status: SubscriptionStatus.ACTIVE };
       } else {
         // Coming from a trial or a lapsed period, the paid month starts today.
-        const now = new Date();
         period = {
           status: SubscriptionStatus.ACTIVE,
           trialEndsAt: null,
@@ -136,82 +83,146 @@ export class PlatformSubscriptionService {
         };
       }
 
-      if (samePlan) {
-        await tx.tenantSubscription.update({
-          where: { tenantId },
-          data: { seatsPsychologistsMax: seats, maxActivePatients: patients },
-        });
-      } else {
-        await tx.tenantSubscription.update({
-          where: { tenantId },
-          data: {
-            ...data,
-            ...period,
-            seatsPsychologistsMax: seats,
-            maxActivePatients: patients,
-            scheduledPlanChange: null,
-            scheduledPlanChangeAt: null,
-          },
-        });
-        await tx.subscriptionPayment.updateMany({
-          where: { tenantId, kind: 'PLAN_UPGRADE', status: 'PENDING' },
-          data: { status: 'CANCELED' },
-        });
-      }
+      await this.plans.assign(tx, tenantId, plan);
+      await tx.tenantSubscription.update({ where: { tenantId }, data: period });
 
-      let eventType: SubscriptionEventType | null;
-      if (samePlan) {
-        eventType =
-          seats > subscription.seatsPsychologistsMax
-            ? SubscriptionEventType.SEATS_INCREASED
-            : seats < subscription.seatsPsychologistsMax
-              ? SubscriptionEventType.SEATS_DECREASED
-              : null;
-      } else {
-        const currentPrice = Number(getPlanLimits(subscription.planType).basePrice);
-        const newPrice = Number(getPlanLimits(dto.planType).basePrice);
-        eventType =
-          newPrice > currentPrice
-            ? SubscriptionEventType.PLAN_UPGRADED
-            : SubscriptionEventType.PLAN_DOWNGRADED;
-      }
-      if (eventType) {
-        await tx.subscriptionEvent.create({
-          data: {
-            tenantId,
-            eventType,
-            previousPlan: subscription.planType,
-            newPlan: dto.planType,
-            previousStatus: subscription.status,
-            newStatus: period.status,
-            reason: dto.reason,
-            metadata: {
-              source: 'PLATFORM_PANEL',
-              seatsPsychologistsMax: seats,
-              maxActivePatients: patients,
-            },
-            triggeredByUserId: actorId,
+      const eventType = dto.trialDays
+        ? SubscriptionEventType.SUBSCRIPTION_ACTIVATED
+        : Number(plan.basePrice) >= Number(subscription.plan.basePrice)
+          ? SubscriptionEventType.PLAN_UPGRADED
+          : SubscriptionEventType.PLAN_DOWNGRADED;
+      await tx.subscriptionEvent.create({
+        data: {
+          tenantId,
+          eventType,
+          previousPlan: subscription.plan.code,
+          newPlan: plan.code,
+          previousStatus: subscription.status,
+          newStatus: period.status,
+          reason: dto.reason,
+          metadata: {
+            source: 'PLATFORM_PANEL',
+            trialDays: dto.trialDays ?? null,
+            droppedOverrides: subscription.overriddenFields,
           },
-        });
-      } else {
-        // Patients-only change: no SubscriptionEvent type fits, so keep the reason and author here.
-        await this.audit.record(
-          {
-            tenantId,
-            actorId,
-            entity: 'TENANT',
-            entityId: tenantId,
-            reason: dto.reason,
-            changes: {
-              before: { maxActivePatients: subscription.maxActivePatients },
-              after: { maxActivePatients: patients },
-            },
-          },
-          tx,
-        );
-      }
+          triggeredByUserId: actorId,
+        },
+      });
     });
 
     return this.tenants.findOne(tenantId);
   }
+
+  /**
+   * Sets price and limit values for one clinic apart from its plan, or puts them back on the
+   * plan. An overridden value survives plan edits until it is reset.
+   */
+  async setOverrides(
+    tenantId: string,
+    dto: SetPlanOverridesDto,
+    actorId: string,
+  ): Promise<PlatformTenantDetail> {
+    const values = parseOverrideValues(dto.values);
+    const reset = (dto.reset ?? []).filter(isPlanValueField);
+    const both = reset.filter((field) => field in values);
+    if (both.length > 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'OVERRIDE_CONFLICT',
+        message: 'Un mismo valor no puede fijarse y restablecerse a la vez.',
+        fields: both,
+      });
+    }
+    if (Object.keys(values).length === 0 && reset.length === 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'OVERRIDE_EMPTY',
+        message: 'Indica al menos un valor para fijar o restablecer.',
+      });
+    }
+    await this.tenants.findOne(tenantId);
+
+    await runSerializableTransaction(this.prisma, tenantId, actorId, async (tx) => {
+      const subscription = await tx.tenantSubscription.findUniqueOrThrow({
+        where: { tenantId },
+        include: { plan: true },
+      });
+      const fromPlan = subscriptionValuesFromPlan(
+        subscription.plan,
+        PLAN_VALUE_FIELD_LIST.filter((field) => !reset.includes(field)),
+      );
+      const next = { ...values, ...fromPlan };
+
+      const overridden = new Set(subscription.overriddenFields);
+      for (const field of Object.keys(values)) overridden.add(field);
+      for (const field of reset) overridden.delete(field);
+      const changed = [...Object.keys(values), ...reset] as PlanValueField[];
+
+      await tx.tenantSubscription.update({
+        where: { tenantId },
+        data: {
+          ...next,
+          overriddenFields: PLAN_VALUE_FIELD_LIST.filter((field) => overridden.has(field)),
+        },
+      });
+      await this.audit.record(
+        {
+          tenantId,
+          actorId,
+          entity: 'TENANT',
+          entityId: tenantId,
+          reason: dto.reason,
+          changes: {
+            before: Object.fromEntries(
+              changed.map((field) => [field, plainValue(subscription[field])]),
+            ),
+            after: Object.fromEntries(
+              changed.map((field) => [field, plainValue(next[field as keyof typeof next])]),
+            ),
+          },
+        },
+        tx,
+      );
+    });
+
+    return this.tenants.findOne(tenantId);
+  }
+}
+
+const PLAN_VALUE_FIELD_LIST = Object.keys(PLAN_VALUE_FIELDS) as PlanValueField[];
+
+function plainValue(value: unknown) {
+  return value instanceof Prisma.Decimal ? Number(value) : value;
+}
+
+/** Validates each overridden value: known field, money with 2 decimals, whole limits, currency code. */
+function parseOverrideValues(raw: Record<string, number | string>) {
+  const values: Record<string, Prisma.Decimal | number | string> = {};
+  for (const [field, value] of Object.entries(raw ?? {})) {
+    if (!isPlanValueField(field)) {
+      throw invalidOverride(field, 'No es un valor del plan.');
+    }
+    if (field === 'currency') {
+      if (typeof value !== 'string' || !/^[A-Z]{3}$/.test(value)) {
+        throw invalidOverride(field, 'Usa un código de moneda de 3 letras, como USD.');
+      }
+      values[field] = value;
+    } else if (MONEY_FIELDS.includes(field)) {
+      if (typeof value !== 'number' || value < 0 || Math.round(value * 100) !== value * 100) {
+        throw invalidOverride(field, 'Usa un monto de 0 o más, con hasta 2 decimales.');
+      }
+      values[field] = new Prisma.Decimal(value);
+    } else {
+      const minimum = field === 'monthlyElectronicInvoicesLimit' ? 0 : 1;
+      if (!Number.isInteger(value) || (value as number) < minimum) {
+        throw invalidOverride(field, `Usa un número entero de ${minimum} o más.`);
+      }
+      values[field] = value;
+    }
+  }
+  return values as PlanValueData;
+}
+
+function invalidOverride(field: string, message: string) {
+  return new BadRequestException({ statusCode: 400, code: 'OVERRIDE_INVALID', field, message });
 }

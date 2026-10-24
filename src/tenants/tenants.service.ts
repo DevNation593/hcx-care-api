@@ -11,7 +11,7 @@ export class TenantsService {
       where: { id },
       include: {
         settings: true,
-        subscription: true,
+        subscription: { include: { plan: { select: { id: true, code: true, name: true } } } },
       },
     });
 
@@ -28,7 +28,7 @@ export class TenantsService {
       data: updateTenantDto,
       include: {
         settings: true,
-        subscription: true,
+        subscription: { include: { plan: { select: { id: true, code: true, name: true } } } },
       },
     });
 

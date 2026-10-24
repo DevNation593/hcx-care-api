@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export interface PlatformAuditInput {
   tenantId: string;
   actorId: string;
-  entity: 'TENANT' | 'USER';
+  entity: 'TENANT' | 'USER' | 'PLAN';
   entityId: string;
   reason?: string;
   changes?: { before: unknown; after: unknown };
