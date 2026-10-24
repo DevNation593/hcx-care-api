@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { PlanType, TenantType } from '@prisma/client';
+import { isHealthSpecialty } from '../../clinical-modules/clinical-module-registry';
 import { getPlanIncludedModules } from '../../subscription/subscription-pricing';
 
 export const SECTION_KEYS = [
@@ -19,13 +20,20 @@ export interface SectionDefinition {
   key: SectionKey;
   name: string;
   requires: SectionKey[];
+  /** Health care only: off by default in a clinic whose specialties are all non-health. */
+  healthOnly?: boolean;
 }
 
 export const SECTION_CATALOG: readonly SectionDefinition[] = [
   { key: 'core.calendar', name: 'Calendario', requires: ['core.patients'] },
   { key: 'core.patients', name: 'Pacientes', requires: [] },
   { key: 'core.tasks', name: 'Actividades', requires: ['core.patients'] },
-  { key: 'core.clinicalNotes', name: 'Notas clínicas', requires: ['core.patients'] },
+  {
+    key: 'core.clinicalNotes',
+    name: 'Notas clínicas',
+    requires: ['core.patients'],
+    healthOnly: true,
+  },
   { key: 'core.specialties', name: 'Módulos clínicos', requires: ['core.patients'] },
   { key: 'core.billing', name: 'Facturación', requires: [] },
   { key: 'core.team', name: 'Equipo', requires: [] },
@@ -39,9 +47,18 @@ export function isSectionKey(value: string): value is SectionKey {
   return (SECTION_KEYS as readonly string[]).includes(value);
 }
 
-export function defaultSections(planType: PlanType, tenantType: TenantType): SectionKey[] {
+/** `specialtyCodes`: the clinic's; when all are non-health, health-only sections start off. */
+export function defaultSections(
+  planType: PlanType,
+  tenantType: TenantType,
+  specialtyCodes: readonly string[] = [],
+): SectionKey[] {
   const includesTasks = (getPlanIncludedModules(planType) as string[]).includes('tasks');
+  const healthCare =
+    specialtyCodes.length === 0 || specialtyCodes.some((code) => isHealthSpecialty(code));
+  const healthOnly = new Set(SECTION_CATALOG.filter((s) => s.healthOnly).map((s) => s.key));
   return SECTION_KEYS.filter((key) => {
+    if (healthOnly.has(key) && !healthCare) return false;
     if (key === 'core.tasks') return includesTasks;
     if (key === 'core.team') return tenantType === 'CLINIC';
     return true;

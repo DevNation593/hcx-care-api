@@ -9,6 +9,8 @@ export interface ClinicalModuleDefinition {
   specialtyCode: string | null;
   /** GENERAL modules only: the specialties allowed to write them. Absent means all. */
   allowedSpecialtyCodes?: readonly string[];
+  /** GENERAL modules only: health care content that non-health specialties never write. */
+  healthOnly?: boolean;
   name: string;
   description: string;
   schemaVersion: number;

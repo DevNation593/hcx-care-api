@@ -24,6 +24,14 @@ export const CUSTOM_MODULE_PREFIX = 'custom.';
  */
 export const STANDING_ALERT_MODULES: readonly string[] = ['general.allergies'];
 
+/** Specialties that are not health care: they never get the health-only modules. */
+export const AESTHETIC_SPECIALTY_CODES = ['AESTHETICS'] as const;
+
+/** Whether a specialty is health care. Unknown or missing codes count as health. */
+export function isHealthSpecialty(code: string | null | undefined): boolean {
+  return !(AESTHETIC_SPECIALTY_CODES as readonly string[]).includes(code ?? '');
+}
+
 export function clinicalModuleVersions(moduleKey: string): ClinicalModuleDefinition[] {
   return CLINICAL_MODULES.filter((definition) => definition.moduleKey === moduleKey).sort(
     (a, b) => a.schemaVersion - b.schemaVersion,

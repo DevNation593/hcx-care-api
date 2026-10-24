@@ -2094,3 +2094,4 @@ model InvoiceRequestEvent {
   @@unique([connectionId, webhookEventId])
   @@index([invoiceRequestId, createdAt])
 }
+
