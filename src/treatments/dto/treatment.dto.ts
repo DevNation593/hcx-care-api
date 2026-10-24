@@ -8,6 +8,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
   ValidateIf,
@@ -16,6 +17,17 @@ import {
 
 const trimText = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
+
+const upperCode = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim().toUpperCase() : value;
+
+/**
+ * What the invoicing provider accepts as a product SKU ([A-Za-z0-9._-]{1,25}), less five
+ * characters the invoice keeps to tell apart two products under one code.
+ */
+export const TREATMENT_CODE_PATTERN = /^[A-Z0-9][A-Z0-9._-]{0,19}$/;
+const codeMessage =
+  'code debe tener de 1 a 20 caracteres: letras, números, punto, guion o guion bajo, empezando por letra o número.';
 
 /**
  * Only the shape is checked here. The ranges, the references to forms and consents and the
@@ -76,6 +88,15 @@ export class CreateTreatmentDto {
   @MaxLength(120)
   name: string;
 
+  @ApiProperty({
+    example: 'TOX-01',
+    description: 'Main code on the invoice; stored in uppercase and unique per clinic.',
+  })
+  @Transform(upperCode)
+  @IsString()
+  @Matches(TREATMENT_CODE_PATTERN, { message: codeMessage })
+  code: string;
+
   @ApiPropertyOptional({ example: 'Medicina estética' })
   @Transform(trimText)
   @IsOptional()
@@ -107,6 +128,13 @@ export class UpdateTreatmentDto {
   @MinLength(2)
   @MaxLength(120)
   name?: string;
+
+  @ApiPropertyOptional({ example: 'TOX-01' })
+  @Transform(upperCode)
+  @ValidateIf((_, value) => value !== undefined) // null is not a code
+  @IsString()
+  @Matches(TREATMENT_CODE_PATTERN, { message: codeMessage })
+  code?: string;
 
   @ApiPropertyOptional({ nullable: true })
   @Transform(trimText)

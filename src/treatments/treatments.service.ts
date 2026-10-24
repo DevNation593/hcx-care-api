@@ -61,6 +61,20 @@ const nameTaken = () =>
     message: 'Ya existe un tratamiento con ese nombre.',
   });
 
+const codeTaken = () =>
+  new ConflictException({
+    statusCode: 409,
+    code: 'TREATMENT_CODE_TAKEN',
+    message: 'Ya existe un tratamiento con ese código.',
+  });
+
+/** Which of the two uniques of a treatment, (tenantId, name) or (tenantId, code), was hit. */
+const takenError = (error: unknown) => {
+  const target = (error as Prisma.PrismaClientKnownRequestError).meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : [String(target ?? '')];
+  return fields.some((field) => field.includes('code')) ? codeTaken() : nameTaken();
+};
+
 const versionConflict = () =>
   new ConflictException({
     statusCode: 409,
@@ -144,6 +158,7 @@ export class TreatmentsService {
           data: {
             tenantId,
             name: dto.name.trim(),
+            code: dto.code.trim().toUpperCase(),
             category: dto.category?.trim() || null,
             specialtyId: dto.specialtyId ?? null,
             currentVersion: 1,
@@ -154,7 +169,7 @@ export class TreatmentsService {
         return toDetail(created);
       });
     } catch (error) {
-      if (isUniqueViolation(error)) throw nameTaken();
+      if (isUniqueViolation(error)) throw takenError(error);
       throw error;
     }
   }
@@ -172,6 +187,7 @@ export class TreatmentsService {
 
         const data: Prisma.TreatmentUncheckedUpdateInput = {};
         if (dto.name !== undefined) data.name = dto.name.trim();
+        if (dto.code !== undefined) data.code = dto.code.trim().toUpperCase();
         if (dto.category !== undefined) data.category = dto.category?.trim() || null;
         if (dto.specialtyId !== undefined) data.specialtyId = dto.specialtyId;
         if (dto.isActive !== undefined) data.isActive = dto.isActive;
@@ -180,7 +196,7 @@ export class TreatmentsService {
         return toDetail(await this.findOwn(tx, tenantId, id));
       });
     } catch (error) {
-      if (isUniqueViolation(error)) throw nameTaken();
+      if (isUniqueViolation(error)) throw takenError(error);
       throw error;
     }
   }

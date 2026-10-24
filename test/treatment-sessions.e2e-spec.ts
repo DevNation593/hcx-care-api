@@ -214,6 +214,7 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
       .set(as('master'))
       .send({
         name: unique('Tratamiento'),
+        code: `TRAT-${counter}`,
         specialtyId,
         version: {
           price: 120,

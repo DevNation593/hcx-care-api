@@ -11,6 +11,8 @@ export interface FiscalSnapshot {
   replacesDocumentId?: string;
   lines: {
     localId: string;
+    /** The treatment's code, sent as the main code. Missing on free items and older snapshots. */
+    code?: string;
     name: string;
     quantity: string;
     unitPrice: string;
