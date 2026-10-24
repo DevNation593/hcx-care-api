@@ -213,6 +213,7 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
 
   const treatment = async (input: {
     name: string;
+    code: string;
     category: string;
     price: number;
     durationMinutes: number;
@@ -226,6 +227,7 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
       data: {
         tenantId,
         name: input.name,
+        code: input.code,
         category: input.category,
         specialtyId: ctx.catalog.aesthetics.id,
         isActive: input.isActive ?? true,
@@ -258,12 +260,14 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
   };
   const facial = await treatment({
     name: 'Limpieza facial profunda',
+    code: 'FAC-LIMP',
     category: 'Facial',
     price: 35,
     durationMinutes: 60,
   });
   const peeling = await treatment({
     name: 'Peeling químico',
+    code: 'FAC-PEEL',
     category: 'Facial',
     price: 60,
     durationMinutes: 45,
@@ -274,6 +278,7 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
   });
   const laser = await treatment({
     name: 'Depilación láser',
+    code: 'COR-LASER',
     category: 'Corporal',
     price: 45,
     durationMinutes: 30,
@@ -281,6 +286,7 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
   });
   const microderm = await treatment({
     name: 'Microdermoabrasión',
+    code: 'FAC-MICRO',
     category: 'Facial',
     price: 50,
     durationMinutes: 45,
@@ -288,6 +294,7 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
   // Out of the menu: it keeps its history and opens no new sessions.
   await treatment({
     name: 'Radiofrecuencia corporal',
+    code: 'COR-RADIO',
     category: 'Corporal',
     price: 70,
     durationMinutes: 60,
