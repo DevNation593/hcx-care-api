@@ -7,6 +7,7 @@ import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCipher, parseClinicalKeys } from '../clinical-access/clinical-cipher';
 import { PrismaService } from '../prisma/prisma.service';
+import { getPlanLimits } from '../subscription/subscription-pricing';
 import { FileStorage, LocalFileStorage } from './file-storage';
 import { PatientFilesService, UploadedFilePart } from './patient-files.service';
 
@@ -223,13 +224,44 @@ describe('PatientFilesService', () => {
       expect(storage.removed).toHaveLength(1);
     });
 
-    it('sets no limit for a plan with storageGB 0', async () => {
-      db.tenantSubscription.findUnique.mockResolvedValue({ storageGB: 0 });
+    describe('against the trial quota', () => {
+      const quotaBytes = getPlanLimits('TRIAL').storageGB * 1024 ** 3;
+      // Plays the database: the counter moves only while the usage satisfies the where clause.
+      const alreadyUsed = (bytes: number) =>
+        db.tenantSubscription.updateMany.mockImplementation(({ where }) =>
+          Promise.resolve({ count: BigInt(bytes) <= where.storageUsedBytes.lte ? 1 : 0 }),
+        );
 
-      await upload();
+      beforeEach(() => {
+        db.tenantSubscription.findUnique.mockResolvedValue({
+          storageGB: getPlanLimits('TRIAL').storageGB,
+        });
+      });
 
-      expect(db.tenantSubscription.updateMany.mock.calls[0][0].where).toEqual({
-        tenantId: 'tenant-1',
+      it('accepts a file that fills the quota exactly', async () => {
+        alreadyUsed(quotaBytes - PDF.length);
+
+        await upload();
+
+        expect(db.patientFile.create).toHaveBeenCalled();
+      });
+
+      it('refuses a file that would go over the quota', async () => {
+        alreadyUsed(quotaBytes - PDF.length + 1);
+
+        await expect(upload()).rejects.toMatchObject({
+          status: 413,
+          response: { code: 'STORAGE_LIMIT_REACHED' },
+        });
+        expect(db.patientFile.create).not.toHaveBeenCalled();
+      });
+
+      it('no longer reads storageGB 0 as unlimited', async () => {
+        db.tenantSubscription.findUnique.mockResolvedValue({ storageGB: 0 });
+        alreadyUsed(0);
+
+        await expect(upload()).rejects.toMatchObject({ status: 413 });
+        expect(db.patientFile.create).not.toHaveBeenCalled();
       });
     });
 

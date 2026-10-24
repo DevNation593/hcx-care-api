@@ -131,7 +131,7 @@ describe('SessionMediaService', () => {
       professionalId: 'pro',
       status: 'OPEN',
     });
-    db.tenantSubscription.findUnique.mockResolvedValue({ storageGB: 0 });
+    db.tenantSubscription.findUnique.mockResolvedValue({ storageGB: 1 });
     db.tenantSubscription.updateMany.mockResolvedValue({ count: 1 });
     db.patientFile.create.mockImplementation(({ data }) =>
       Promise.resolve({ id: 'file-1', createdAt: new Date(), deletedAt: null, ...data }),
