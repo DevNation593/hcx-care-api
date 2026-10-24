@@ -112,4 +112,67 @@ describe('fiscal resolution lease boundaries', () => {
     });
     expect(db.invoicingRef.upsert).toHaveBeenCalledTimes(2);
   });
+  it('keeps the hashed SKU for lines without a code', async () => {
+    await resolver.resolve(row, client);
+    expect(client.createProduct.mock.calls[0][0].sku).toMatch(/^HCX\.[0-9a-f]{21}$/);
+  });
+  describe('treatment lines', () => {
+    const withCode = (line: Record<string, string>) => {
+      row.snapshotEncrypted = crypto.encrypt(
+        'clinic',
+        JSON.stringify({ ...snapshot, lines: [{ ...snapshot.lines[0], ...line }] }),
+      );
+    };
+    it('send the treatment code as the main code', async () => {
+      withCode({ code: 'TOX-01' });
+      const body = await resolver.resolve(row, client);
+      expect(client.findProduct).toHaveBeenCalledWith('TOX-01');
+      expect(client.createProduct).toHaveBeenCalledWith({
+        sku: 'TOX-01',
+        name: 'Service',
+        unitPrice: '40.00',
+        ivaRateCode: '0',
+      });
+      expect(body.lines[0].productId).toBe('product');
+    });
+    it('reuse the product under the code at another price', async () => {
+      withCode({ code: 'TOX-01', unitPrice: '55.00' });
+      client.findProduct.mockResolvedValue({
+        id: 'existing',
+        sku: 'TOX-01',
+        name: 'Service',
+        unitPrice: '40.000000',
+        ivaRateCode: '0',
+      });
+      const body = await resolver.resolve(row, client);
+      expect(client.createProduct).not.toHaveBeenCalled();
+      expect(body.lines[0]).toMatchObject({ productId: 'existing', unitPrice: '55.00' });
+    });
+    it('fall back to the code plus a short hash once the product under the code was renamed', async () => {
+      withCode({ code: 'TOX-01' });
+      client.findProduct.mockImplementation(async (sku: string) =>
+        sku === 'TOX-01'
+          ? { id: 'old', sku, name: 'Old name', unitPrice: '40.000000', ivaRateCode: '0' }
+          : null,
+      );
+      const body = await resolver.resolve(row, client);
+      const sku = client.createProduct.mock.calls[0][0].sku;
+      expect(sku).toMatch(/^TOX-01\.[0-9a-f]{4}$/);
+      expect(sku.length).toBeLessThanOrEqual(25);
+      expect(body.lines[0].productId).toBe('product');
+    });
+    it('fail when neither the code nor its fallback match', async () => {
+      withCode({ code: 'TOX-01' });
+      client.findProduct.mockImplementation(async (sku: string) => ({
+        id: sku,
+        sku,
+        name: 'Old name',
+        unitPrice: '40.000000',
+        ivaRateCode: '0',
+      }));
+      await expect(resolver.resolve(row, client)).rejects.toMatchObject({
+        code: 'PRODUCT_SYNC_REQUIRED',
+      });
+    });
+  });
 });
