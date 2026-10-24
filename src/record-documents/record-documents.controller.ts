@@ -2,7 +2,6 @@ import { Controller, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ClinicalActor, CurrentClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalProfileGuard } from '../clinical-access/clinical-profile.guard';
-import { RequireFeature } from '../common/decorators/require-feature.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
@@ -18,7 +17,6 @@ export class RecordDocumentsController {
 
   @Post()
   @Roles('MASTER', 'PROFESIONAL')
-  @RequireFeature('attachments')
   @RequirePermission('clinical_records.create')
   @ApiOperation({
     summary: 'Save the record as a PDF among the files of the patient',

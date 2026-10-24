@@ -1,7 +1,6 @@
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubscriptionLifecycleService } from './subscription-lifecycle.service';
-import { SubscriptionService } from './subscription.service';
 
 type Row = Record<string, any>;
 
@@ -33,9 +32,6 @@ function table(rows: Row[]) {
       hit.forEach((row) => Object.assign(row, data));
       return { count: hit.length };
     }),
-    update: jest.fn(async ({ where, data }: { where: Row; data: Row }) =>
-      Object.assign(rows.find((row) => row.id === where.id)!, data),
-    ),
   };
 }
 
@@ -45,31 +41,30 @@ describe('SubscriptionLifecycleService', () => {
   const subscription = (id: string, overrides: Row): Row => ({
     id,
     tenantId: `tenant-${id}`,
-    planType: 'CLINIC_BASIC',
+    planId: 'plan_clinic_basic',
+    plan: { id: 'plan_clinic_basic', name: 'Clínica Básico' },
     status: 'ACTIVE',
     basePrice: new Decimal(99),
+    includedSpecialties: 2,
+    specialtyPrice: new Decimal(15),
     currency: 'USD',
     currentPeriodStart: day('2026-10-01'),
     currentPeriodEnd: day('2026-11-01'),
     trialEndsAt: null,
-    scheduledPlanChange: null,
-    scheduledPlanChangeAt: null,
-    featureClinicalNotes: true,
     ...overrides,
   });
 
   let subscriptions: ReturnType<typeof table>;
   let payments: Row[];
   let events: Row[];
+  let specialtyCount: number;
   let service: SubscriptionLifecycleService;
-  const validateDowngrade = jest.fn();
 
   const build = (rows: Row[]) => {
     subscriptions = table(rows);
     payments = [];
     events = [];
     const paymentTable = {
-      ...table(payments),
       createMany: jest.fn(async ({ data }: { data: Row[] }) => {
         const fresh = data.filter(
           (item) =>
@@ -88,91 +83,18 @@ describe('SubscriptionLifecycleService', () => {
       tenantSubscription: subscriptions,
       subscriptionPayment: paymentTable,
       subscriptionEvent: { create: jest.fn(async ({ data }: { data: Row }) => events.push(data)) },
-      tenantSpecialty: { count: jest.fn(async () => 1) },
+      tenantSpecialty: { count: jest.fn(async () => specialtyCount) },
     };
     const prisma = {
       ...client,
       $transaction: jest.fn(async (callback: (tx: typeof client) => unknown) => callback(client)),
     };
-    service = new SubscriptionLifecycleService(
-      prisma as unknown as PrismaService,
-      { validateDowngrade } as unknown as SubscriptionService,
-    );
+    service = new SubscriptionLifecycleService(prisma as unknown as PrismaService);
   };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    validateDowngrade.mockResolvedValue({ canDowngrade: true, errors: [], warnings: [] });
-  });
-
-  describe('scheduled downgrades', () => {
-    const due = () =>
-      subscription('a', {
-        planType: 'CLINIC_PRO',
-        basePrice: new Decimal(199),
-        featureAdvancedAnalytics: true,
-        scheduledPlanChange: 'CLINIC_BASIC',
-        scheduledPlanChangeAt: day('2026-10-16'),
-        currentPeriodEnd: day('2026-12-01'),
-      });
-
-    it('applies a due downgrade exactly once', async () => {
-      build([due()]);
-
-      const first = await service.run(now);
-      const second = await service.run(now);
-
-      expect(first.downgradesApplied).toBe(1);
-      expect(second.downgradesApplied).toBe(0);
-      expect(subscriptions.rows[0]).toMatchObject({
-        planType: 'CLINIC_BASIC',
-        seatsPsychologistsMax: 3,
-        featureAdvancedAnalytics: false,
-        scheduledPlanChange: null,
-        scheduledPlanChangeAt: null,
-      });
-      expect(subscriptions.rows[0].basePrice.toNumber()).toBe(99);
-      expect(events.filter(({ eventType }) => eventType === 'PLAN_DOWNGRADED')).toEqual([
-        expect.objectContaining({ previousPlan: 'CLINIC_PRO', newPlan: 'CLINIC_BASIC' }),
-      ]);
-    });
-
-    it('does not apply it twice when another instance claimed it first', async () => {
-      build([due()]);
-      subscriptions.updateMany.mockResolvedValueOnce({ count: 0 });
-
-      const report = await service.run(now);
-
-      expect(report.downgradesApplied).toBe(0);
-      expect(subscriptions.update).not.toHaveBeenCalled();
-      expect(events).toEqual([]);
-    });
-
-    it('leaves a future downgrade alone', async () => {
-      build([{ ...due(), scheduledPlanChangeAt: day('2026-10-20') }]);
-
-      expect((await service.run(now)).downgradesApplied).toBe(0);
-      expect(subscriptions.rows[0].planType).toBe('CLINIC_PRO');
-    });
-
-    it('cancels a downgrade the tenant no longer fits in, and records why', async () => {
-      build([due()]);
-      validateDowngrade.mockResolvedValue({ canDowngrade: false, errors: ['5 profesionales'] });
-
-      const report = await service.run(now);
-
-      expect(report).toMatchObject({ downgradesApplied: 0, downgradesBlocked: 1 });
-      expect(subscriptions.rows[0]).toMatchObject({
-        planType: 'CLINIC_PRO',
-        scheduledPlanChange: null,
-      });
-      expect(events).toEqual([
-        expect.objectContaining({
-          eventType: 'LIMIT_REACHED',
-          metadata: { errors: ['5 profesionales'] },
-        }),
-      ]);
-    });
+    specialtyCount = 1;
   });
 
   describe('renewals', () => {
@@ -180,14 +102,11 @@ describe('SubscriptionLifecycleService', () => {
       build([
         subscription('soon', { currentPeriodEnd: day('2026-10-20') }),
         subscription('later', { currentPeriodEnd: day('2026-11-15') }),
-        subscription('trial', {
-          planType: 'TRIAL',
-          status: 'TRIALING',
+        subscription('custom', {
+          plan: { id: 'plan_clinic_enterprise', name: 'Clínica Personalizado' },
           basePrice: new Decimal(0),
-          trialEndsAt: day('2026-10-20'),
-          currentPeriodEnd: null,
+          currentPeriodEnd: day('2026-10-20'),
         }),
-        subscription('custom', { planType: 'CLINIC_ENTERPRISE', basePrice: new Decimal(0) }),
       ]);
 
       const first = await service.run(now);
@@ -199,7 +118,8 @@ describe('SubscriptionLifecycleService', () => {
           tenantId: 'tenant-soon',
           kind: 'RENEWAL',
           status: 'PENDING',
-          targetPlan: 'CLINIC_BASIC',
+          planId: 'plan_clinic_basic',
+          planName: 'Clínica Básico',
           periodStart: day('2026-10-20'),
           periodEnd: day('2026-11-20'),
         }),
@@ -207,22 +127,40 @@ describe('SubscriptionLifecycleService', () => {
       expect(Number(payments[0].amount)).toBe(99);
     });
 
-    it('charges the next period at the price of a downgrade scheduled for its start', async () => {
-      build([
-        subscription('a', {
-          planType: 'CLINIC_PRO',
-          basePrice: new Decimal(199),
-          currentPeriodEnd: day('2026-10-20'),
-          scheduledPlanChange: 'CLINIC_BASIC',
-          scheduledPlanChangeAt: day('2026-10-20'),
-        }),
-      ]);
+    it('charges the specialties beyond the ones the plan includes', async () => {
+      specialtyCount = 4;
+      build([subscription('a', { currentPeriodEnd: day('2026-10-20') })]);
 
       await service.run(now);
 
-      expect(payments[0]).toMatchObject({ targetPlan: 'CLINIC_BASIC' });
-      expect(Number(payments[0].amount)).toBe(99);
-      expect(subscriptions.rows[0].planType).toBe('CLINIC_PRO');
+      // 99 + 2 extra specialties at 15.
+      expect(Number(payments[0].amount)).toBe(129);
+    });
+
+    it('charges the first month of the plan when a trial is about to end', async () => {
+      build([
+        subscription('trial', {
+          status: 'TRIALING',
+          trialEndsAt: day('2026-10-20'),
+          currentPeriodEnd: null,
+        }),
+        subscription('fresh', {
+          status: 'TRIALING',
+          trialEndsAt: day('2026-10-30'),
+          currentPeriodEnd: null,
+        }),
+      ]);
+
+      const report = await service.run(now);
+
+      expect(report.renewalsIssued).toBe(1);
+      expect(payments).toEqual([
+        expect.objectContaining({
+          tenantId: 'tenant-trial',
+          periodStart: day('2026-10-20'),
+          periodEnd: day('2026-11-20'),
+        }),
+      ]);
     });
   });
 
@@ -230,9 +168,7 @@ describe('SubscriptionLifecycleService', () => {
     it('makes an ended trial read-only and blocks it after the grace period', async () => {
       build([
         subscription('t', {
-          planType: 'TRIAL',
           status: 'TRIALING',
-          basePrice: new Decimal(0),
           currentPeriodEnd: null,
           trialEndsAt: day('2026-10-16'),
         }),
@@ -278,7 +214,6 @@ describe('SubscriptionLifecycleService', () => {
       build([
         subscription('ok', {}),
         subscription('custom', {
-          planType: 'CLINIC_ENTERPRISE',
           basePrice: new Decimal(0),
           currentPeriodEnd: day('2026-01-01'),
         }),
@@ -288,20 +223,6 @@ describe('SubscriptionLifecycleService', () => {
 
       expect(subscriptions.rows.map(({ status }) => status)).toEqual(['ACTIVE', 'ACTIVE']);
       expect(events).toEqual([]);
-    });
-
-    it('expires an upgrade request nobody paid, without touching renewals', async () => {
-      build([]);
-      payments.push(
-        { id: 'old', kind: 'PLAN_UPGRADE', status: 'PENDING', expiresAt: day('2026-10-15') },
-        { id: 'fresh', kind: 'PLAN_UPGRADE', status: 'PENDING', expiresAt: day('2026-10-20') },
-        { id: 'renewal', kind: 'RENEWAL', status: 'PENDING', expiresAt: null },
-      );
-
-      const report = await service.run(now);
-
-      expect(report.paymentsExpired).toBe(1);
-      expect(payments.map(({ status }) => status)).toEqual(['EXPIRED', 'PENDING', 'PENDING']);
     });
   });
 });

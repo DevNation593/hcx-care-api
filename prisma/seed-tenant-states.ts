@@ -1,11 +1,10 @@
 import type { Prisma, User } from '@prisma/client';
-import { upgradeCharge } from '../src/subscription/subscription-billing.rules';
 import {
   createAppointment,
   createPatient,
   createTenant,
   createUser,
-  planSubscriptionData,
+  planRef,
   SeedContext,
   SeedTenant,
   syncUsage,
@@ -112,7 +111,7 @@ async function seedPersonalTrial(ctx: SeedContext): Promise<SeedTenant> {
       taxIdentificationNumber: '1790012345002',
     },
     settings: { workingHoursEnd: '17:00', reminderRules: ['24h'] },
-    planType: 'TRIAL',
+    plan: 'PERSONAL_BASIC',
     status: 'TRIALING',
     subscription: {
       startDate: clock.days(-4),
@@ -165,7 +164,7 @@ async function seedPersonalBasic(ctx: SeedContext): Promise<SeedTenant> {
       taxIdentificationNumber: '1710034065',
     },
     settings: { timezone: 'America/Mexico_City', locale: 'es-MX', reminderEnabled: false },
-    planType: 'PERSONAL_BASIC',
+    plan: 'PERSONAL_BASIC',
     status: 'ACTIVE',
     subscription: {
       startDate: clock.days(-72),
@@ -191,7 +190,7 @@ async function seedPersonalBasic(ctx: SeedContext): Promise<SeedTenant> {
       kind: 'RENEWAL',
       status: 'CONFIRMED',
       amount: Number(clinic.subscription.basePrice),
-      targetPlan: 'PERSONAL_BASIC',
+      ...planRef(ctx, 'PERSONAL_BASIC'),
       periodStart: clock.days(-12),
       periodEnd: clock.days(18),
       providerReference: ctx.nextPaymentReference(),
@@ -232,7 +231,7 @@ async function seedPersonalPro(ctx: SeedContext): Promise<SeedTenant> {
       taxIdentificationType: 'RUC',
       taxIdentificationNumber: '1710034065001',
     },
-    planType: 'PERSONAL_PRO',
+    plan: 'PERSONAL_PRO',
     status: 'ACTIVE',
     subscription: {
       startDate: clock.days(-110),
@@ -241,14 +240,13 @@ async function seedPersonalPro(ctx: SeedContext): Promise<SeedTenant> {
       storageUsedBytes: BigInt(980 * 1024 * 1024),
     },
     specialties: ['psychology'],
-    addOns: ['apiAccess', 'whatsAppIntegration'],
     disabledSections: ['core.billing', 'core.patients.files'],
     disabledModules: ['psychology.assessments'],
     master: {
       email: 'titular.online@psic.com',
       firstName: 'Esteban',
       lastName: 'Larrea',
-      note: 'Plan con módulos de pago añadidos; facturación, almacenamiento y un módulo clínico desactivados',
+      note: 'Facturación, archivos y un módulo clínico desactivados solo para este consultorio',
       profile: { specialty: 'psychology', title: 'Psicoterapeuta', licenseNumber: 'PSY-EC-012' },
     },
   });
@@ -308,7 +306,7 @@ async function seedClinicAtLimits(ctx: SeedContext): Promise<SeedTenant> {
       taxIdentificationType: 'RUC',
       taxIdentificationNumber: '1792345678001',
     },
-    planType: 'CLINIC_BASIC',
+    plan: 'CLINIC_BASIC',
     status: 'ACTIVE',
     subscription: {
       startDate: clock.days(-130),
@@ -381,13 +379,12 @@ async function seedClinicAtLimits(ctx: SeedContext): Promise<SeedTenant> {
   });
   clinic.usage.invoicesThisMonth = issuedAt.filter((date) => date >= clock.monthStart()).length;
 
-  const proPrice = planSubscriptionData('CLINIC_PRO', 2).basePrice;
   await payments(ctx, clinic, [
     {
       kind: 'RENEWAL',
       status: 'CONFIRMED',
       amount: Number(clinic.subscription.basePrice),
-      targetPlan: 'CLINIC_BASIC',
+      ...planRef(ctx, 'CLINIC_BASIC'),
       periodStart: clock.days(-10),
       periodEnd: clock.days(20),
       providerReference: ctx.nextPaymentReference(),
@@ -399,7 +396,7 @@ async function seedClinicAtLimits(ctx: SeedContext): Promise<SeedTenant> {
       kind: 'PLAN_UPGRADE',
       status: 'EXPIRED',
       amount: 86.67,
-      targetPlan: 'CLINIC_PRO',
+      ...planRef(ctx, 'CLINIC_PRO'),
       requestedById: clinic.master.id,
       expiresAt: clock.days(-33),
       resolvedAt: clock.days(-33),
@@ -410,7 +407,7 @@ async function seedClinicAtLimits(ctx: SeedContext): Promise<SeedTenant> {
       kind: 'PLAN_UPGRADE',
       status: 'REJECTED',
       amount: 93.33,
-      targetPlan: 'CLINIC_PRO',
+      ...planRef(ctx, 'CLINIC_PRO'),
       requestedById: clinic.master.id,
       resolvedById: ctx.platformAdminId,
       resolvedAt: clock.days(-24),
@@ -422,7 +419,7 @@ async function seedClinicAtLimits(ctx: SeedContext): Promise<SeedTenant> {
       kind: 'PLAN_UPGRADE',
       status: 'CANCELED',
       amount: 96.67,
-      targetPlan: 'CLINIC_PRO',
+      ...planRef(ctx, 'CLINIC_PRO'),
       requestedById: clinic.master.id,
       resolvedAt: clock.days(-1),
       resolutionNote: 'Reemplazada por una solicitud más reciente',
@@ -431,12 +428,14 @@ async function seedClinicAtLimits(ctx: SeedContext): Promise<SeedTenant> {
     },
     {
       kind: 'PLAN_UPGRADE',
-      status: 'PENDING',
-      amount: upgradeCharge(clinic.subscription, proPrice, clock.days(-1)),
-      targetPlan: 'CLINIC_PRO',
+      status: 'CANCELED',
+      amount: 98.33,
+      ...planRef(ctx, 'CLINIC_PRO'),
       requestedById: clinic.master.id,
+      resolvedAt: clock.days(-1),
+      resolutionNote: 'Los planes ahora los asigna la plataforma',
       expiresAt: clock.days(6),
-      createdAt: clock.days(-1),
+      createdAt: clock.days(-2),
     },
   ]);
   await events(ctx, clinic, [
@@ -483,8 +482,8 @@ async function seedClinicAtLimits(ctx: SeedContext): Promise<SeedTenant> {
   return clinic;
 }
 
-/** A downgrade waiting for the end of the period, with the renewal issued at the lower price. */
-async function seedScheduledDowngrade(ctx: SeedContext): Promise<SeedTenant> {
+/** A clinic with a price, a limit and a module set apart from its plan, renewing soon. */
+async function seedPlanOverrides(ctx: SeedContext): Promise<SeedTenant> {
   const { clock } = ctx;
   const periodEnd = clock.days(5);
   const clinic = await createTenant(ctx, {
@@ -496,21 +495,23 @@ async function seedScheduledDowngrade(ctx: SeedContext): Promise<SeedTenant> {
       taxIdentificationType: 'RUC',
       taxIdentificationNumber: '1793456789001',
     },
-    planType: 'CLINIC_PRO',
+    plan: 'CLINIC_PRO',
     status: 'ACTIVE',
     subscription: {
       startDate: clock.days(-205),
       currentPeriodStart: clock.days(-25),
       currentPeriodEnd: periodEnd,
-      scheduledPlanChange: 'CLINIC_BASIC',
-      scheduledPlanChangeAt: periodEnd,
+      // Agreed with the clinic: a lower price and room for more patients than the plan gives.
+      basePrice: 179,
+      maxActivePatients: 800,
     },
+    disabledSections: ['core.billing.invoicing'],
     specialties: ['psychology', 'nutrition'],
     master: {
       email: 'titular.bienestar@psic.com',
       firstName: 'Mónica',
       lastName: 'Zurita',
-      note: 'Degradación a Clínica Básica programada para el fin del período (en 5 días)',
+      note: 'Precio y cupo de pacientes propios sobre Clínica Pro; sin facturación electrónica',
     },
   });
   const psychologist = await createUser(ctx, clinic, {
@@ -536,8 +537,8 @@ async function seedScheduledDowngrade(ctx: SeedContext): Promise<SeedTenant> {
     {
       kind: 'RENEWAL',
       status: 'PENDING',
-      amount: planSubscriptionData('CLINIC_BASIC', 2).basePrice,
-      targetPlan: 'CLINIC_BASIC',
+      amount: 179,
+      ...planRef(ctx, 'CLINIC_PRO'),
       periodStart: periodEnd,
       periodEnd: clock.days(35),
       createdAt: clock.days(-2),
@@ -545,12 +546,13 @@ async function seedScheduledDowngrade(ctx: SeedContext): Promise<SeedTenant> {
   ]);
   await events(ctx, clinic, [
     {
-      eventType: 'PLAN_DOWNGRADED',
-      previousPlan: 'CLINIC_PRO',
-      newPlan: 'CLINIC_BASIC',
-      metadata: { effectiveDate: periodEnd.toISOString(), warnings: [] },
-      triggeredByUserId: clinic.master.id,
-      createdAt: clock.days(-8),
+      eventType: 'PLAN_UPGRADED',
+      previousPlan: 'CLINIC_BASIC',
+      newPlan: 'CLINIC_PRO',
+      reason: 'Acuerdo comercial: precio y cupo propios.',
+      metadata: { source: 'PLATFORM_PANEL' },
+      triggeredByUserId: ctx.platformAdminId,
+      createdAt: clock.days(-60),
     },
   ]);
   return clinic;
@@ -578,7 +580,7 @@ async function seedEnterprise(ctx: SeedContext): Promise<SeedTenant> {
       allowDoubleBooking: true,
       reminderRules: ['24h', '2h', '30m'],
     },
-    planType: 'CLINIC_ENTERPRISE',
+    plan: 'CLINIC_ENTERPRISE',
     status: 'ACTIVE',
     subscription: {
       startDate: clock.days(-300),
@@ -652,16 +654,13 @@ async function seedExpiredTrial(ctx: SeedContext): Promise<SeedTenant> {
     name: 'Consultorio Raíces',
     email: 'contacto@consultorioraices.test',
     tenantType: 'CLINIC',
-    planType: 'TRIAL',
+    plan: 'CLINIC_BASIC',
     status: 'PAST_DUE',
     subscription: {
       startDate: clock.days(-17),
       trialEndsAt: clock.days(-3),
       currentPeriodStart: clock.days(-17),
       currentPeriodEnd: null,
-      // What the platform grants a clinic on trial.
-      seatsPsychologistsMax: 3,
-      maxActivePatients: 20,
     },
     specialties: ['psychology'],
     master: {
@@ -710,7 +709,7 @@ async function seedPastDue(ctx: SeedContext): Promise<SeedTenant> {
       taxIdentificationType: 'CEDULA',
       taxIdentificationNumber: '1720045176',
     },
-    planType: 'PERSONAL_BASIC',
+    plan: 'PERSONAL_BASIC',
     status: 'PAST_DUE',
     subscription: {
       startDate: clock.days(-92),
@@ -732,7 +731,7 @@ async function seedPastDue(ctx: SeedContext): Promise<SeedTenant> {
       kind: 'RENEWAL',
       status: 'PENDING',
       amount: Number(clinic.subscription.basePrice),
-      targetPlan: 'PERSONAL_BASIC',
+      ...planRef(ctx, 'PERSONAL_BASIC'),
       periodStart: periodEnd,
       periodEnd: clock.days(28),
       createdAt: clock.days(-9),
@@ -762,7 +761,7 @@ async function seedUnpaid(ctx: SeedContext): Promise<SeedTenant> {
       taxIdentificationType: 'RUC',
       taxIdentificationNumber: '1795678901001',
     },
-    planType: 'CLINIC_BASIC',
+    plan: 'CLINIC_BASIC',
     status: 'UNPAID',
     subscription: {
       startDate: clock.days(-162),
@@ -791,7 +790,7 @@ async function seedUnpaid(ctx: SeedContext): Promise<SeedTenant> {
       kind: 'RENEWAL',
       status: 'PENDING',
       amount: Number(clinic.subscription.basePrice),
-      targetPlan: 'CLINIC_BASIC',
+      ...planRef(ctx, 'CLINIC_BASIC'),
       periodStart: periodEnd,
       periodEnd: clock.days(18),
       createdAt: clock.days(-19),
@@ -820,7 +819,7 @@ async function seedCanceled(ctx: SeedContext): Promise<SeedTenant> {
     name: 'Psicología Familiar Ibarra',
     email: 'contacto@psicologiaibarra.test',
     tenantType: 'PERSONAL',
-    planType: 'PERSONAL_PRO',
+    plan: 'PERSONAL_PRO',
     status: 'CANCELED',
     subscription: {
       startDate: clock.days(-126),
@@ -863,7 +862,7 @@ async function seedIncomplete(ctx: SeedContext): Promise<SeedTenant> {
     name: 'Clínica Nueva Era',
     email: 'contacto@clinicanuevaera.test',
     tenantType: 'CLINIC',
-    planType: 'CLINIC_BASIC',
+    plan: 'CLINIC_BASIC',
     status: 'INCOMPLETE',
     subscription: {
       startDate: clock.days(-1),
@@ -887,15 +886,13 @@ async function seedJustCreated(ctx: SeedContext): Promise<SeedTenant> {
     name: 'Centro Psicológico Horizonte',
     email: 'contacto@centrohorizonte.test',
     tenantType: 'CLINIC',
-    planType: 'TRIAL',
+    plan: 'CLINIC_BASIC',
     status: 'TRIALING',
     subscription: {
       startDate: clock.now,
       trialEndsAt: clock.days(14),
       currentPeriodStart: clock.now,
       currentPeriodEnd: null,
-      seatsPsychologistsMax: 3,
-      maxActivePatients: 20,
     },
     specialties: ['psychology'],
     master: {
@@ -921,7 +918,7 @@ async function seedSuspended(ctx: SeedContext): Promise<SeedTenant> {
       taxIdentificationType: 'RUC',
       taxIdentificationNumber: '1796789012001',
     },
-    planType: 'CLINIC_BASIC',
+    plan: 'CLINIC_BASIC',
     status: 'ACTIVE',
     specialties: ['psychology', 'physiotherapy'],
     master: {
@@ -961,7 +958,7 @@ export async function seedTenantStates(ctx: SeedContext): Promise<SeedTenant[]> 
     seedPersonalBasic,
     seedPersonalPro,
     seedClinicAtLimits,
-    seedScheduledDowngrade,
+    seedPlanOverrides,
     seedEnterprise,
     seedExpiredTrial,
     seedPastDue,

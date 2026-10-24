@@ -12,7 +12,7 @@ type TenantRow = {
 };
 type SubscriptionRow = {
   tenantId: string;
-  planType: string;
+  plan: { name: string };
   status: string;
   trialEndsAt: Date | null;
 };
@@ -30,7 +30,13 @@ function tenant(id: string, overrides: Partial<TenantRow> = {}): TenantRow {
 }
 
 function subscription(tenantId: string, overrides: Partial<SubscriptionRow> = {}): SubscriptionRow {
-  return { tenantId, planType: 'CLINIC_BASIC', status: 'ACTIVE', trialEndsAt: null, ...overrides };
+  return {
+    tenantId,
+    plan: { name: 'Clínica Básico' },
+    status: 'ACTIVE',
+    trialEndsAt: null,
+    ...overrides,
+  };
 }
 
 /** In-memory stand-in that honours the filters the summary relies on. */
@@ -199,7 +205,7 @@ describe('PlatformSummaryService', () => {
     tenants.push(tenant('platform', { isPlatform: true, createdAt: new Date('2026-12-01') }));
     const service = build({
       tenants,
-      subscriptions: [subscription('t11', { planType: 'CLINIC_PRO' })],
+      subscriptions: [subscription('t11', { plan: { name: 'Clínica Pro' } })],
     });
 
     const summary = await service.getSummary(NOW);
@@ -220,10 +226,10 @@ describe('PlatformSummaryService', () => {
     expect(summary.recentTenants[0]).toEqual({
       id: 't11',
       name: 'Clinic t11',
-      planType: 'CLINIC_PRO',
+      planName: 'Clínica Pro',
       createdAt: new Date(Date.UTC(2026, 8, 12)),
     });
-    expect(summary.recentTenants[1].planType).toBeNull();
+    expect(summary.recentTenants[1].planName).toBeNull();
   });
 
   it('returns zeros and empty lists on an empty platform', async () => {

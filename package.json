@@ -33,7 +33,6 @@
     "prisma:verify-platform-sections": "ts-node prisma/verify-platform-sections.ts",
     "prisma:encrypt-clinical-data": "ts-node prisma/encrypt-clinical-data.ts",
     "prisma:migrate-local-storage": "ts-node prisma/migrate-local-storage-to-supabase.ts",
-    "contract:plan-catalog": "ts-node prisma/write-plan-catalog-contract.ts",
     "catalog:import-diagnosis-codes": "ts-node prisma/import-diagnosis-codes.ts",
     "webpush:generate-keys": "ts-node -e \"console.log(require('./src/notifications/web-push/web-push.crypto').generateVapidKeys())\""
   },

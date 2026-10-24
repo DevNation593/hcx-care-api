@@ -4,7 +4,7 @@ import { ArrayMaxSize, IsArray, IsString } from 'class-validator';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
 import { PlatformRoute } from '../common/decorators/platform-route.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
-import { ChangePlanDto } from './dto/change-plan.dto';
+import { ChangePlanDto, SetPlanOverridesDto } from './dto/change-plan.dto';
 import { CreatePlatformTenantDto } from './dto/create-platform-tenant.dto';
 import {
   ListPlatformTenantsQueryDto,
@@ -73,6 +73,16 @@ export class PlatformTenantsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.subscriptions.changePlan(tenantId, dto, user.userId);
+  }
+
+  /** Price and limit values for this clinic apart from its plan; `reset` puts them back on it. */
+  @Put('tenants/:tenantId/subscription/overrides')
+  setPlanOverrides(
+    @Param('tenantId') tenantId: string,
+    @Body() dto: SetPlanOverridesDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.subscriptions.setOverrides(tenantId, dto, user.userId);
   }
 
   @Post('tenants/:tenantId/suspend')

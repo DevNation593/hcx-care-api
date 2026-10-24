@@ -7,7 +7,7 @@ import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCipher, parseClinicalKeys } from '../clinical-access/clinical-cipher';
 import { PrismaService } from '../prisma/prisma.service';
-import { getPlanLimits } from '../subscription/subscription-pricing';
+import { DEFAULT_PLANS } from '../plans/default-plans';
 import { FileStorage, LocalFileStorage } from './file-storage';
 import { PatientFilesService, UploadedFilePart } from './patient-files.service';
 
@@ -224,8 +224,9 @@ describe('PatientFilesService', () => {
       expect(storage.removed).toHaveLength(1);
     });
 
-    describe('against the trial quota', () => {
-      const quotaBytes = getPlanLimits('TRIAL').storageGB * 1024 ** 3;
+    describe('against the quota of the smallest plan', () => {
+      const smallest = Math.min(...DEFAULT_PLANS.map((plan) => plan.storageGB));
+      const quotaBytes = smallest * 1024 ** 3;
       // Plays the database: the counter moves only while the usage satisfies the where clause.
       const alreadyUsed = (bytes: number) =>
         db.tenantSubscription.updateMany.mockImplementation(({ where }) =>
@@ -234,7 +235,7 @@ describe('PatientFilesService', () => {
 
       beforeEach(() => {
         db.tenantSubscription.findUnique.mockResolvedValue({
-          storageGB: getPlanLimits('TRIAL').storageGB,
+          storageGB: smallest,
         });
       });
 

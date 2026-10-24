@@ -6,13 +6,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, TenantSubscription } from '@prisma/client';
-import { Decimal } from '@prisma/client/runtime/library';
+import { monthlyTotal } from '../plans/plan-values';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
-import {
-  calculateSubscriptionPrice,
-  getSelectedModules,
-} from '../subscription/subscription-pricing';
 import { SpecialtyCatalogService } from './specialty-catalog.service';
 
 type CatalogSpecialty = Awaited<ReturnType<SpecialtyCatalogService['resolveActiveCodes']>>[number];
@@ -21,7 +17,19 @@ export type SpecialtySelectionResult = {
   tenantId: string;
   specialties: CatalogSpecialty[];
   modules: Array<{ moduleKey: string; enabled: boolean }>;
-  pricing: ReturnType<typeof calculateSubscriptionPrice> & { currency: string };
+  pricing: SpecialtyPricing;
+};
+
+/** What the clinic pays a month with this selection; basePrice itself never changes here. */
+export type SpecialtyPricing = {
+  basePlanPrice: number;
+  specialtyAddonsPrice: number;
+  totalMonthly: number;
+  includedSpecialties: number;
+  selectedSpecialties: number;
+  billableSpecialties: number;
+  specialtyUnitPrice: number;
+  currency: string;
 };
 
 @Injectable()
@@ -48,7 +56,7 @@ export class TenantSpecialtiesService {
           orderBy: { moduleKey: 'asc' },
         }),
       ]);
-      const previousMonthlyPrice = Number(subscription.basePrice);
+      const previousMonthlyPrice = monthlyTotal(subscription, previousSpecialties.length);
       const result = await this.applySelection(tx, { tenantId, subscription, specialties });
       await tx.auditLog.create({
         data: {
@@ -174,16 +182,19 @@ export class TenantSpecialtiesService {
         data: addKeys.map((moduleKey) => ({ tenantId, moduleKey, enabled: true })),
       });
 
-    const pricing = calculateSubscriptionPrice({
-      planType: subscription.planType,
-      selectedModules: getSelectedModules(subscription),
-      specialtyCount: specialties.length,
+    const totalMonthly = monthlyTotal(subscription, specialties.length);
+    const billableSpecialties = Math.max(0, specialties.length - subscription.includedSpecialties);
+    const pricing: SpecialtyPricing = {
+      basePlanPrice: Number(subscription.basePrice),
+      specialtyAddonsPrice:
+        Math.round(billableSpecialties * Number(subscription.specialtyPrice) * 100) / 100,
+      totalMonthly,
+      includedSpecialties: subscription.includedSpecialties,
+      selectedSpecialties: specialties.length,
+      billableSpecialties,
       specialtyUnitPrice: Number(subscription.specialtyPrice),
-    });
-    await tx.tenantSubscription.update({
-      where: { tenantId },
-      data: { basePrice: new Decimal(pricing.totalMonthly) },
-    });
+      currency: subscription.currency,
+    };
     return {
       tenantId,
       specialties,
@@ -191,7 +202,7 @@ export class TenantSpecialtiesService {
         ...existingModules.filter(({ moduleKey }) => !removeKeys.includes(moduleKey)),
         ...addKeys.map((moduleKey) => ({ moduleKey, enabled: true })),
       ].sort((a, b) => a.moduleKey.localeCompare(b.moduleKey)),
-      pricing: { ...pricing, currency: subscription.currency },
+      pricing,
     };
   }
 

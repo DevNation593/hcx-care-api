@@ -600,27 +600,32 @@ Routes under `/platform/*` belong to the platform administration panel. They req
 
 | Route | Description |
 |---|---|
-| `GET /platform/summary` | `tenants: { active, suspended }`, `subscriptions: { trialing, active, pastDue, blocked }` (`blocked` = `UNPAID` + `CANCELED` + `INCOMPLETE`), `pendingPayments: { count, amount, currency }`, `trialsEndingSoon` (`id`, `name`, `trialEndsAt`), `recentTenants` (`id`, `name`, `planType`, `createdAt`). The platform tenant is excluded. |
+| `GET /platform/summary` | `tenants: { active, suspended }`, `subscriptions: { trialing, active, pastDue, blocked }` (`blocked` = `UNPAID` + `CANCELED` + `INCOMPLETE`), `pendingPayments: { count, amount, currency }`, `trialsEndingSoon` (`id`, `name`, `trialEndsAt`), `recentTenants` (`id`, `name`, `planName`, `createdAt`). The platform tenant is excluded. |
 
 ### Tenants
 
 | Route | Description |
 |---|---|
-| `GET /platform/tenants` | Paginated list. Query: `page`, `pageSize` (max 100, default 20), `search` (clinic name or email, owner name or email), `planType`, `status`, `isActive`. Returns `{ items, total, page, pageSize }`; each item has `id`, `name`, `tenantType`, `isActive`, `createdAt`, `master`, `planType`, `status`, `seatsPsychologistsUsed`/`seatsPsychologistsMax`, `activePatientsCount`/`maxActivePatients`. |
-| `GET /platform/tenants/:tenantId` | Detail: `tenant`, `master` (with `mustChangePassword`), `subscription` (including monthly price, included specialties and extra specialty price), `usage`, `specialties`, core `sections` and clinical `modules`. |
+| `GET /platform/tenants` | Paginated list. Query: `page`, `pageSize` (max 100, default 20), `search` (clinic name or email, owner name or email), `planId`, `status`, `isActive`. Returns `{ items, total, page, pageSize }`; each item has `id`, `name`, `tenantType`, `isActive`, `createdAt`, `master`, `plan` (`id`, `code`, `name`), `status`, `seatsPsychologistsUsed`/`seatsPsychologistsMax`, `activePatientsCount`/`maxActivePatients`. |
+| `GET /platform/tenants/:tenantId` | Detail: `tenant`, `master` (with `mustChangePassword`), `subscription` (`plan`, status and dates, every value the plan gives, `overriddenFields` and `monthlyTotal`), `usage`, `specialties`, `sections` (each with `source`: `PLAN` or `OVERRIDE`) and clinical `modules`. |
 | `POST /platform/tenants` | Creates a clinic with its owner. Responds `201` with the detail shape. |
 | `PATCH /platform/tenants/:tenantId` | Edits `name`, `email`, `phone`, `address`. |
-| `PATCH /platform/tenants/:tenantId/subscription` | Changes the plan. Body: `planType`, `seatsPsychologistsMax?`, `maxActivePatients?`, `reason` (required). |
+| `PATCH /platform/tenants/:tenantId/subscription` | Changes the plan. Body: `planId`, `trialDays?` (1-365), `reason` (required). |
+| `PUT /platform/tenants/:tenantId/subscription/overrides` | Body `{ values, reset?, reason }`: sets price and limit values for this clinic apart from its plan (`values`), or puts them back on the plan (`reset`). `400 OVERRIDE_INVALID` / `OVERRIDE_CONFLICT` / `OVERRIDE_EMPTY`. |
 | `POST /platform/tenants/:tenantId/suspend` | Body `{ reason }` (required). Sets `Tenant.isActive = false` and revokes the refresh tokens of the users of the tenant. |
 | `POST /platform/tenants/:tenantId/reactivate` | Sets `Tenant.isActive = true`. |
-| `PUT /platform/tenants/:tenantId/sections` | Body `{ sections: string[] }`: the keys that stay enabled; every other section is stored with `enabled = false`. |
+| `PUT /platform/tenants/:tenantId/sections` | Body `{ sections: string[] }`: the module and submodule keys that stay enabled; every other one is stored with `enabled = false`. A row that differs from what the plan gives is stored as `OVERRIDE` and survives plan edits. |
 | `GET /platform/tenants/:tenantId/roles/:role/permissions` | Effective permissions and the configurable catalog for `MASTER`, `PROFESIONAL` or `ASISTENTE`. |
 | `PUT /platform/tenants/:tenantId/roles/:role/permissions` | Body `{ allowed: string[] }`: replaces the effective permissions of the role in this clinic; changes are audited. |
 | `GET /platform/specialty-catalog` | Active specialties and their clinical modules. |
-| `PUT /platform/tenants/:tenantId/specialties` | Body `{ specialtyCodes: string[] }`: assigns clinic specialties and their modules, recalculates the monthly price and records an audit entry. |
+| `PUT /platform/tenants/:tenantId/specialties` | Body `{ specialtyCodes: string[] }`: assigns clinic specialties and their modules, answers the resulting monthly price (the plan price is not changed) and records an audit entry. |
 | `PATCH /platform/tenants/:tenantId/modules/:moduleKey` | Body `{ enabled: boolean }`: enables or disables an assigned clinical module and records an audit entry. |
 | `POST /platform/tenants/:tenantId/master/reset-password` | Body `{ temporaryPassword }` (min. 8 characters). Stores the hash, sets `mustChangePassword = true` and revokes the owner's refresh tokens. Responds `200` without a body. |
-| `GET /platform/section-catalog` | The eight sections (key, name, dependencies) and the pre-checked sections for every plan and tenant type (`defaults`). |
+| `GET /platform/section-catalog` | The modules and submodules (key, name, parent, dependencies, health-only mark) and `nonHealthSpecialtyCodes`. Each plan says which keys it includes. |
+| `GET /platform/plans` | Every plan, archived ones included, with `modules` and `clinicsCount`. |
+| `POST /platform/plans` | Creates a plan: `code`, `name`, `description?`, `tenantType`, `sortOrder?`, prices, limits, `trialDays` and `modules`. `409 PLAN_CODE_TAKEN`. |
+| `PATCH /platform/plans/:planId` | Edits a plan (not its code). Every clinic on it takes the new values and modules at once, except its overrides. `409 PLAN_IN_USE` when changing the type of a plan with clinics. |
+| `POST /platform/plans/:planId/archive` / `restore` | An archived plan keeps its clinics but cannot be assigned (`409 PLAN_ARCHIVED`). |
 
 Every route with `:tenantId` answers `404` if the clinic does not exist or is the platform tenant.
 
@@ -639,24 +644,23 @@ Every route with `:tenantId` answers `404` if the clinic does not exist or is th
   "masterLastName": "Lopez",
   "masterEmail": "ana@demo.test",
   "temporaryPassword": "Temporal-2026",
-  "planType": "TRIAL",
-  "specialtyCodes": ["PSYCHOLOGY"],
-  "sections": ["core.calendar", "core.patients"]
+  "planId": "plan_clinic_basic",
+  "trialDays": 14,
+  "specialtyCodes": ["PSYCHOLOGY"]
 }
 ```
 
-- `phone`, `address` and `sections` are optional. When `sections` is omitted, the pre-checked sections of the plan and tenant type are used.
+- `phone`, `address`, `trialDays` and `sections` are optional. Without `trialDays` the plan's own apply; `0` starts a paid month. Without `sections` the clinic gets what the plan includes (health-only submodules off when every specialty is aesthetic); with them, what differs from the plan is stored as an override.
 - `temporaryPassword` has at least 8 characters and is stored exactly as typed. It is never logged or written to the audit log.
 - `specialtyCodes` needs at least one code.
-- Everything runs in one serializable transaction. A `TRIAL` plan starts `TRIALING` with a 14-day trial; a paid plan starts `ACTIVE` with a one-month period and no payment record. The owner is created with `mustChangePassword = true`.
-- The owner email must be unique across the platform (`409` otherwise). The plan must match the tenant type (`400 PLAN_TYPE_MISMATCH`).
+- Everything runs in one serializable transaction. With trial days the clinic starts `TRIALING`; without them `ACTIVE` with a one-month period and no payment record. The owner is created with `mustChangePassword = true`.
+- The owner email must be unique across the platform (`409` otherwise). The plan must exist (`404 PLAN_NOT_FOUND`), not be archived (`409 PLAN_ARCHIVED`) and match the tenant type (`400 PLAN_TYPE_MISMATCH`).
 
 **Plan change**
 
-- Applied immediately, without a payment. Limits and flags are recalculated from the plan; `seatsPsychologistsMax` and `maxActivePatients`, when sent, replace the plan values.
-- If the current usage exceeds the new limits: `409 PLAN_BELOW_USAGE` and nothing changes.
-- Cancels a pending scheduled plan change and the `PENDING` upgrade payments of the clinic.
-- Does not touch the sections.
+- Applied immediately, without a payment. Price, limits and modules become the new plan's, and the clinic's overrides are dropped.
+- With `trialDays` the clinic tries the plan; without them it pays from today, or keeps a paid period that is still running.
+- A limit below current usage deletes nothing: the clinic just cannot add more.
 
 **Sections**
 

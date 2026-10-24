@@ -1,89 +1,25 @@
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import {
-  PlanType,
   Prisma,
   SubscriptionPayment,
   SubscriptionPaymentStatus,
   TenantSubscription,
 } from '@prisma/client';
-import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
-import {
-  BILLING_RULES,
-  addDays,
-  addMonth,
-  hasRunningPaidPeriod,
-  isUpgrade,
-  planChangeData,
-  upgradeCharge,
-} from './subscription-billing.rules';
 
 const conflict = (code: string, message: string) =>
   new ConflictException({ statusCode: 409, code, message });
 
 /**
- * Charges of the subscription. A paid plan is never enabled by asking for it: the request
- * becomes a PENDING payment and the plan changes only when that payment is confirmed.
- * Confirmation is manual today (support, with the reference of the transfer or receipt);
- * a payment provider's webhook can call `confirmPayment` with its own provider name.
+ * Charges of the subscription: the renewal of each period, and the first one at the end of a
+ * trial. Only the platform changes a clinic's plan. Confirmation is manual today (support, with
+ * the reference of the transfer or receipt); a payment provider's webhook can call
+ * `confirmPayment` with its own provider name.
  */
 @Injectable()
 export class SubscriptionBillingService {
   constructor(private readonly prisma: PrismaService) {}
-
-  async requestUpgrade(tenantId: string, userId: string, newPlan: PlanType) {
-    const now = new Date();
-
-    return runSerializableTransaction(this.prisma, tenantId, userId, async (tx) => {
-      const subscription = await tx.tenantSubscription.findUnique({ where: { tenantId } });
-      if (!subscription) throw new BadRequestException('Suscripción no encontrada');
-
-      await this.assertUpgradeAllowed(tx, subscription, newPlan);
-
-      const specialtyCount = await tx.tenantSpecialty.count({ where: { tenantId } });
-      const { pricing } = planChangeData(subscription, newPlan, specialtyCount);
-      const amount = upgradeCharge(subscription, pricing.totalMonthly, now);
-
-      // A newer request replaces the previous one: only one upgrade can be waiting for payment.
-      await tx.subscriptionPayment.updateMany({
-        where: { tenantId, kind: 'PLAN_UPGRADE', status: 'PENDING' },
-        data: {
-          status: 'CANCELED',
-          resolvedAt: now,
-          resolutionNote: 'Reemplazada por una solicitud más reciente',
-        },
-      });
-
-      const payment = await tx.subscriptionPayment.create({
-        data: {
-          tenantId,
-          kind: 'PLAN_UPGRADE',
-          amount: new Decimal(amount),
-          currency: subscription.currency,
-          targetPlan: newPlan,
-          requestedById: userId,
-          expiresAt: addDays(now, BILLING_RULES.upgradeRequestExpiryDays),
-        },
-      });
-
-      return {
-        success: true,
-        status: 'PENDING_PAYMENT' as const,
-        currentPlan: subscription.planType,
-        requestedPlan: newPlan,
-        payment,
-        pricing,
-        message:
-          'Solicitud registrada. El plan se activará cuando se confirme el pago; hasta entonces su plan actual no cambia.',
-      };
-    });
-  }
 
   listForTenant(tenantId: string) {
     return this.prisma.subscriptionPayment.findMany({
@@ -151,10 +87,13 @@ export class SubscriptionBillingService {
           const subscription = await tx.tenantSubscription.findUniqueOrThrow({
             where: { tenantId: payment.tenantId },
           });
-          const updated =
-            payment.kind === 'PLAN_UPGRADE'
-              ? await this.applyUpgrade(tx, subscription, payment, actorId, now)
-              : await this.applyRenewal(tx, subscription, payment, actorId);
+          if (payment.kind === 'PLAN_UPGRADE') {
+            throw conflict(
+              'PAYMENT_NO_LONGER_APPLICABLE',
+              'Los consultorios ya no cambian de plan con un pago: rechace este pago y cambie el plan desde el panel.',
+            );
+          }
+          const updated = await this.applyRenewal(tx, subscription, payment, actorId);
 
           const confirmed = await tx.subscriptionPayment.update({
             where: { id: paymentId },
@@ -235,81 +174,6 @@ export class SubscriptionBillingService {
 
       return { success: true, payment: rejected };
     });
-  }
-
-  private async assertUpgradeAllowed(
-    tx: Prisma.TransactionClient,
-    subscription: TenantSubscription,
-    newPlan: PlanType,
-  ) {
-    if (!isUpgrade(subscription.planType, newPlan)) {
-      throw new BadRequestException('Esto no es una mejora. Use downgradePlan para degradaciones.');
-    }
-    const tenant = await tx.tenant.findUnique({ where: { id: subscription.tenantId } });
-    if (newPlan.startsWith('PERSONAL_') && tenant?.tenantType === 'CLINIC') {
-      throw new BadRequestException(
-        'No se puede cambiar a un plan personal en una cuenta de clínica.',
-      );
-    }
-    return tenant;
-  }
-
-  private async applyUpgrade(
-    tx: Prisma.TransactionClient,
-    subscription: TenantSubscription,
-    payment: SubscriptionPayment,
-    actorId: string | null,
-    now: Date,
-  ) {
-    const newPlan = payment.targetPlan;
-    if (!isUpgrade(subscription.planType, newPlan)) {
-      throw conflict(
-        'PAYMENT_NO_LONGER_APPLICABLE',
-        'El plan del consultorio cambió desde que se solicitó esta mejora. Rechace este pago y solicite una nueva.',
-      );
-    }
-    const tenant = await this.assertUpgradeAllowed(tx, subscription, newPlan);
-    if (newPlan.startsWith('CLINIC_') && tenant?.tenantType === 'PERSONAL') {
-      await tx.tenant.update({
-        where: { id: subscription.tenantId },
-        data: { tenantType: 'CLINIC' },
-      });
-    }
-
-    const specialtyCount = await tx.tenantSpecialty.count({
-      where: { tenantId: subscription.tenantId },
-    });
-    const { data } = planChangeData(subscription, newPlan, specialtyCount);
-    // Coming from a trial or an unpaid period, the paid month starts with the payment.
-    const period = hasRunningPaidPeriod(subscription, now)
-      ? {}
-      : { currentPeriodStart: now, currentPeriodEnd: addMonth(now) };
-
-    const updated = await tx.tenantSubscription.update({
-      where: { tenantId: subscription.tenantId },
-      data: {
-        ...data,
-        ...period,
-        status: 'ACTIVE',
-        scheduledPlanChange: null,
-        scheduledPlanChangeAt: null,
-      },
-    });
-
-    await tx.subscriptionEvent.create({
-      data: {
-        tenantId: subscription.tenantId,
-        eventType: 'PLAN_UPGRADED',
-        previousPlan: subscription.planType,
-        newPlan,
-        previousStatus: subscription.status,
-        newStatus: 'ACTIVE',
-        metadata: { paymentId: payment.id, amount: Number(payment.amount) },
-        triggeredByUserId: actorId,
-      },
-    });
-
-    return updated;
   }
 
   private async applyRenewal(

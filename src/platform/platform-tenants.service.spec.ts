@@ -6,7 +6,9 @@ import { SpecialtyCatalogService } from '../specialties/specialty-catalog.servic
 import { TenantSpecialtiesService } from '../specialties/tenant-specialties.service';
 import { SECTION_KEYS } from '../common/sections/section-catalog';
 import { CreatePlatformTenantDto } from './dto/create-platform-tenant.dto';
+import { DEFAULT_PLANS } from '../plans/default-plans';
 import { PlatformAuditService } from './platform-audit.service';
+import { PlatformPlansService } from './platform-plans.service';
 import { PlatformTenantsService } from './platform-tenants.service';
 
 const TEMP_PASSWORD = 'Temp-Pass-9876';
@@ -25,6 +27,33 @@ const aesthetics = {
   modules: [],
 };
 
+// The default plans as the migration stores them, by id.
+const PLANS = new Map(
+  DEFAULT_PLANS.map(({ modules, ...plan }) => {
+    const id = `plan_${plan.code.toLowerCase()}`;
+    return [
+      id,
+      {
+        id,
+        ...plan,
+        basePrice: new Prisma.Decimal(plan.basePrice),
+        pricePerSeat: new Prisma.Decimal(plan.pricePerSeat),
+        specialtyPrice: new Prisma.Decimal(plan.specialtyPrice),
+        currency: 'USD',
+        archivedAt: null,
+        modules: modules.map((moduleKey) => ({ moduleKey })),
+      },
+    ];
+  }),
+);
+const findPlan = jest.fn(
+  async ({ where }: { where: { id: string } }) => PLANS.get(where.id) ?? null,
+);
+const CODE_OF: Record<string, string> = {
+  'specialty-1': 'PSYCHOLOGY',
+  [aesthetics.id]: 'AESTHETICS',
+};
+
 function input(overrides: Partial<CreatePlatformTenantDto> = {}): CreatePlatformTenantDto {
   return {
     name: ' Clínica Centro ',
@@ -38,7 +67,7 @@ function input(overrides: Partial<CreatePlatformTenantDto> = {}): CreatePlatform
     masterLastName: ' Pérez ',
     masterEmail: ' ANA@EXAMPLE.COM ',
     temporaryPassword: TEMP_PASSWORD,
-    planType: 'TRIAL',
+    planId: 'plan_clinic_basic',
     specialtyCodes: ['psychology'],
     ...overrides,
   };
@@ -82,7 +111,11 @@ describe('PlatformTenantsService', () => {
       createdAt: new Date('2026-10-01T00:00:00Z'),
       subscription: subscription && {
         ...subscription,
-        planType: subscription.planType,
+        plan: (({ id: planId, code, name }) => ({ id: planId, code, name }))(
+          PLANS.get(subscription.planId)!,
+        ),
+        _count: { specialties: source.selections.length },
+        overriddenFields: subscription.overriddenFields ?? [],
         status: subscription.status,
         trialEndsAt: subscription.trialEndsAt ?? null,
         currentPeriodStart: subscription.currentPeriodStart,
@@ -111,7 +144,7 @@ describe('PlatformTenantsService', () => {
       })),
       enabledModules: source.modules
         .filter((m) => m.tenantId === id)
-        .map((m) => ({ moduleKey: m.moduleKey, enabled: m.enabled })),
+        .map((m) => ({ moduleKey: m.moduleKey, enabled: m.enabled, source: m.source })),
     };
   }
 
@@ -128,6 +161,7 @@ describe('PlatformTenantsService', () => {
     };
     listRows = [];
     prisma = {
+      plan: { findUnique: findPlan },
       tenant: {
         findFirst: jest.fn(async ({ where }) => readTenant(state, where.id)),
         findMany: jest.fn(async () => listRows),
@@ -142,6 +176,7 @@ describe('PlatformTenantsService', () => {
         const pending = structuredClone(state);
         const tx = {
           $executeRaw: jest.fn(async () => 1),
+          plan: { findUnique: findPlan },
           user: {
             findFirst: jest.fn(async ({ where }) => {
               if (where.role === 'MASTER') {
@@ -224,6 +259,12 @@ describe('PlatformTenantsService', () => {
               pending.subscriptions.push(row);
               return row;
             }),
+            // Only the plan of the subscription is read inside a transaction.
+            findUniqueOrThrow: jest.fn(async ({ where }) => ({
+              plan: PLANS.get(
+                pending.subscriptions.find((s) => s.tenantId === where.tenantId).planId,
+              ),
+            })),
           },
           tenantModule: {
             createMany: jest.fn(async ({ data }) => {
@@ -254,6 +295,9 @@ describe('PlatformTenantsService', () => {
             createMany: jest.fn(async ({ data }) => {
               pending.selections.push(...data.map((r) => r.specialtyId));
             }),
+            findMany: jest.fn(async () =>
+              pending.selections.map((id) => ({ specialty: { code: CODE_OF[id] } })),
+            ),
           },
         };
         prisma.lastTx = tx;
@@ -287,6 +331,7 @@ describe('PlatformTenantsService', () => {
       catalog as SpecialtyCatalogService,
       selection as TenantSpecialtiesService,
       audit as PlatformAuditService,
+      new PlatformPlansService(prisma as PrismaService, audit as PlatformAuditService),
     );
   });
 
@@ -341,13 +386,21 @@ describe('PlatformTenantsService', () => {
     });
   });
 
-  it('uses the plan defaults when sections are omitted', async () => {
-    const result = await service.create(input({ planType: 'TRIAL', tenantType: 'CLINIC' }), 'a');
+  it('turns on what the plan includes when sections are omitted, all following the plan', async () => {
+    const result = await service.create(input(), 'a');
+    expect(state.modules.every((m) => m.enabled && m.source === 'PLAN')).toBe(true);
+    expect(result.sections.every((s) => s.enabled && s.source === 'PLAN')).toBe(true);
+
+    state.users = [];
+    state.subscriptions = [];
+    state.modules = [];
+    await service.create(
+      input({ tenantType: 'PERSONAL', planId: 'plan_personal_basic', masterEmail: 'o@x.com' }),
+      'a',
+    );
     const enabled = Object.fromEntries(state.modules.map((m) => [m.moduleKey, m.enabled]));
-    expect(enabled['core.agenda.tasks']).toBe(false);
-    expect(enabled['core.admin.team']).toBe(true);
-    expect(enabled['core.patients']).toBe(true);
-    expect(result.sections.find((s) => s.key === 'core.agenda.tasks')?.enabled).toBe(false);
+    expect(enabled['core.admin.team']).toBe(false);
+    expect(enabled['core.agenda.tasks']).toBe(true);
   });
 
   it('shows clinical modules separately from core sections', async () => {
@@ -362,7 +415,13 @@ describe('PlatformTenantsService', () => {
 
     expect(detail.sections).toHaveLength(SECTION_KEYS.length);
     expect(detail.modules).toEqual([{ key: 'psychology.assessments', enabled: false }]);
-    expect(detail.subscription).toMatchObject({ includedSpecialties: 1, specialtyPrice: 15 });
+    expect(detail.subscription).toMatchObject({
+      plan: { id: 'plan_clinic_basic', code: 'CLINIC_BASIC', name: 'Clínica Básico' },
+      includedSpecialties: 2,
+      specialtyPrice: 15,
+      overriddenFields: [],
+      monthlyTotal: 99,
+    });
   });
 
   it('leaves clinical notes off by default for an aesthetic-only clinic', async () => {
@@ -377,6 +436,11 @@ describe('PlatformTenantsService', () => {
     await service.create(input({ specialtyCodes: ['aesthetics'], sections: [...NOTES] }), 'a');
     const enabled = state.modules.filter((m) => m.enabled).map((m) => m.moduleKey);
     expect(enabled.sort()).toEqual([...NOTES].sort());
+    // Off by default for an aesthetic clinic: turning it on sets it apart from the plan.
+    expect(state.modules.find((m) => m.moduleKey === 'core.clinical.notes')?.source).toBe(
+      'OVERRIDE',
+    );
+    expect(state.modules.find((m) => m.moduleKey === 'core.patients')?.source).toBe('PLAN');
   });
 
   it('stores the explicit section list and disables the rest', async () => {
@@ -407,21 +471,40 @@ describe('PlatformTenantsService', () => {
 
   it('rejects a plan that does not match the tenant type with PLAN_TYPE_MISMATCH', async () => {
     await expect(
-      service.create(input({ tenantType: 'PERSONAL', planType: 'CLINIC_PRO' }), 'a'),
+      service.create(input({ tenantType: 'PERSONAL', planId: 'plan_clinic_pro' }), 'a'),
     ).rejects.toMatchObject({ status: 400, response: { code: 'PLAN_TYPE_MISMATCH' } });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(auth.hashPassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown or archived plan before writing', async () => {
+    await expect(service.create(input({ planId: 'plan_nope' }), 'a')).rejects.toMatchObject({
+      status: 404,
+      response: { code: 'PLAN_NOT_FOUND' },
+    });
+    PLANS.get('plan_clinic_pro')!.archivedAt = new Date() as any;
+    try {
+      await expect(service.create(input({ planId: 'plan_clinic_pro' }), 'a')).rejects.toMatchObject(
+        { status: 409, response: { code: 'PLAN_ARCHIVED' } },
+      );
+    } finally {
+      PLANS.get('plan_clinic_pro')!.archivedAt = null;
+    }
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('starts a TRIAL as TRIALING with a 14 day trial and trial seats', async () => {
+  it('starts the trial days the plan suggests, with the limits of the plan', async () => {
     const before = Date.now();
-    await service.create(input({ tenantType: 'CLINIC' }), 'a');
+    await service.create(input(), 'a');
     const clinic = state.subscriptions[0];
     expect(clinic).toMatchObject({
-      planType: 'TRIAL',
+      planId: 'plan_clinic_basic',
       status: 'TRIALING',
       seatsPsychologistsMax: 3,
-      maxActivePatients: 20,
+      maxActivePatients: 150,
+      currentPeriodEnd: null,
     });
+    expect(Number(clinic.basePrice)).toBe(99);
     const days = (clinic.trialEndsAt.getTime() - before) / 86_400_000;
     expect(days).toBeGreaterThan(13.99);
     expect(days).toBeLessThan(14.01);
@@ -429,24 +512,35 @@ describe('PlatformTenantsService', () => {
 
     state.users = [];
     state.subscriptions = [];
-    await service.create(input({ tenantType: 'PERSONAL', masterEmail: 'other@example.com' }), 'a');
-    expect(state.subscriptions[0]).toMatchObject({
+    state.modules = [];
+    await service.create(
+      input({
+        tenantType: 'PERSONAL',
+        planId: 'plan_personal_basic',
+        trialDays: 30,
+        masterEmail: 'other@example.com',
+      }),
+      'a',
+    );
+    const personal = state.subscriptions[0];
+    expect(personal).toMatchObject({
       status: 'TRIALING',
       seatsPsychologistsMax: 1,
-      maxActivePatients: 10,
+      maxActivePatients: 50,
     });
+    expect(Math.round((personal.trialEndsAt.getTime() - before) / 86_400_000)).toBe(30);
   });
 
   it('starts a paid plan ACTIVE with a one month period, no payment and a SUBSCRIPTION_ACTIVATED event by the actor', async () => {
     jest.useFakeTimers({ now: new Date('2026-01-31T10:00:00Z'), doNotFake: ['nextTick'] });
     try {
-      await service.create(input({ planType: 'CLINIC_BASIC' }), 'admin-7');
+      await service.create(input({ trialDays: 0 }), 'admin-7');
     } finally {
       jest.useRealTimers();
     }
     const sub = state.subscriptions[0];
     expect(sub).toMatchObject({
-      planType: 'CLINIC_BASIC',
+      planId: 'plan_clinic_basic',
       status: 'ACTIVE',
       seatsPsychologistsMax: 3,
       maxActivePatients: 150,
@@ -503,7 +597,7 @@ describe('PlatformTenantsService', () => {
     });
   });
 
-  it('builds the catalog defaults for every plan and tenant type that match', () => {
+  it('serves the module catalog with modules, submodules and health-only marks', () => {
     const catalogResult = service.getSectionCatalog();
     expect(catalogResult.sections.map((s) => s.key)).toEqual([...SECTION_KEYS]);
     expect(catalogResult.nonHealthSpecialtyCodes).toEqual(['AESTHETICS']);
@@ -513,23 +607,7 @@ describe('PlatformTenantsService', () => {
     expect(catalogResult.sections.find((s) => s.key === 'core.billing.cash')?.parent).toBe(
       'core.billing',
     );
-    const pairs = catalogResult.defaults.map((d) => `${d.planType}/${d.tenantType}`).sort();
-    expect(pairs).toEqual(
-      [
-        'TRIAL/PERSONAL',
-        'TRIAL/CLINIC',
-        'PERSONAL_BASIC/PERSONAL',
-        'PERSONAL_PRO/PERSONAL',
-        'CLINIC_BASIC/CLINIC',
-        'CLINIC_PRO/CLINIC',
-        'CLINIC_ENTERPRISE/CLINIC',
-      ].sort(),
-    );
-    const trialClinic = catalogResult.defaults.find(
-      (d) => d.planType === 'TRIAL' && d.tenantType === 'CLINIC',
-    )!;
-    expect(trialClinic.sections).not.toContain('core.agenda.tasks');
-    expect(trialClinic.sections).toContain('core.admin.team');
+    expect(catalogResult).not.toHaveProperty('defaults');
   });
 
   it('retries P2034 with a fresh transaction and hashes the password once', async () => {
@@ -604,7 +682,7 @@ describe('PlatformTenantsService', () => {
     });
     state.subscriptions.push({
       tenantId: id,
-      planType: 'CLINIC_BASIC',
+      planId: 'plan_clinic_basic',
       status: 'ACTIVE',
       currentPeriodStart: new Date('2026-09-01T00:00:00Z'),
       seatsPsychologistsMax: 3,
@@ -624,7 +702,12 @@ describe('PlatformTenantsService', () => {
       mustChangePassword: false,
     });
     state.modules.push(
-      ...SECTION_KEYS.map((moduleKey) => ({ tenantId: id, moduleKey, enabled: on.has(moduleKey) })),
+      ...SECTION_KEYS.map((moduleKey) => ({
+        tenantId: id,
+        moduleKey,
+        enabled: on.has(moduleKey),
+        source: on.has(moduleKey) ? 'PLAN' : 'OVERRIDE',
+      })),
     );
   }
 
@@ -645,7 +728,7 @@ describe('PlatformTenantsService', () => {
           createdAt: new Date('2026-10-01T00:00:00Z'),
           users: [{ firstName: 'Ana', lastName: 'Pérez', email: 'ana@example.com' }],
           subscription: {
-            planType: 'CLINIC_BASIC',
+            plan: { id: 'plan_clinic_basic', code: 'CLINIC_BASIC', name: 'Clínica Básico' },
             status: 'ACTIVE',
             seatsPsychologistsUsed: 2,
             seatsPsychologistsMax: 3,
@@ -677,7 +760,7 @@ describe('PlatformTenantsService', () => {
         isActive: true,
         createdAt: new Date('2026-10-01T00:00:00Z'),
         master: { firstName: 'Ana', lastName: 'Pérez', email: 'ana@example.com' },
-        planType: 'CLINIC_BASIC',
+        plan: { id: 'plan_clinic_basic', code: 'CLINIC_BASIC', name: 'Clínica Básico' },
         status: 'ACTIVE',
         seatsPsychologistsUsed: 2,
         seatsPsychologistsMax: 3,
@@ -686,7 +769,7 @@ describe('PlatformTenantsService', () => {
       });
       expect(result.items[1]).toMatchObject({
         master: null,
-        planType: null,
+        plan: null,
         status: null,
         seatsPsychologistsUsed: 0,
         maxActivePatients: 0,
@@ -709,7 +792,7 @@ describe('PlatformTenantsService', () => {
 
     it('filters by plan, subscription status and active flag', async () => {
       await service.list({
-        planType: 'CLINIC_PRO',
+        planId: 'plan_clinic_pro',
         status: 'PAST_DUE',
         isActive: false,
         page: 1,
@@ -718,7 +801,7 @@ describe('PlatformTenantsService', () => {
       expect(prisma.tenant.findMany.mock.calls[0][0].where).toEqual({
         isPlatform: false,
         isActive: false,
-        subscription: { is: { planType: 'CLINIC_PRO', status: 'PAST_DUE' } },
+        subscription: { is: { planId: 'plan_clinic_pro', status: 'PAST_DUE' } },
       });
       await service.list({ page: 1, pageSize: 20 });
       expect(prisma.tenant.findMany.mock.calls[1][0].where).toEqual({ isPlatform: false });
@@ -740,7 +823,7 @@ describe('PlatformTenantsService', () => {
         [
           'activePatientsCount',
           'maxActivePatients',
-          'planType',
+          'plan',
           'seatsPsychologistsMax',
           'seatsPsychologistsUsed',
           'status',
@@ -843,6 +926,10 @@ describe('PlatformTenantsService', () => {
       expect(state.modules).toHaveLength(SECTION_KEYS.length);
       expect(activeKeys()).toEqual(['core.billing', 'core.patients']);
       expect(prisma.lastTx.tenantModule.upsert).toHaveBeenCalledTimes(SECTION_KEYS.length);
+      // The plan turns every module on: what was turned off is set apart from it.
+      const sourceOf = (key: string) => state.modules.find((m) => m.moduleKey === key)?.source;
+      expect(sourceOf('core.billing')).toBe('PLAN');
+      expect(sourceOf('core.agenda')).toBe('OVERRIDE');
       expect(
         result.sections
           .filter((s) => s.enabled)

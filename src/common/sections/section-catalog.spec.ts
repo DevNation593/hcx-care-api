@@ -1,8 +1,6 @@
 import {
   SECTION_CATALOG,
   SECTION_KEYS,
-  defaultSections,
-  isPlanAllowedForTenantType,
   isSectionInEffect,
   validateSections,
 } from './section-catalog';
@@ -43,24 +41,6 @@ describe('section catalog', () => {
         expect(MODULES).not.toContain(required);
       }
     }
-  });
-  it('preselects everything but tasks and team for a personal trial', () => {
-    const keys = defaultSections('TRIAL', 'PERSONAL');
-    expect(keys).not.toContain('core.agenda.tasks');
-    expect(keys).not.toContain('core.admin.team');
-    expect(keys).toHaveLength(SECTION_KEYS.length - 2);
-  });
-  it('adds team for clinics and tasks for paid plans', () => {
-    expect(defaultSections('TRIAL', 'CLINIC')).toContain('core.admin.team');
-    expect(defaultSections('TRIAL', 'CLINIC')).not.toContain('core.agenda.tasks');
-    expect(defaultSections('CLINIC_BASIC', 'CLINIC')).toEqual([...SECTION_KEYS]);
-    expect(defaultSections('PERSONAL_PRO', 'PERSONAL')).not.toContain('core.admin.team');
-  });
-  it('accepts every default selection', () => {
-    expect(validateSections(defaultSections('TRIAL', 'PERSONAL', ['AESTHETICS']))).toEqual(
-      defaultSections('TRIAL', 'PERSONAL', ['AESTHETICS']),
-    );
-    expect(validateSections([...SECTION_KEYS])).toEqual([...SECTION_KEYS]);
   });
   it('rejects unknown keys and the retired section keys', () => {
     for (const key of ['core.nope', 'core.calendar', 'core.storage', 'core.aesthetics']) {
@@ -106,6 +86,9 @@ describe('section catalog', () => {
       'core.billing.invoicing',
     ]);
   });
+  it('accepts the whole catalog', () => {
+    expect(validateSections([...SECTION_KEYS])).toEqual([...SECTION_KEYS]);
+  });
   it('accepts an empty list, removes duplicates and keeps catalog order', () => {
     expect(validateSections([])).toEqual([]);
     expect(validateSections(['core.billing', 'core.billing'])).toEqual(['core.billing']);
@@ -121,31 +104,11 @@ describe('section catalog', () => {
     ).toBe(true);
     expect(isSectionInEffect('core.billing', new Set(['core.billing']))).toBe(true);
   });
-  it('leaves the health-only submodules off only when every specialty is non-health', () => {
-    const aesthetic = defaultSections('CLINIC_BASIC', 'CLINIC', ['AESTHETICS']);
-    expect(aesthetic).not.toContain('core.clinical.notes');
-    expect(aesthetic).toEqual(
-      expect.arrayContaining([
-        'core.clinical',
-        'core.clinical.specialties',
-        'core.agenda.calendar',
-      ]),
-    );
-    expect(defaultSections('CLINIC_BASIC', 'CLINIC', ['AESTHETICS', 'GENERAL_MEDICINE'])).toContain(
-      'core.clinical.notes',
-    );
-  });
   it('marks notes, next session and timeline as health-only', () => {
     expect(SECTION_CATALOG.filter((s) => s.healthOnly).map((s) => s.key)).toEqual([
       'core.clinical.notes',
       'core.clinical.nextSession',
       'core.clinical.timeline',
     ]);
-  });
-  it('matches plans to tenant types', () => {
-    expect(isPlanAllowedForTenantType('TRIAL', 'PERSONAL')).toBe(true);
-    expect(isPlanAllowedForTenantType('TRIAL', 'CLINIC')).toBe(true);
-    expect(isPlanAllowedForTenantType('PERSONAL_PRO', 'CLINIC')).toBe(false);
-    expect(isPlanAllowedForTenantType('CLINIC_ENTERPRISE', 'PERSONAL')).toBe(false);
   });
 });

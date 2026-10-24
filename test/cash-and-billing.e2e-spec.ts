@@ -272,12 +272,10 @@ describe('Cash register, orders, payments and billing eligibility (E2E)', () => 
     await prisma.tenantSubscription.updateMany({
       where: { tenantId: { in: [tenantId, otherTenantId] } },
       data: {
-        planType: 'CLINIC_BASIC',
+        planId: 'plan_clinic_basic',
         status: 'ACTIVE',
         seatsPsychologistsMax: 5,
         maxActivePatients: 100,
-        featureClinicalNotes: true,
-        featureAttachments: true,
         storageGB: 1,
       },
     });

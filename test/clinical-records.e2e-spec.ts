@@ -78,10 +78,9 @@ describe('Clinical records authorization and audit (E2E)', () => {
     await prisma.tenantSubscription.updateMany({
       where: { tenantId: { in: [tenantId, otherTenantId] } },
       data: {
-        planType: 'CLINIC_BASIC',
+        planId: 'plan_clinic_basic',
         status: 'ACTIVE',
         seatsPsychologistsMax: 5,
-        featureClinicalNotes: true,
       },
     });
 
