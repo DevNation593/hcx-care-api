@@ -158,7 +158,7 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     tenantType: 'CLINIC',
     planType: 'CLINIC_PRO',
     status: 'ACTIVE',
-    specialties: ['psychology', 'nutrition', 'physiotherapy', 'dentistry'],
+    specialties: ['psychology', 'nutrition', 'physiotherapy', 'dentistry', 'generalMedicine'],
     fiscal: {
       legalName: 'Centro Médico Los Arrayanes S.A.',
       taxIdentificationType: 'RUC',
@@ -206,6 +206,14 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     role: 'PROFESIONAL',
     note: 'Fisioterapeuta en ambas sedes; su rol puede ver facturas, sin emitirlas',
     profile: { specialty: 'physiotherapy', title: 'Fisioterapeuta', licenseNumber: 'FIS-EC-313' },
+  });
+  const camila = await createUser(ctx, clinic, {
+    email: 'medicina.arrayanes@psic.com',
+    firstName: 'Camila',
+    lastName: 'Vera',
+    role: 'PROFESIONAL',
+    note: 'Médica general con perfil profesional activo; atiende en la sede principal',
+    profile: { specialty: 'generalMedicine', title: 'Médica general', licenseNumber: 'MED-EC-314' },
   });
   await createUser(ctx, clinic, {
     email: 'recepcion.arrayanes@psic.com',
@@ -268,6 +276,7 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
       { userId: esteban.id, branchId: northBranch.id },
       { userId: hugo.id, branchId: mainBranch.id },
       { userId: hugo.id, branchId: northBranch.id },
+      { userId: camila.id, branchId: mainBranch.id },
     ].map((row) => ({ tenantId, ...row })),
   });
 

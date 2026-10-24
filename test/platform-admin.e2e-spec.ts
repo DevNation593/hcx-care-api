@@ -47,6 +47,12 @@ describe('Platform admin panel (E2E)', () => {
       update: { isActive: true },
       create: { code: 'PSYCHOLOGY', name: 'Psicología', isActive: true },
     });
+    // The migration adds it to the catalog; a database cleaned by other suites may have lost it.
+    await prisma.specialty.upsert({
+      where: { code: 'AESTHETICS' },
+      update: { isActive: true },
+      create: { code: 'AESTHETICS', name: 'Estética', isActive: true },
+    });
     const nutrition = await prisma.specialty.upsert({
       where: { code: 'NUTRITION' },
       update: { isActive: true },
@@ -120,6 +126,50 @@ describe('Platform admin panel (E2E)', () => {
     expect(sections.filter((section) => section.enabled)).toHaveLength(SECTION_KEYS.length - 1);
     expect(response.body.master).toMatchObject({ email: masterEmail, mustChangePassword: true });
     expect(response.body.master.password).toBeUndefined();
+  });
+
+  describe('an aesthetic-only clinic', () => {
+    const alta = (extra: Record<string, unknown> = {}) =>
+      http()
+        .post(api('/platform/tenants'))
+        .set(bearer(adminToken))
+        .send({
+          name: 'Estudio E2E',
+          email: 'contacto@estudio-e2e.test',
+          tenantType: 'CLINIC',
+          timezone: 'America/Guayaquil',
+          locale: 'es-EC',
+          masterFirstName: 'Titular',
+          masterLastName: 'Estudio',
+          masterEmail: 'titular@estudio-e2e.test',
+          temporaryPassword,
+          planType: 'CLINIC_BASIC',
+          specialtyCodes: ['AESTHETICS'],
+          ...extra,
+        });
+
+    it('refuses the business kind an old web client may still send', async () => {
+      await alta({ businessKind: 'AESTHETIC_STUDIO' }).expect(400);
+    });
+
+    it('starts without clinical notes but with patients, calendar and clinical modules', async () => {
+      const response = await alta().expect(201);
+      const enabled = Object.fromEntries(
+        (response.body.sections as { key: string; enabled: boolean }[]).map((s) => [
+          s.key,
+          s.enabled,
+        ]),
+      );
+      expect(enabled).toMatchObject({
+        'core.clinicalNotes': false,
+        'core.patients': true,
+        'core.calendar': true,
+        'core.specialties': true,
+      });
+      expect(response.body.specialties.map((s: { code: string }) => s.code)).toEqual([
+        'AESTHETICS',
+      ]);
+    });
   });
 
   it('blocks the new master with PASSWORD_CHANGE_REQUIRED', async () => {

@@ -175,7 +175,9 @@ describe('createPlatformAdmin', () => {
 
   it('fails when the email already exists, ignoring case', async () => {
     const { client, userCreate, userFindFirst } = creator(true, true);
-    await expect(createPlatformAdmin(client as never, input)).rejects.toThrow(/already exists/);
+    await expect(createPlatformAdmin(client as never, input)).rejects.toThrow(
+      /Ya existe un usuario/,
+    );
     expect(userFindFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { email: { equals: input.email, mode: 'insensitive' } },

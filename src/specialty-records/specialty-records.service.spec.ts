@@ -460,6 +460,44 @@ describe('SpecialtyRecordsService', () => {
       });
     });
 
+    describe('health-only modules', () => {
+      const soap = {
+        moduleKey: 'general.soap-note',
+        data: {
+          subjective: 'Refiere dolor',
+          objective: 'Sin hallazgos',
+          assessment: 'A',
+          plan: 'P',
+        },
+      };
+
+      it('are refused to an aesthetic professional, even calling the route directly', async () => {
+        db.specialty.findFirst.mockResolvedValue({ code: 'AESTHETICS' });
+
+        await expect(
+          service.create('tenant-1', 'patient-1', psychologist, soap),
+        ).rejects.toMatchObject({
+          status: 403,
+          response: {
+            code: 'CLINICAL_RECORD_FORBIDDEN',
+            message: 'Tu especialidad no puede registrar este módulo',
+          },
+        });
+        expect(db.specialtyRecord.create).not.toHaveBeenCalled();
+      });
+
+      it('are still accepted from a health professional', async () => {
+        db.specialty.findFirst.mockResolvedValue({ code: 'PSYCHOLOGY' });
+
+        await service.create('tenant-1', 'patient-1', psychologist, soap);
+
+        expect(created()).toMatchObject({
+          moduleKey: 'general.soap-note',
+          specialtyId: 'psychology',
+        });
+      });
+    });
+
     describe('prescriptions', () => {
       const prescription = {
         moduleKey: 'general.prescriptions',

@@ -15,6 +15,7 @@ import {
   validateSections,
 } from '../common/sections/section-catalog';
 import { PrismaService } from '../prisma/prisma.service';
+import { AESTHETIC_SPECIALTY_CODES } from '../clinical-modules/clinical-module-registry';
 import {
   SpecialtyCatalogService,
   normalizeSpecialtyCodes,
@@ -123,7 +124,9 @@ export class PlatformTenantsService {
       });
     }
     const enabledSections = new Set<string>(
-      dto.sections ? validateSections(dto.sections) : defaultSections(dto.planType, dto.tenantType),
+      dto.sections
+        ? validateSections(dto.sections)
+        : defaultSections(dto.planType, dto.tenantType, specialtyCodes),
     );
 
     const masterEmail = dto.masterEmail.trim().toLowerCase();
@@ -532,6 +535,8 @@ export class PlatformTenantsService {
   getSectionCatalog(): {
     sections: SectionDefinition[];
     defaults: { planType: PlanType; tenantType: TenantType; sections: SectionKey[] }[];
+    /** Specialties whose clinics start without the health-only sections. */
+    nonHealthSpecialtyCodes: string[];
   } {
     const defaults: { planType: PlanType; tenantType: TenantType; sections: SectionKey[] }[] = [];
     for (const planType of Object.values(PlanType)) {
@@ -541,7 +546,11 @@ export class PlatformTenantsService {
         }
       }
     }
-    return { sections: SECTION_CATALOG.map((section) => ({ ...section })), defaults };
+    return {
+      sections: SECTION_CATALOG.map((section) => ({ ...section })),
+      defaults,
+      nonHealthSpecialtyCodes: [...AESTHETIC_SPECIALTY_CODES],
+    };
   }
 
   private async loadDetail(

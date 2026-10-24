@@ -42,14 +42,17 @@ const DAY_MS = 24 * HOUR_MS;
 // The demo clinics work in America/Guayaquil, which has no daylight saving time.
 const LOCAL_UTC_OFFSET_HOURS = -5;
 
-export type SpecialtyCatalog = Record<DemoSpecialtyKey, { id: string }>;
+export type SeedSpecialtyKey = DemoSpecialtyKey | 'generalMedicine' | 'aesthetics';
+export type SpecialtyCatalog = Record<SeedSpecialtyKey, { id: string; code: string }>;
 
 /** The modules each specialty owns: the ones the clinical module registry defines for it. */
-export const SPECIALTY_MODULE_KEYS: Record<DemoSpecialtyKey, string[]> = {
+export const SPECIALTY_MODULE_KEYS: Record<SeedSpecialtyKey, string[]> = {
   psychology: specialtyModuleKeys('PSYCHOLOGY'),
   nutrition: specialtyModuleKeys('NUTRITION'),
   physiotherapy: specialtyModuleKeys('PHYSIOTHERAPY'),
   dentistry: specialtyModuleKeys('DENTISTRY'),
+  generalMedicine: specialtyModuleKeys('GENERAL_MEDICINE'),
+  aesthetics: specialtyModuleKeys('AESTHETICS'),
 };
 
 /** Every date of the seed is relative to one instant, so a run is consistent with itself. */
@@ -182,7 +185,7 @@ export interface SeedUserSpec {
   note: string;
   /** Clinical capability. An active profile takes a seat even while the account is inactive. */
   profile?: {
-    specialty: DemoSpecialtyKey;
+    specialty: SeedSpecialtyKey;
     title: string;
     licenseNumber?: string;
     bio?: string;
@@ -210,7 +213,7 @@ export interface SeedTenantSpec {
   status: SubscriptionStatus;
   /** Dates, usage and any limit that differs from the plan catalog. */
   subscription?: Partial<Prisma.TenantSubscriptionUncheckedCreateInput>;
-  specialties: DemoSpecialtyKey[];
+  specialties: SeedSpecialtyKey[];
   /** Paid modules on top of the ones the plan includes. */
   addOns?: ModuleName[];
   disabledSections?: SectionKey[];
@@ -357,7 +360,13 @@ export async function createTenant(ctx: SeedContext, spec: SeedTenantSpec): Prom
     })),
   });
 
-  const enabledSections = new Set<string>(defaultSections(spec.planType, spec.tenantType));
+  const enabledSections = new Set<string>(
+    defaultSections(
+      spec.planType,
+      spec.tenantType,
+      spec.specialties.map((key) => ctx.catalog[key].code),
+    ),
+  );
   for (const section of spec.disabledSections ?? []) enabledSections.delete(section);
   await db.tenantModule.createMany({
     data: [
