@@ -44,6 +44,9 @@ function input(overrides: Partial<CreatePlatformTenantDto> = {}): CreatePlatform
   };
 }
 
+const NOTES = ['core.patients', 'core.patients.records', 'core.clinical', 'core.clinical.notes'];
+const CALENDAR = ['core.patients', 'core.patients.records', 'core.agenda', 'core.agenda.calendar'];
+
 describe('PlatformTenantsService', () => {
   let state: {
     tenants: any[];
@@ -287,7 +290,7 @@ describe('PlatformTenantsService', () => {
     );
   });
 
-  it('creates tenant, settings, subscription, master and eight section rows in one transaction', async () => {
+  it('creates tenant, settings, subscription, master and one row per module and submodule in one transaction', async () => {
     const result = await service.create(input(), 'admin-1');
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(state.tenants).toHaveLength(1);
@@ -303,10 +306,10 @@ describe('PlatformTenantsService', () => {
     ]);
     expect(state.subscriptions).toHaveLength(1);
     expect(state.users).toHaveLength(1);
-    expect(state.modules).toHaveLength(8);
+    expect(state.modules).toHaveLength(SECTION_KEYS.length);
     expect(state.modules.map((m) => m.moduleKey).sort()).toEqual([...SECTION_KEYS].sort());
     expect(result.tenant).toMatchObject({ id: 'tenant-1', name: 'Clínica Centro' });
-    expect(result.sections).toHaveLength(8);
+    expect(result.sections).toHaveLength(SECTION_KEYS.length);
     expect(prisma.applyRlsContext).toHaveBeenCalledWith(prisma.lastTx, { tenantId: 'tenant-1' });
     expect(selection.applySelection.mock.calls[0][0]).toBe(prisma.lastTx);
     expect(result.specialties).toEqual([
@@ -341,10 +344,10 @@ describe('PlatformTenantsService', () => {
   it('uses the plan defaults when sections are omitted', async () => {
     const result = await service.create(input({ planType: 'TRIAL', tenantType: 'CLINIC' }), 'a');
     const enabled = Object.fromEntries(state.modules.map((m) => [m.moduleKey, m.enabled]));
-    expect(enabled['core.tasks']).toBe(false);
-    expect(enabled['core.team']).toBe(true);
+    expect(enabled['core.agenda.tasks']).toBe(false);
+    expect(enabled['core.admin.team']).toBe(true);
     expect(enabled['core.patients']).toBe(true);
-    expect(result.sections.find((s) => s.key === 'core.tasks')?.enabled).toBe(false);
+    expect(result.sections.find((s) => s.key === 'core.agenda.tasks')?.enabled).toBe(false);
   });
 
   it('shows clinical modules separately from core sections', async () => {
@@ -357,7 +360,7 @@ describe('PlatformTenantsService', () => {
 
     const detail = await service.findOne('tenant-1');
 
-    expect(detail.sections).toHaveLength(8);
+    expect(detail.sections).toHaveLength(SECTION_KEYS.length);
     expect(detail.modules).toEqual([{ key: 'psychology.assessments', enabled: false }]);
     expect(detail.subscription).toMatchObject({ includedSpecialties: 1, specialtyPrice: 15 });
   });
@@ -365,34 +368,31 @@ describe('PlatformTenantsService', () => {
   it('leaves clinical notes off by default for an aesthetic-only clinic', async () => {
     await service.create(input({ specialtyCodes: ['aesthetics'] }), 'a');
     const enabled = Object.fromEntries(state.modules.map((m) => [m.moduleKey, m.enabled]));
-    expect(enabled['core.clinicalNotes']).toBe(false);
+    expect(enabled['core.clinical.notes']).toBe(false);
     expect(enabled['core.patients']).toBe(true);
-    expect(enabled['core.specialties']).toBe(true);
+    expect(enabled['core.clinical.specialties']).toBe(true);
   });
 
   it('keeps clinical notes when the platform sends them for an aesthetic-only clinic', async () => {
-    await service.create(
-      input({ specialtyCodes: ['aesthetics'], sections: ['core.patients', 'core.clinicalNotes'] }),
-      'a',
-    );
+    await service.create(input({ specialtyCodes: ['aesthetics'], sections: [...NOTES] }), 'a');
     const enabled = state.modules.filter((m) => m.enabled).map((m) => m.moduleKey);
-    expect(enabled.sort()).toEqual(['core.clinicalNotes', 'core.patients']);
+    expect(enabled.sort()).toEqual([...NOTES].sort());
   });
 
   it('stores the explicit section list and disables the rest', async () => {
-    await service.create(input({ sections: ['core.patients', 'core.calendar'] }), 'a');
+    await service.create(input({ sections: [...CALENDAR] }), 'a');
     const enabled = state.modules.filter((m) => m.enabled).map((m) => m.moduleKey);
-    expect(enabled.sort()).toEqual(['core.calendar', 'core.patients']);
-    expect(state.modules).toHaveLength(8);
+    expect(enabled.sort()).toEqual([...CALENDAR].sort());
+    expect(state.modules).toHaveLength(SECTION_KEYS.length);
   });
 
   it('rejects an unknown section and an unmet dependency before writing', async () => {
     await expect(service.create(input({ sections: ['core.nope'] }), 'a')).rejects.toMatchObject({
       response: { code: 'SECTION_UNKNOWN' },
     });
-    await expect(service.create(input({ sections: ['core.calendar'] }), 'a')).rejects.toMatchObject(
-      { response: { code: 'SECTION_DEPENDENCY' } },
-    );
+    await expect(
+      service.create(input({ sections: ['core.agenda', 'core.agenda.calendar'] }), 'a'),
+    ).rejects.toMatchObject({ response: { code: 'SECTION_DEPENDENCY' } });
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(auth.hashPassword).not.toHaveBeenCalled();
   });
@@ -507,8 +507,11 @@ describe('PlatformTenantsService', () => {
     const catalogResult = service.getSectionCatalog();
     expect(catalogResult.sections.map((s) => s.key)).toEqual([...SECTION_KEYS]);
     expect(catalogResult.nonHealthSpecialtyCodes).toEqual(['AESTHETICS']);
-    expect(catalogResult.sections.find((s) => s.key === 'core.clinicalNotes')?.healthOnly).toBe(
+    expect(catalogResult.sections.find((s) => s.key === 'core.clinical.notes')?.healthOnly).toBe(
       true,
+    );
+    expect(catalogResult.sections.find((s) => s.key === 'core.billing.cash')?.parent).toBe(
+      'core.billing',
     );
     const pairs = catalogResult.defaults.map((d) => `${d.planType}/${d.tenantType}`).sort();
     expect(pairs).toEqual(
@@ -525,8 +528,8 @@ describe('PlatformTenantsService', () => {
     const trialClinic = catalogResult.defaults.find(
       (d) => d.planType === 'TRIAL' && d.tenantType === 'CLINIC',
     )!;
-    expect(trialClinic.sections).not.toContain('core.tasks');
-    expect(trialClinic.sections).toContain('core.team');
+    expect(trialClinic.sections).not.toContain('core.agenda.tasks');
+    expect(trialClinic.sections).toContain('core.admin.team');
   });
 
   it('retries P2034 with a fresh transaction and hashes the password once', async () => {
@@ -589,7 +592,7 @@ describe('PlatformTenantsService', () => {
   function seedTenant(
     id = 'tenant-1',
     overrides: Record<string, unknown> = {},
-    enabled: string[] = ['core.patients', 'core.calendar', 'core.team'],
+    enabled: string[] = ['core.patients', 'core.agenda', 'core.admin'],
   ) {
     const on = new Set(enabled);
     state.tenants.push({
@@ -837,9 +840,9 @@ describe('PlatformTenantsService', () => {
         ['core.patients', 'core.billing', 'core.patients'],
         'admin-1',
       );
-      expect(state.modules).toHaveLength(8);
+      expect(state.modules).toHaveLength(SECTION_KEYS.length);
       expect(activeKeys()).toEqual(['core.billing', 'core.patients']);
-      expect(prisma.lastTx.tenantModule.upsert).toHaveBeenCalledTimes(8);
+      expect(prisma.lastTx.tenantModule.upsert).toHaveBeenCalledTimes(SECTION_KEYS.length);
       expect(
         result.sections
           .filter((s) => s.enabled)
@@ -853,7 +856,7 @@ describe('PlatformTenantsService', () => {
           entity: 'TENANT',
           entityId: 'tenant-1',
           changes: {
-            before: { sections: ['core.calendar', 'core.patients', 'core.team'] },
+            before: { sections: ['core.agenda', 'core.patients', 'core.admin'] },
             after: { sections: ['core.patients', 'core.billing'] },
           },
         },
@@ -868,7 +871,7 @@ describe('PlatformTenantsService', () => {
         { response: { code: 'SECTION_UNKNOWN' } },
       );
       await expect(
-        service.setSections('tenant-1', ['core.calendar'], 'admin-1'),
+        service.setSections('tenant-1', ['core.agenda', 'core.agenda.calendar'], 'admin-1'),
       ).rejects.toMatchObject({ response: { code: 'SECTION_DEPENDENCY' } });
       expect(state.modules).toEqual(before);
       expect(prisma.$transaction).not.toHaveBeenCalled();

@@ -20,7 +20,7 @@ import { RequirePermission } from '../common/permissions/permission-catalog';
 
 @ApiTags('next-session-plans')
 @ApiBearerAuth('access-token')
-@RequireSection('core.clinicalNotes')
+@RequireSection('core.clinical.nextSession')
 @Controller('tenants/:tenantId/next-session-plans')
 export class NextSessionPlansController {
   constructor(private readonly nextSessionPlansService: NextSessionPlansService) {}

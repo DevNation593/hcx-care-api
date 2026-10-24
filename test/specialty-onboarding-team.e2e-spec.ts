@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { createPlatformAdmin } from '../prisma/create-platform-admin';
+import { SECTION_KEYS } from '../src/common/sections/section-catalog';
 import { PlatformTenantsService } from '../src/platform/platform-tenants.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { TenantSpecialtiesService } from '../src/specialties/tenant-specialties.service';
@@ -129,7 +130,7 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
     expect(created.body.specialties.map((item: { code: string }) => item.code)).toEqual([
       'PSYCHOLOGY',
     ]);
-    expect(created.body.sections).toHaveLength(8);
+    expect(created.body.sections).toHaveLength(SECTION_KEYS.length);
     await clearTemporaryPassword(adminId);
 
     // Login deliberately uses the normalized value returned by the platform panel.

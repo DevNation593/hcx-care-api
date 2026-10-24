@@ -9,7 +9,7 @@ import { TreatmentsService } from './treatments.service';
 
 @ApiTags('treatments')
 @ApiBearerAuth('access-token')
-@RequireSection('core.specialties')
+@RequireSection('core.treatments.catalog')
 @Controller('tenants/:tenantId/treatments')
 export class TreatmentsController {
   constructor(private readonly treatmentsService: TreatmentsService) {}

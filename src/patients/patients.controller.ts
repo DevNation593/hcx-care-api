@@ -9,7 +9,7 @@ import { RequirePermission } from '../common/permissions/permission-catalog';
 
 @ApiTags('patients')
 @ApiBearerAuth('access-token')
-@RequireSection('core.patients')
+@RequireSection('core.patients.records')
 @Controller('tenants/:tenantId/patients')
 export class PatientsController {
   constructor(private readonly patientsService: PatientsService) {}
