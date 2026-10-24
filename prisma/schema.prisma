@@ -30,13 +30,10 @@ enum TenantType {
   CLINIC // Clínica con múltiples psicólogos
 }
 
-enum PlanType {
-  TRIAL // Trial 14 días (personal o clínica)
-  PERSONAL_BASIC // Psicólogo individual - básico
-  PERSONAL_PRO // Psicólogo individual - profesional
-  CLINIC_BASIC // Clínica - básico (cupo limitado)
-  CLINIC_PRO // Clínica - profesional (más cupo y módulos)
-  CLINIC_ENTERPRISE // Clínica - enterprise (custom)
+// Where a clinic's module row comes from: its plan, or a choice the platform made for it alone.
+enum ModuleSource {
+  PLAN
+  OVERRIDE
 }
 
 enum SubscriptionStatus {
@@ -49,7 +46,7 @@ enum SubscriptionStatus {
 }
 
 enum SubscriptionPaymentKind {
-  PLAN_UPGRADE // Charge that activates a higher plan once it is confirmed
+  PLAN_UPGRADE // Legacy: clinics no longer change their own plan; kept for older payments
   RENEWAL // Charge for the next billing period of the current plan
 }
 
@@ -127,6 +124,7 @@ enum AuditAction {
 }
 
 enum AuditEntity {
+  PLAN
   CLINICAL_NOTE
   SPECIALTY_RECORD
   ENCOUNTER
@@ -428,14 +426,61 @@ model TenantSettings {
   updatedAt DateTime @updatedAt
 }
 
+// A plan the platform administrator sells. Editing it updates every clinic on it, except the
+// values set apart for one clinic (TenantSubscription.overriddenFields, TenantModule.source).
+model Plan {
+  id          String     @id @default(cuid())
+  code        String     @unique
+  name        String
+  description String?
+  tenantType  TenantType
+  sortOrder   Int        @default(0)
+  // Archived plans keep their clinics but cannot be given to new ones.
+  archivedAt  DateTime?
+
+  basePrice      Decimal @db.Decimal(10, 2)
+  pricePerSeat   Decimal @default(0) @db.Decimal(10, 2)
+  specialtyPrice Decimal @default(15) @db.Decimal(10, 2)
+  currency       String  @default("USD")
+
+  seatsIncluded                  Int
+  maxActivePatients              Int
+  storageGB                      Int
+  monthlyElectronicInvoicesLimit Int
+  includedSpecialties            Int
+  // Days of trial suggested when the plan is given to a clinic.
+  trialDays                      Int @default(0)
+
+  modules       PlanModule[]
+  subscriptions TenantSubscription[]
+  payments      SubscriptionPayment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantType, archivedAt])
+}
+
+// A module or submodule key of the catalog (core.*) that the plan includes.
+model PlanModule {
+  planId    String
+  moduleKey String
+  plan      Plan   @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@id([planId, moduleKey])
+}
+
 model TenantSubscription {
   id       String @id @default(cuid())
   tenantId String @unique
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Plan & Status
-  planType PlanType           @default(TRIAL)
-  status   SubscriptionStatus @default(TRIALING)
+  planId           String
+  plan             Plan               @relation(fields: [planId], references: [id], onDelete: Restrict)
+  status           SubscriptionStatus @default(TRIALING)
+  // Price and limit columns below the platform set for this clinic alone; the rest follow the plan.
+  overriddenFields String[]           @default([])
 
   // Billing cycle
   startDate          DateTime  @default(now())
@@ -446,7 +491,7 @@ model TenantSubscription {
   canceledAt         DateTime?
   cancelAt           DateTime? // Scheduled cancellation
 
-  // Pricing
+  // Pricing. basePrice is the plan price; extra specialties are added when charging.
   basePrice    Decimal @default(0) @db.Decimal(10, 2)
   pricePerSeat Decimal @default(0) @db.Decimal(10, 2)
   currency     String  @default("USD")
@@ -463,23 +508,6 @@ model TenantSubscription {
   specialtyPrice                 Decimal @default(15) @db.Decimal(10, 2)
   monthlyElectronicInvoicesLimit Int     @default(50)
 
-  // Feature Flags (boolean)
-  featureClinicalNotes           Boolean @default(true)
-  featureClinicalNotesEncryption Boolean @default(false)
-  featureAttachments             Boolean @default(false)
-  featureTasks                   Boolean @default(false)
-  featurePsychologicalTests      Boolean @default(false)
-  featureWebPush                 Boolean @default(false)
-  featureFCMPush                 Boolean @default(false)
-  featureAdvancedAnalytics       Boolean @default(false)
-  featureVideoConsultation       Boolean @default(false)
-  featureCalendarSync            Boolean @default(false)
-  featureOnlineSchedulingWidget  Boolean @default(false)
-  featureCustomReports           Boolean @default(false)
-  featureAPIAccess               Boolean @default(false)
-  featureWhatsAppIntegration     Boolean @default(false)
-  featureSSO                     Boolean @default(false)
-
   // Usage Tracking (updated in real-time)
   activePatientsCount           Int      @default(0)
   storageUsedBytes              BigInt   @default(0)
@@ -487,10 +515,6 @@ model TenantSubscription {
   lastNotificationReset         DateTime @default(now())
   monthlyElectronicInvoicesUsed Int      @default(0)
   lastInvoiceReset              DateTime @default(now())
-
-  // Scheduled changes
-  scheduledPlanChange   PlanType?
-  scheduledPlanChangeAt DateTime?
 
   // Payment integration
   stripeCustomerId      String?
@@ -505,6 +529,7 @@ model TenantSubscription {
 
   @@index([tenantId])
   @@index([status])
+  @@index([planId])
 }
 
 // A charge the tenant owes. Nothing paid is enabled until its payment is CONFIRMED.
@@ -519,8 +544,10 @@ model SubscriptionPayment {
   amount   Decimal @db.Decimal(10, 2)
   currency String  @default("USD")
 
-  // PLAN_UPGRADE: the plan to activate. RENEWAL: the plan being renewed.
-  targetPlan  PlanType
+  // The plan being renewed (PLAN_UPGRADE: the plan it activated), and its name when charged.
+  planId      String?
+  plan        Plan?     @relation(fields: [planId], references: [id], onDelete: SetNull)
+  planName    String
   // RENEWAL: the billing period this payment covers.
   periodStart DateTime?
   periodEnd   DateTime?
@@ -580,8 +607,9 @@ model SubscriptionEvent {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   eventType      SubscriptionEventType
-  previousPlan   PlanType?
-  newPlan        PlanType?
+  // Plan codes at the time of the event.
+  previousPlan   String?
+  newPlan        String?
   previousStatus SubscriptionStatus?
   newStatus      SubscriptionStatus?
 
@@ -820,7 +848,6 @@ model Specialty {
   professionals           ProfessionalSpecialty[]
   professionalProfiles    ProfessionalProfile[]
   modules                 SpecialtyModule[]
-  planMappings            PlanSpecialty[]
   appointments            Appointment[]
   clinicalNotes           ClinicalNote[]
   sessionPlans            NextSessionPlan[]
@@ -1140,17 +1167,6 @@ model SpecialtyModule {
   @@index([moduleKey])
 }
 
-model PlanSpecialty {
-  id          String    @id @default(cuid())
-  planType    PlanType
-  specialtyId String
-  specialty   Specialty @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
-  createdAt   DateTime  @default(now())
-
-  @@unique([planType, specialtyId])
-  @@index([specialtyId])
-}
-
 model SubscriptionSpecialty {
   tenantSubscriptionId String
   specialtyId          String
@@ -1163,14 +1179,16 @@ model SubscriptionSpecialty {
 }
 
 model TenantModule {
-  id        String   @id @default(cuid())
+  id        String       @id @default(cuid())
   tenantId  String
   moduleKey String
-  enabled   Boolean  @default(true)
+  enabled   Boolean      @default(true)
+  // core.* rows: PLAN follows the plan; OVERRIDE was set for this clinic and survives plan edits.
+  source    ModuleSource @default(PLAN)
   limits    Json?
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
 
   @@unique([tenantId, moduleKey])
   @@index([moduleKey])
@@ -2094,4 +2112,3 @@ model InvoiceRequestEvent {
   @@unique([connectionId, webhookEventId])
   @@index([invoiceRequestId, createdAt])
 }
-

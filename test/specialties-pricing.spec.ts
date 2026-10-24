@@ -5,14 +5,12 @@ import { SpecialtyCatalogService } from '../src/specialties/specialty-catalog.se
 import { TenantSpecialtiesService } from '../src/specialties/tenant-specialties.service';
 
 describe('Specialty selection pricing', () => {
-  it('writes an absolute price from the transactional subscription snapshot', async () => {
+  it('prices the selection from the transactional subscription snapshot, leaving the plan price', async () => {
     const subscription = {
-      planType: 'CLINIC_BASIC',
+      planId: 'plan_clinic_basic',
       includedSpecialties: 2,
       specialtyPrice: new Decimal(15),
       basePrice: new Decimal(99),
-      featureClinicalNotes: true,
-      featureAdvancedAnalytics: true,
     };
     const tx = {
       specialty: {
@@ -54,12 +52,16 @@ describe('Specialty selection pricing', () => {
       db as PrismaService,
       new SpecialtyCatalogService(db as PrismaService),
     );
-    await selection.replace('clinic-1', ['A', 'B', 'C', 'D'], 'user-1');
+    const result = await selection.replace('clinic-1', ['A', 'B', 'C', 'D'], 'user-1');
 
-    expect(tx.tenantSubscription.update).toHaveBeenCalledWith({
-      where: { tenantId: 'clinic-1' },
-      data: { basePrice: new Decimal(139) },
+    // 99 + 2 specialties beyond the 2 included, at 15.
+    expect(result.pricing).toMatchObject({
+      basePlanPrice: 99,
+      billableSpecialties: 2,
+      specialtyAddonsPrice: 30,
+      totalMonthly: 129,
     });
+    expect(tx.tenantSubscription.update).not.toHaveBeenCalled();
     expect(tx.tenantSubscription.findUnique).toHaveBeenCalledWith({
       where: { tenantId: 'clinic-1' },
     });

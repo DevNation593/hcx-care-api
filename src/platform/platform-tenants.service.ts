@@ -4,14 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PlanType, Prisma, SubscriptionStatus, TenantType, UserRole } from '@prisma/client';
+import { ModuleSource, Prisma, SubscriptionStatus, TenantType, UserRole } from '@prisma/client';
 import { AuthService } from '../auth/auth.service';
 import {
   SECTION_CATALOG,
   SectionDefinition,
   SectionKey,
-  defaultSections,
-  isPlanAllowedForTenantType,
   validateSections,
 } from '../common/sections/section-catalog';
 import { PrismaService } from '../prisma/prisma.service';
@@ -22,11 +20,17 @@ import {
 } from '../specialties/specialty-catalog.service';
 import { TenantSpecialtiesService } from '../specialties/tenant-specialties.service';
 import { MAIN_BRANCH_NAME } from '../branches/branches.service';
-import { addMonth } from '../subscription/subscription-billing.rules';
-import { getPlanFeatureFlags, getPlanLimits } from '../subscription/subscription-pricing';
+import {
+  PlanValueField,
+  monthlyTotal,
+  planModuleDefaults,
+  subscriptionValuesFromPlan,
+} from '../plans/plan-values';
+import { addDays, addMonth } from '../subscription/subscription-billing.rules';
 import { CreatePlatformTenantDto } from './dto/create-platform-tenant.dto';
 import { ListPlatformTenantsQueryDto } from './dto/platform-tenant.dto';
 import { PlatformAuditService } from './platform-audit.service';
+import { PlatformPlansService } from './platform-plans.service';
 
 export interface PlatformTenantRow {
   id: string;
@@ -35,7 +39,7 @@ export interface PlatformTenantRow {
   isActive: boolean;
   createdAt: Date;
   master: { firstName: string; lastName: string; email: string } | null;
-  planType: PlanType | null;
+  plan: { id: string; code: string; name: string } | null;
   status: SubscriptionStatus | null;
   seatsPsychologistsUsed: number;
   seatsPsychologistsMax: number;
@@ -64,17 +68,24 @@ export interface PlatformTenantDetail {
     mustChangePassword: boolean;
   } | null;
   subscription: {
-    planType: PlanType;
+    plan: { id: string; code: string; name: string };
     status: SubscriptionStatus;
     trialEndsAt: Date | null;
     currentPeriodStart: Date;
     currentPeriodEnd: Date | null;
-    seatsPsychologistsMax: number;
-    maxActivePatients: number;
     basePrice: number;
-    includedSpecialties: number;
+    pricePerSeat: number;
     specialtyPrice: number;
     currency: string;
+    seatsPsychologistsMax: number;
+    maxActivePatients: number;
+    storageGB: number;
+    monthlyElectronicInvoicesLimit: number;
+    includedSpecialties: number;
+    /** Values set for this clinic apart from its plan. */
+    overriddenFields: PlanValueField[];
+    /** The plan price plus the specialties beyond the included ones. */
+    monthlyTotal: number;
   };
   usage: {
     seatsPsychologistsUsed: number;
@@ -82,15 +93,9 @@ export interface PlatformTenantDetail {
     monthlyNotificationsSent: number;
   };
   specialties: { id: string; code: string; name: string }[];
-  sections: { key: SectionKey; name: string; enabled: boolean }[];
+  sections: { key: SectionKey; name: string; enabled: boolean; source: ModuleSource }[];
   modules: { key: string; enabled: boolean }[];
 }
-
-export const TRIAL_DAYS = 14;
-export const TRIAL_LIMITS: Record<TenantType, { seats: number; patients: number }> = {
-  CLINIC: { seats: 3, patients: 20 },
-  PERSONAL: { seats: 1, patients: 10 },
-};
 
 @Injectable()
 export class PlatformTenantsService {
@@ -100,6 +105,7 @@ export class PlatformTenantsService {
     private readonly catalog: SpecialtyCatalogService,
     private readonly tenantSpecialties: TenantSpecialtiesService,
     private readonly audit: PlatformAuditService,
+    private readonly plans: PlatformPlansService,
   ) {}
 
   async create(dto: CreatePlatformTenantDto, actorId: string): Promise<PlatformTenantDetail> {
@@ -116,18 +122,17 @@ export class PlatformTenantsService {
         message: 'Cada especialidad debe aparecer una sola vez.',
       });
     }
-    if (!isPlanAllowedForTenantType(dto.planType, dto.tenantType)) {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: 'PLAN_TYPE_MISMATCH',
-        message: 'El plan no corresponde al tipo de consultorio.',
-      });
-    }
+    // Answers 404/409 for an unknown, archived or mismatched plan before hashing the password.
+    const chosenPlan = await this.plans.findAssignable(this.prisma, dto.planId, dto.tenantType);
     const enabledSections = new Set<string>(
       dto.sections
         ? validateSections(dto.sections)
-        : defaultSections(dto.planType, dto.tenantType, specialtyCodes),
+        : planModuleDefaults(
+            chosenPlan.modules.map(({ moduleKey }) => moduleKey),
+            specialtyCodes,
+          ),
     );
+    const trialDays = dto.trialDays ?? chosenPlan.trialDays;
 
     const masterEmail = dto.masterEmail.trim().toLowerCase();
     const password = await this.auth.hashPassword(dto.temporaryPassword);
@@ -173,35 +178,19 @@ export class PlatformTenantsService {
               },
             });
 
-            const limits = getPlanLimits(dto.planType);
-            const isTrial = dto.planType === PlanType.TRIAL;
+            const plan = await this.plans.findAssignable(tx, dto.planId, dto.tenantType);
+            const isTrial = trialDays > 0;
             const now = new Date();
-            const periodEnd = addMonth(now);
             const subscription = await tx.tenantSubscription.create({
               data: {
                 tenantId: tenant.id,
-                planType: dto.planType,
+                planId: plan.id,
                 status: isTrial ? SubscriptionStatus.TRIALING : SubscriptionStatus.ACTIVE,
-                trialEndsAt: isTrial
-                  ? new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000)
-                  : null,
+                trialEndsAt: isTrial ? addDays(now, trialDays) : null,
                 currentPeriodStart: now,
-                currentPeriodEnd: isTrial ? null : periodEnd,
-                basePrice: limits.basePrice,
-                pricePerSeat: limits.pricePerSeat,
-                seatsPsychologistsMax: isTrial
-                  ? TRIAL_LIMITS[dto.tenantType].seats
-                  : limits.seatsIncluded,
+                currentPeriodEnd: isTrial ? null : addMonth(now),
                 seatsPsychologistsUsed: 0,
-                maxActivePatients: isTrial
-                  ? TRIAL_LIMITS[dto.tenantType].patients
-                  : limits.maxActivePatients,
-                storageGB: limits.storageGB,
-                monthlyNotificationsLimit: limits.monthlyNotificationsLimit,
-                includedSpecialties: limits.includedSpecialties,
-                specialtyPrice: limits.specialtyPrice,
-                monthlyElectronicInvoicesLimit: limits.monthlyElectronicInvoicesLimit,
-                ...getPlanFeatureFlags(dto.planType),
+                ...subscriptionValuesFromPlan(plan),
               },
             });
             if (!isTrial) {
@@ -209,19 +198,12 @@ export class PlatformTenantsService {
                 data: {
                   tenantId: tenant.id,
                   eventType: 'SUBSCRIPTION_ACTIVATED',
-                  newPlan: dto.planType,
+                  newPlan: plan.code,
                   newStatus: SubscriptionStatus.ACTIVE,
                   triggeredByUserId: actorId,
                 },
               });
             }
-            await tx.tenantModule.createMany({
-              data: SECTION_CATALOG.map(({ key }) => ({
-                tenantId: tenant.id,
-                moduleKey: key,
-                enabled: enabledSections.has(key),
-              })),
-            });
 
             const specialties = await this.catalog.resolveActiveCodes(specialtyCodes, tx);
             await tx.user.create({
@@ -245,6 +227,8 @@ export class PlatformTenantsService {
               subscription,
               specialties,
             });
+            // After the specialties: health-only submodules depend on them.
+            await this.plans.setTenantModules(tx, tenant.id, enabledSections);
             return this.loadDetail(tx, tenant.id);
           },
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -273,10 +257,10 @@ export class PlatformTenantsService {
     const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(query.pageSize) || 20));
     const where: Prisma.TenantWhereInput = { isPlatform: false };
     if (query.isActive !== undefined) where.isActive = query.isActive;
-    if (query.planType || query.status) {
+    if (query.planId || query.status) {
       where.subscription = {
         is: {
-          ...(query.planType ? { planType: query.planType } : {}),
+          ...(query.planId ? { planId: query.planId } : {}),
           ...(query.status ? { status: query.status } : {}),
         },
       };
@@ -307,7 +291,7 @@ export class PlatformTenantsService {
           createdAt: true,
           subscription: {
             select: {
-              planType: true,
+              plan: { select: { id: true, code: true, name: true } },
               status: true,
               seatsPsychologistsUsed: true,
               seatsPsychologistsMax: true,
@@ -333,7 +317,7 @@ export class PlatformTenantsService {
         isActive: row.isActive,
         createdAt: row.createdAt,
         master: row.users[0] ?? null,
-        planType: row.subscription?.planType ?? null,
+        plan: row.subscription?.plan ?? null,
         status: row.subscription?.status ?? null,
         seatsPsychologistsUsed: row.subscription?.seatsPsychologistsUsed ?? 0,
         seatsPsychologistsMax: row.subscription?.seatsPsychologistsMax ?? 0,
@@ -456,13 +440,7 @@ export class PlatformTenantsService {
         where: { tenantId, moduleKey: { startsWith: 'core.' } },
         select: { moduleKey: true, enabled: true },
       });
-      for (const { key } of SECTION_CATALOG) {
-        await tx.tenantModule.upsert({
-          where: { tenantId_moduleKey: { tenantId, moduleKey: key } },
-          update: { enabled: enabled.has(key) },
-          create: { tenantId, moduleKey: key, enabled: enabled.has(key) },
-        });
-      }
+      await this.plans.setTenantModules(tx, tenantId, enabled);
       await this.audit.record(
         {
           tenantId,
@@ -532,23 +510,14 @@ export class PlatformTenantsService {
     return this.loadDetail(this.prisma, tenantId);
   }
 
+  /** The module catalog; each plan says which keys it turns on (GET platform/plans). */
   getSectionCatalog(): {
     sections: SectionDefinition[];
-    defaults: { planType: PlanType; tenantType: TenantType; sections: SectionKey[] }[];
     /** Specialties whose clinics start without the health-only sections. */
     nonHealthSpecialtyCodes: string[];
   } {
-    const defaults: { planType: PlanType; tenantType: TenantType; sections: SectionKey[] }[] = [];
-    for (const planType of Object.values(PlanType)) {
-      for (const tenantType of Object.values(TenantType)) {
-        if (isPlanAllowedForTenantType(planType, tenantType)) {
-          defaults.push({ planType, tenantType, sections: defaultSections(planType, tenantType) });
-        }
-      }
-    }
     return {
       sections: SECTION_CATALOG.map((section) => ({ ...section })),
-      defaults,
       nonHealthSpecialtyCodes: [...AESTHETIC_SPECIALTY_CODES],
     };
   }
@@ -568,7 +537,12 @@ export class PlatformTenantsService {
         tenantType: true,
         isActive: true,
         createdAt: true,
-        subscription: true,
+        subscription: {
+          include: {
+            plan: { select: { id: true, code: true, name: true } },
+            _count: { select: { specialties: true } },
+          },
+        },
         users: {
           where: { role: UserRole.MASTER },
           take: 1,
@@ -583,13 +557,13 @@ export class PlatformTenantsService {
         specialties: {
           select: { specialty: { select: { id: true, code: true, name: true } } },
         },
-        enabledModules: { select: { moduleKey: true, enabled: true } },
+        enabledModules: { select: { moduleKey: true, enabled: true, source: true } },
       },
     });
     if (!row || !row.subscription) throw new NotFoundException('Consultorio no encontrado');
 
     const { subscription } = row;
-    const enabledByKey = new Map(row.enabledModules.map((m) => [m.moduleKey, m.enabled]));
+    const moduleByKey = new Map(row.enabledModules.map((m) => [m.moduleKey, m]));
     return {
       tenant: {
         id: row.id,
@@ -603,17 +577,22 @@ export class PlatformTenantsService {
       },
       master: row.users[0] ?? null,
       subscription: {
-        planType: subscription.planType,
+        plan: subscription.plan,
         status: subscription.status,
         trialEndsAt: subscription.trialEndsAt,
         currentPeriodStart: subscription.currentPeriodStart,
         currentPeriodEnd: subscription.currentPeriodEnd,
-        seatsPsychologistsMax: subscription.seatsPsychologistsMax,
-        maxActivePatients: subscription.maxActivePatients,
         basePrice: Number(subscription.basePrice),
-        includedSpecialties: subscription.includedSpecialties,
+        pricePerSeat: Number(subscription.pricePerSeat),
         specialtyPrice: Number(subscription.specialtyPrice),
         currency: subscription.currency,
+        seatsPsychologistsMax: subscription.seatsPsychologistsMax,
+        maxActivePatients: subscription.maxActivePatients,
+        storageGB: subscription.storageGB,
+        monthlyElectronicInvoicesLimit: subscription.monthlyElectronicInvoicesLimit,
+        includedSpecialties: subscription.includedSpecialties,
+        overriddenFields: subscription.overriddenFields as PlanValueField[],
+        monthlyTotal: monthlyTotal(subscription, subscription._count.specialties),
       },
       usage: {
         seatsPsychologistsUsed: subscription.seatsPsychologistsUsed,
@@ -624,7 +603,8 @@ export class PlatformTenantsService {
       sections: SECTION_CATALOG.map(({ key, name }) => ({
         key,
         name,
-        enabled: enabledByKey.get(key) === true,
+        enabled: moduleByKey.get(key)?.enabled === true,
+        source: moduleByKey.get(key)?.source ?? ModuleSource.PLAN,
       })),
       modules: row.enabledModules
         .filter(({ moduleKey }) => !moduleKey.startsWith('core.'))

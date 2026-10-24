@@ -122,7 +122,7 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
     phone: '+593 2 245 7788',
     address: 'Av. República de El Salvador N35-12, Quito',
     tenantType: 'CLINIC',
-    planType: 'CLINIC_BASIC',
+    plan: 'CLINIC_BASIC',
     status: 'ACTIVE',
     specialties: ['aesthetics'],
     fiscal: {

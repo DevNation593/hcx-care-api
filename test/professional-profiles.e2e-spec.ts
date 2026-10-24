@@ -45,7 +45,7 @@ describe('Professional profile transition (E2E)', () => {
     await prisma.tenantSubscription.update({
       where: { tenantId },
       data: {
-        planType: 'CLINIC_BASIC',
+        planId: 'plan_clinic_basic',
         status: 'ACTIVE',
         seatsPsychologistsMax: 5,
       },
@@ -53,7 +53,7 @@ describe('Professional profile transition (E2E)', () => {
     await prisma.tenantSubscription.update({
       where: { tenantId: otherTenantId },
       data: {
-        planType: 'CLINIC_BASIC',
+        planId: 'plan_clinic_basic',
         status: 'ACTIVE',
         seatsPsychologistsMax: 5,
       },

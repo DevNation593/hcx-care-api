@@ -2,18 +2,20 @@ import { TenantType } from '@prisma/client';
 import { SECTION_KEYS } from '../../src/common/sections/section-catalog';
 import { PlatformTenantsService } from '../../src/platform/platform-tenants.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
+import { ensureDefaultPlans } from './ensure-default-plans';
 
 export const TEST_PASSWORD = 'Password123!';
 
 /**
- * Creates a CLINIC tenant on the TRIAL plan through the platform service, with the PSYCHOLOGY
- * specialty (created if missing) and all eight sections enabled. The master login is `admin+<sequence>@tenant.test`
+ * Creates a CLINIC tenant on a trial of Clínica Básico through the platform service, with the
+ * PSYCHOLOGY specialty (created if missing) and every module and submodule enabled. The master login is `admin+<sequence>@tenant.test`
  * and its temporary-password flag is cleared so tests can use it right away.
  */
 export async function createTestTenant(
   deps: { tenants: PlatformTenantsService; prisma: PrismaService },
   sequence: number,
 ) {
+  await ensureDefaultPlans(deps.prisma);
   await deps.prisma.specialty.upsert({
     where: { code: 'PSYCHOLOGY' },
     update: { isActive: true },
@@ -30,7 +32,7 @@ export async function createTestTenant(
       masterLastName: String(sequence),
       masterEmail: 'admin+' + sequence + '@tenant.test',
       temporaryPassword: TEST_PASSWORD,
-      planType: 'TRIAL',
+      planId: 'plan_clinic_basic',
       specialtyCodes: ['PSYCHOLOGY'],
       sections: [...SECTION_KEYS],
     },

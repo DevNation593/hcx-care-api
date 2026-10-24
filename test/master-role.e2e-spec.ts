@@ -106,8 +106,6 @@ describe('Master role (E2E)', () => {
       ['delete', `/api/v1/tenants/${id}/users/placeholder-user`],
       ['patch', `/api/v1/tenants/${id}`],
       ['patch', `/api/v1/tenants/${id}/settings`],
-      ['post', `/api/v1/tenants/${id}/subscription/upgrade`],
-      ['post', `/api/v1/tenants/${id}/subscription/downgrade`],
       ['get', `/api/v1/tenants/${id}/audit-logs`],
       ['delete', `/api/v1/tenants/${id}/patients/placeholder-patient`],
       ['delete', `/api/v1/tenants/${id}/tasks/placeholder-task`],

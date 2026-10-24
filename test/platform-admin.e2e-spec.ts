@@ -6,6 +6,7 @@ import { AuthService } from './../src/auth/auth.service';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { SECTION_KEYS } from './../src/common/sections/section-catalog';
 import { TEST_PASSWORD } from './helpers/create-test-tenant';
+import { ensureDefaultPlans } from './helpers/ensure-default-plans';
 
 jest.setTimeout(60000);
 
@@ -42,6 +43,7 @@ describe('Platform admin panel (E2E)', () => {
     prisma = app.get<PrismaService>(PrismaService);
 
     await prisma.cleanDatabase();
+    await ensureDefaultPlans(prisma);
     const psychology = await prisma.specialty.upsert({
       where: { code: 'PSYCHOLOGY' },
       update: { isActive: true },
@@ -113,7 +115,7 @@ describe('Platform admin panel (E2E)', () => {
         masterLastName: 'E2E',
         masterEmail,
         temporaryPassword,
-        planType: 'TRIAL',
+        planId: 'plan_clinic_basic',
         specialtyCodes: ['PSYCHOLOGY'],
         sections: SECTION_KEYS.filter((key) => key !== 'core.agenda.tasks'),
       })
@@ -143,7 +145,8 @@ describe('Platform admin panel (E2E)', () => {
           masterLastName: 'Estudio',
           masterEmail: 'titular@estudio-e2e.test',
           temporaryPassword,
-          planType: 'CLINIC_BASIC',
+          planId: 'plan_clinic_basic',
+          trialDays: 0,
           specialtyCodes: ['AESTHETICS'],
           ...extra,
         });
@@ -338,7 +341,8 @@ describe('Platform admin panel (E2E)', () => {
     expect(selection.body.specialties.map((specialty: { code: string }) => specialty.code)).toEqual(
       ['PSYCHOLOGY', 'NUTRITION'],
     );
-    expect(selection.body.pricing.specialtyAddonsPrice).toBe(15);
+    // Clínica Básico includes two specialties: no extra charge.
+    expect(selection.body.pricing.specialtyAddonsPrice).toBe(0);
 
     await http().patch(moduleUrl).set(bearer(masterToken)).send({ enabled: false }).expect(403);
     await http()
@@ -423,6 +427,123 @@ describe('Platform admin panel (E2E)', () => {
       .get(api(`/tenants/${tenantId}/patients`))
       .set(bearer(token))
       .expect(200);
+  });
+
+  describe('editable plans', () => {
+    let planId: string;
+    const detail = async () =>
+      (
+        await http()
+          .get(api(`/platform/tenants/${tenantId}`))
+          .set(bearer(adminToken))
+          .expect(200)
+      ).body;
+    const sourceOf = (body: { sections: { key: string; enabled: boolean; source: string }[] }) =>
+      Object.fromEntries(body.sections.map((s) => [s.key, [s.enabled, s.source]]));
+
+    it('creates a plan and refuses a second one with the same code', async () => {
+      // A previous run on the same database may have left it; its clinics are gone by now.
+      await prisma.plan.deleteMany({ where: { code: 'E2E_PLAN' } });
+      const plan = {
+        code: 'e2e_plan',
+        name: 'Plan E2E',
+        tenantType: 'CLINIC',
+        basePrice: 50,
+        pricePerSeat: 5,
+        specialtyPrice: 10,
+        seatsIncluded: 4,
+        maxActivePatients: 200,
+        storageGB: 3,
+        monthlyElectronicInvoicesLimit: 20,
+        includedSpecialties: 1,
+        trialDays: 0,
+        modules: SECTION_KEYS.filter((key) => key !== 'core.agenda.tasks'),
+      };
+      const created = await http()
+        .post(api('/platform/plans'))
+        .set(bearer(adminToken))
+        .send(plan)
+        .expect(201);
+      expect(created.body).toMatchObject({ code: 'E2E_PLAN', clinicsCount: 0, basePrice: 50 });
+      planId = created.body.id;
+
+      const again = await http()
+        .post(api('/platform/plans'))
+        .set(bearer(adminToken))
+        .send(plan)
+        .expect(409);
+      expect(again.body.code).toBe('PLAN_CODE_TAKEN');
+    });
+
+    it('puts the clinic on the plan with its values and modules', async () => {
+      const response = await http()
+        .patch(api(`/platform/tenants/${tenantId}/subscription`))
+        .set(bearer(adminToken))
+        .send({ planId, reason: 'Prueba e2e' })
+        .expect(200);
+      expect(response.body.subscription).toMatchObject({
+        plan: { id: planId, code: 'E2E_PLAN' },
+        status: 'ACTIVE',
+        maxActivePatients: 200,
+        storageGB: 3,
+        overriddenFields: [],
+        // 50 plus the second specialty of the clinic beyond the one included, at 10.
+        monthlyTotal: 60,
+      });
+      expect(sourceOf(response.body)['core.agenda.tasks']).toEqual([false, 'PLAN']);
+    });
+
+    it('keeps an overridden value when the plan is edited, and takes the rest at once', async () => {
+      await http()
+        .put(api(`/platform/tenants/${tenantId}/subscription/overrides`))
+        .set(bearer(adminToken))
+        .send({ values: { maxActivePatients: 999 }, reason: 'Acuerdo e2e' })
+        .expect(200);
+
+      const edited = await http()
+        .patch(api(`/platform/plans/${planId}`))
+        .set(bearer(adminToken))
+        .send({ maxActivePatients: 300, storageGB: 6, modules: [...SECTION_KEYS] })
+        .expect(200);
+      expect(edited.body.clinicsCount).toBe(1);
+
+      const body = await detail();
+      expect(body.subscription).toMatchObject({
+        maxActivePatients: 999,
+        storageGB: 6,
+        overriddenFields: ['maxActivePatients'],
+      });
+      expect(sourceOf(body)['core.agenda.tasks']).toEqual([true, 'PLAN']);
+
+      await http()
+        .put(api(`/platform/tenants/${tenantId}/subscription/overrides`))
+        .set(bearer(adminToken))
+        .send({ values: {}, reset: ['maxActivePatients'], reason: 'Fin del acuerdo' })
+        .expect(200);
+      expect((await detail()).subscription).toMatchObject({
+        maxActivePatients: 300,
+        overriddenFields: [],
+      });
+    });
+
+    it('lists the plan with its clinic and stops offering it once archived', async () => {
+      const list = await http().get(api('/platform/plans')).set(bearer(adminToken)).expect(200);
+      expect(list.body.find((plan: { id: string }) => plan.id === planId)).toMatchObject({
+        clinicsCount: 1,
+        archivedAt: null,
+      });
+
+      await http()
+        .post(api(`/platform/plans/${planId}/archive`))
+        .set(bearer(adminToken))
+        .expect(200);
+      const refused = await http()
+        .patch(api(`/platform/tenants/${tenantId}/subscription`))
+        .set(bearer(adminToken))
+        .send({ planId, trialDays: 7, reason: 'Archivado' })
+        .expect(409);
+      expect(refused.body.code).toBe('PLAN_ARCHIVED');
+    });
   });
 
   it.each([

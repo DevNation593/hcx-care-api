@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { PlanType, SubscriptionStatus } from '@prisma/client';
+import { SubscriptionStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
@@ -31,10 +31,10 @@ export class ListPlatformTenantsQueryDto {
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ enum: PlanType })
+  @ApiPropertyOptional()
   @IsOptional()
-  @IsEnum(PlanType)
-  planType?: PlanType;
+  @IsString()
+  planId?: string;
 
   @ApiPropertyOptional({ enum: SubscriptionStatus })
   @IsOptional()

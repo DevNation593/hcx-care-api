@@ -16,6 +16,7 @@ import {
   SeedClock,
   SeedContext,
   SeedLogin,
+  seedPlans,
   SPECIALTY_MODULE_KEYS,
   SpecialtyCatalog,
 } from './seed-helpers';
@@ -137,18 +138,6 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
     skipDuplicates: true,
   });
 
-  await db.planSpecialty.createMany({
-    data: specialties.flatMap((specialty) => [
-      { planType: 'TRIAL', specialtyId: specialty.id },
-      { planType: 'PERSONAL_BASIC', specialtyId: specialty.id },
-      { planType: 'PERSONAL_PRO', specialtyId: specialty.id },
-      { planType: 'CLINIC_BASIC', specialtyId: specialty.id },
-      { planType: 'CLINIC_PRO', specialtyId: specialty.id },
-      { planType: 'CLINIC_ENTERPRISE', specialtyId: specialty.id },
-    ]),
-    skipDuplicates: true,
-  });
-
   return catalog;
 }
 
@@ -211,7 +200,6 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   await db.billingProfile.deleteMany();
   await db.tenantModule.deleteMany();
   await db.subscriptionSpecialty.deleteMany();
-  await db.planSpecialty.deleteMany();
   await db.specialtyModule.deleteMany();
   await db.professionalSpecialty.deleteMany();
   await db.professionalProfile.deleteMany();
@@ -235,6 +223,8 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   await db.tenantSettings.deleteMany();
   await db.tenantSubscription.deleteMany();
   await db.tenant.deleteMany();
+  await db.planModule.deleteMany();
+  await db.plan.deleteMany();
 }
 
 /** Where the seed keeps the bytes of the clinical files it creates. */
@@ -261,6 +251,7 @@ export async function seedDatabase(
   await clearDatabase(db, options.storage);
 
   const catalog = await seedSpecialtyCatalog(db);
+  const plans = await seedPlans(db);
   // A starter set of frequent codes; the official classification is imported separately.
   await importDiagnosisCodes(
     db,
@@ -278,6 +269,7 @@ export async function seedDatabase(
     db,
     clock: new SeedClock(options.now ?? new Date()),
     catalog,
+    plans,
     hashedPassword: await bcrypt.hash(DEMO_PASSWORD, 10),
     platformAdminId: platform.userId,
     logins: [

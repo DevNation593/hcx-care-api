@@ -1,3 +1,5 @@
+> **Histórico.** Describe el modelo de planes en código y feature flags, retirado el 2026-10-25. El modelo vigente (planes en base de datos, ajustes por consultorio, cobro) está en [`SUBSCRIPTION_BILLING.md`](./SUBSCRIPTION_BILLING.md).
+
 # Subscription Model Implementation
 
 ## Database Schema Changes
