@@ -305,7 +305,7 @@ export class PatientFilesService {
     }));
   }
 
-  /** Counts the file against the plan; a plan with storageGB 0 has no storage limit. */
+  /** Counts the file against the plan's storage quota; every plan has a finite one. */
   private async reserveSpace(
     tx: Prisma.TransactionClient,
     tenantId: string,
@@ -334,10 +334,7 @@ export class PatientFilesService {
     const limitBytes = (subscription?.storageGB ?? 0) * BYTES_PER_GB;
 
     const reserved = await tx.tenantSubscription.updateMany({
-      where: {
-        tenantId,
-        ...(limitBytes > 0 ? { storageUsedBytes: { lte: BigInt(limitBytes - sizeBytes) } } : {}),
-      },
+      where: { tenantId, storageUsedBytes: { lte: BigInt(limitBytes - sizeBytes) } },
       data: { storageUsedBytes: { increment: BigInt(sizeBytes) } },
     });
     if (reserved.count === 0) {

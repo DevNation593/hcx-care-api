@@ -457,7 +457,7 @@ model TenantSubscription {
 
   // Resource Limits
   maxActivePatients              Int     @default(10)
-  storageGB                      Int     @default(0) // 0 = unlimited
+  storageGB                      Int     @default(1) // every plan has a finite quota
   monthlyNotificationsLimit      Int     @default(100)
   includedSpecialties            Int     @default(1)
   specialtyPrice                 Decimal @default(15) @db.Decimal(10, 2)

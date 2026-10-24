@@ -6,7 +6,7 @@
       "pricePerSeat": 0,
       "seatsIncluded": 1,
       "maxActivePatients": 10,
-      "storageGB": 0,
+      "storageGB": 1,
       "monthlyNotificationsLimit": 100,
       "includedModules": [
         "clinicalNotes",
@@ -77,7 +77,7 @@
       "pricePerSeat": 0,
       "seatsIncluded": 1,
       "maxActivePatients": 50,
-      "storageGB": 0,
+      "storageGB": 2,
       "monthlyNotificationsLimit": 300,
       "includedModules": [
         "clinicalNotes",
@@ -136,7 +136,7 @@
       "pricePerSeat": 0,
       "seatsIncluded": 1,
       "maxActivePatients": 200,
-      "storageGB": 1,
+      "storageGB": 5,
       "monthlyNotificationsLimit": 1000,
       "includedModules": [
         "clinicalNotes",
@@ -177,7 +177,7 @@
       "pricePerSeat": 15,
       "seatsIncluded": 3,
       "maxActivePatients": 150,
-      "storageGB": 1,
+      "storageGB": 10,
       "monthlyNotificationsLimit": 500,
       "includedModules": [
         "clinicalNotes",
@@ -236,7 +236,7 @@
       "pricePerSeat": 12,
       "seatsIncluded": 10,
       "maxActivePatients": 500,
-      "storageGB": 5,
+      "storageGB": 25,
       "monthlyNotificationsLimit": 2000,
       "includedModules": [
         "clinicalNotes",

@@ -4,8 +4,24 @@ import {
   calculateSubscriptionPrice,
   getPlanFeatureFlags,
   getPlanIncludedModules,
+  getPlanLimits,
   getSelectedModules,
 } from './subscription-pricing';
+
+describe('plan storage quotas', () => {
+  it('gives every plan a finite quota that grows with the tier', () => {
+    const tiers = [
+      'TRIAL',
+      'PERSONAL_BASIC',
+      'PERSONAL_PRO',
+      'CLINIC_BASIC',
+      'CLINIC_PRO',
+      'CLINIC_ENTERPRISE',
+    ] as const;
+
+    expect(tiers.map((plan) => getPlanLimits(plan).storageGB)).toEqual([1, 2, 5, 10, 25, 100]);
+  });
+});
 
 describe('calculateSubscriptionPrice', () => {
   it('preserves commercial add-ons while charging specialties above the included count', () => {
