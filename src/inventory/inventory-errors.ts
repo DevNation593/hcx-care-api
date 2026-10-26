@@ -112,3 +112,10 @@ export const stockReceiptNotFound = () =>
     code: 'STOCK_RECEIPT_NOT_FOUND',
     message: 'Entrada no encontrada.',
   });
+
+export const reportRangeTooLong = () =>
+  new UnprocessableEntityException({
+    statusCode: 422,
+    code: 'REPORT_RANGE_TOO_LONG',
+    message: 'El período del reporte no puede superar 366 días.',
+  });

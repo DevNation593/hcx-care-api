@@ -21,6 +21,7 @@ import { CashRegistersController } from '../../cash-registers/cash-registers.con
 import { OrdersController } from '../../orders/orders.controller';
 import { ProductsController } from '../../inventory/products.controller';
 import { StockController } from '../../inventory/stock.controller';
+import { InventoryReportsController } from '../../inventory/inventory-reports.controller';
 import { InvoicingController } from '../../invoicing/invoicing.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -57,6 +58,7 @@ const controllers: Controller[] = [
   OrdersController,
   ProductsController,
   StockController,
+  InventoryReportsController,
   InvoicingController,
   TreatmentSessionsController,
   ConsentDocumentsController,
@@ -193,6 +195,7 @@ describe('permission catalog', () => {
         'consent-documents.controller.ts',
         'consent-templates.controller.ts',
         'encounters.controller.ts',
+        'inventory-reports.controller.ts',
         'invoicing.controller.ts',
         'next-session-plans.controller.ts',
         'orders.controller.ts',
