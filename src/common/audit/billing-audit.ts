@@ -5,7 +5,11 @@ export type BillingAuditEntity =
   | 'ORDER'
   | 'PAYMENT'
   | 'CASH_REGISTER'
-  | 'INVOICE_REQUEST';
+  | 'INVOICE_REQUEST'
+  | 'PRODUCT'
+  | 'STOCK_RECEIPT'
+  | 'STOCK_ADJUSTMENT'
+  | 'STOCK_TRANSFER';
 
 export interface BillingAuditInput {
   tenantId: string;

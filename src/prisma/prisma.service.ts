@@ -91,6 +91,12 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       'order',
       'orderItem',
       'payment',
+      'product',
+      'stockLot',
+      'stockReceipt',
+      'stockTransfer',
+      'stockMovement',
+      'orderItemLot',
       'professionalProfile',
       'user',
       'refreshToken',
@@ -156,11 +162,19 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       'invoicingRef',
       'branchEmissionPoint',
       'invoicingConnection',
+      // Lot allocations and stock movements restrict deleting their lot, and go before the payments.
+      'orderItemLot',
+      'stockMovement',
       // Payments restrict deleting their order and cash register; items restrict their session.
       'payment',
       'orderItem',
       'order',
       'cashRegisterSession',
+      // Lots restrict deleting their receipt and product; a transfer chains lots by sourceLotId.
+      'stockLot',
+      'stockReceipt',
+      'stockTransfer',
+      'product',
       'patientBillingProfile',
       'billingProfile',
       // Consent evidence restricts deleting its document, so it goes first.
@@ -205,6 +219,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     ] as const;
 
     for (const modelKey of orderedModels) {
+      if (modelKey === 'stockLot') {
+        await this.stockLot.updateMany({ data: { sourceLotId: null } });
+      }
       await (this as any)[modelKey].deleteMany();
     }
   }
