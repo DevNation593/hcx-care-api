@@ -2,6 +2,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { PermissionChecker } from '../common/permissions/permission-checker.service';
+import { StockAllocationService } from '../inventory/stock-allocation.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { computeOrderTotals } from './order-totals';
 import { toOrderView } from './order-view';
@@ -38,11 +39,16 @@ describe('OrdersService', () => {
       updateMany: jest.fn(),
       delete: jest.fn(),
     },
+    product: { findFirst: jest.fn() },
+    tenantModule: { findMany: jest.fn() },
+    tenantSettings: { findUnique: jest.fn() },
   };
   const permissionChecker = { assertAllowed: jest.fn() };
+  const stockAllocation = { reserve: jest.fn(), release: jest.fn() };
   const service = new OrdersService(
     prisma as unknown as PrismaService,
     permissionChecker as unknown as PermissionChecker,
+    stockAllocation as unknown as StockAllocationService,
   );
 
   const actor: AuthUser = {
@@ -77,6 +83,7 @@ describe('OrdersService', () => {
     orderId: 'order-1',
     kind: 'TREATMENT_SESSION',
     treatmentSessionId: 'session-1',
+    productId: null,
     patientId: 'patient-1',
     patient: person('patient-1'),
     description: 'Botox',
@@ -646,12 +653,154 @@ describe('OrdersService', () => {
     });
   });
 
+  describe('addItem of a product', () => {
+    const productDto = {
+      version: 3,
+      kind: 'PRODUCT' as const,
+      productId: 'product-1',
+      quantity: '2',
+    };
+
+    const product = (extra: Record<string, unknown> = {}) => ({
+      id: 'product-1',
+      name: 'Protector solar',
+      price: D('20'),
+      taxRatePercent: D('15'),
+      isActive: true,
+      ...extra,
+    });
+
+    beforeEach(() => {
+      prisma.tenantModule.findMany.mockResolvedValue([
+        { moduleKey: 'core.billing' },
+        { moduleKey: 'core.billing.inventory' },
+      ]);
+      prisma.tenantSettings.findUnique.mockResolvedValue({ timezone: 'America/Guayaquil' });
+      prisma.product.findFirst.mockResolvedValue(product());
+    });
+
+    it('does not need billing.adjust without a discount', async () => {
+      await service.addItem('tenant-1', actor, 'order-1', productDto);
+
+      expect(permissionChecker.assertAllowed).not.toHaveBeenCalled();
+    });
+
+    it('needs billing.adjust for a discount', async () => {
+      await service.addItem('tenant-1', actor, 'order-1', { ...productDto, discount: '5.00' });
+
+      expect(permissionChecker.assertAllowed).toHaveBeenCalledWith(actor, 'billing.adjust');
+    });
+
+    it.each(['2.5', '0', '-1'])(
+      'rejects the quantity %s before writing or reserving',
+      async (quantity) => {
+        expect(
+          await rejection(
+            service.addItem('tenant-1', actor, 'order-1', { ...productDto, quantity }),
+          ),
+        ).toBe('ORDER_LINE_INVALID');
+        expect(prisma.orderItem.create).not.toHaveBeenCalled();
+        expect(stockAllocation.reserve).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects an inactive product', async () => {
+      prisma.product.findFirst.mockResolvedValue(product({ isActive: false }));
+
+      expect(await rejection(service.addItem('tenant-1', actor, 'order-1', productDto))).toBe(
+        'PRODUCT_INACTIVE',
+      );
+      expect(stockAllocation.reserve).not.toHaveBeenCalled();
+    });
+
+    it('does not find a product of another tenant', async () => {
+      prisma.product.findFirst.mockResolvedValue(null);
+
+      expect(await rejection(service.addItem('tenant-1', actor, 'order-1', productDto))).toBe(
+        'PRODUCT_NOT_FOUND',
+      );
+      expect(prisma.product.findFirst.mock.calls[0][0].where).toEqual({
+        id: 'product-1',
+        tenantId: 'tenant-1',
+      });
+    });
+
+    it('answers SECTION_NOT_ENABLED when the inventory section is off', async () => {
+      prisma.tenantModule.findMany.mockResolvedValue([{ moduleKey: 'core.billing' }]);
+
+      expect(await rejection(service.addItem('tenant-1', actor, 'order-1', productDto))).toBe(
+        'SECTION_NOT_ENABLED',
+      );
+      expect(prisma.orderItem.create).not.toHaveBeenCalled();
+    });
+
+    it('creates the line with the price, tax and name of the product and reserves its stock', async () => {
+      await service.addItem('tenant-1', actor, 'order-1', productDto);
+
+      expect(prisma.orderItem.create.mock.calls[0][0].data).toMatchObject({
+        orderId: 'order-1',
+        kind: 'PRODUCT',
+        productId: 'product-1',
+        treatmentSessionId: null,
+        patientId: null,
+        description: 'Protector solar',
+        quantity: D('2'),
+        unitPrice: D('20'),
+        taxRatePercent: D('15'),
+        discount: D('0'),
+      });
+      expect(stockAllocation.reserve).toHaveBeenCalledWith(prisma, {
+        tenantId: 'tenant-1',
+        actorId: 'user-1',
+        orderItemId: 'item-new',
+        productId: 'product-1',
+        branchId: 'branch-1',
+        quantity: 2,
+        today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      });
+      expect(prisma.auditLog.create.mock.calls[0][0].data.changes.addedItem).toMatchObject({
+        id: 'item-new',
+        kind: 'PRODUCT',
+        productId: 'product-1',
+      });
+    });
+  });
+
   describe('removeItem and updateItemDiscount', () => {
     it('removes an item and recalculates', async () => {
       await service.removeItem('tenant-1', 'user-1', 'order-1', 'item-1', 3);
 
       expect(prisma.orderItem.delete).toHaveBeenCalledWith({ where: { id: 'item-1' } });
       expect(lastTotals().total).toEqual(D('0'));
+      expect(stockAllocation.release).not.toHaveBeenCalled();
+    });
+
+    it('returns the stock of a product line before deleting it', async () => {
+      prisma.order.findFirst.mockResolvedValue(
+        order({
+          items: [
+            item(),
+            item({
+              id: 'item-2',
+              kind: 'PRODUCT',
+              treatmentSessionId: null,
+              productId: 'product-1',
+            }),
+          ],
+        }),
+      );
+
+      await service.removeItem('tenant-1', 'user-1', 'order-1', 'item-2', 3);
+
+      expect(stockAllocation.release).toHaveBeenCalledWith(prisma, {
+        tenantId: 'tenant-1',
+        actorId: 'user-1',
+        orderItemIds: ['item-2'],
+      });
+      expect(prisma.orderItem.delete).toHaveBeenCalledWith({ where: { id: 'item-2' } });
+      expect(stockAllocation.release.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.orderItem.delete.mock.invocationCallOrder[0],
+      );
     });
 
     it('changes the discount of an item', async () => {
@@ -711,11 +860,36 @@ describe('OrdersService', () => {
         where: { orderId: 'order-1', releasedAt: null },
         data: { releasedAt: expect.any(Date) },
       });
+      expect(stockAllocation.release).not.toHaveBeenCalled();
       expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
         action: 'UPDATE',
         entity: 'ORDER',
         reason: 'Error',
       });
+    });
+
+    it('returns the stock of its unreleased product lines before releasing every item', async () => {
+      const productItem = (id: string) =>
+        item({ id, kind: 'PRODUCT', treatmentSessionId: null, productId: 'product-1' });
+      prisma.order.findFirst.mockResolvedValue(
+        order({ items: [item(), productItem('item-2'), productItem('item-3')] }),
+      );
+
+      await service.cancel('tenant-1', 'user-1', 'order-1', { version: 3, reason: 'Error' });
+
+      expect(stockAllocation.release).toHaveBeenCalledTimes(1);
+      expect(stockAllocation.release).toHaveBeenCalledWith(prisma, {
+        tenantId: 'tenant-1',
+        actorId: 'user-1',
+        orderItemIds: ['item-2', 'item-3'],
+      });
+      expect(prisma.orderItem.updateMany).toHaveBeenCalledWith({
+        where: { orderId: 'order-1', releasedAt: null },
+        data: { releasedAt: expect.any(Date) },
+      });
+      expect(stockAllocation.release.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.orderItem.updateMany.mock.invocationCallOrder[0],
+      );
     });
 
     it('refuses to cancel an order with a recorded payment', async () => {
@@ -739,6 +913,7 @@ describe('OrdersService', () => {
       );
 
       expect(view.items[0].treatmentSessionId).toBe('session-1');
+      expect(view.items[0].productId).toBeNull();
       expect(JSON.stringify(view)).not.toContain('secret');
       expect(view.balance).toBe('115.00');
       expect(view.total).toBe('115.00');

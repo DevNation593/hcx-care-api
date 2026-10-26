@@ -16,6 +16,10 @@ import {
 import { recordBillingAudit } from '../common/audit/billing-audit';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { PermissionChecker } from '../common/permissions/permission-checker.service';
+import { assertSectionInEffect } from '../common/sections/section-in-effect';
+import { clinicToday } from '../inventory/clinic-today';
+import { productInactive, productNotFound } from '../inventory/inventory-errors';
+import { StockAllocationService } from '../inventory/stock-allocation.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
 import {
@@ -33,6 +37,8 @@ import { orderInclude, OrderView, OrderWithRelations, toOrderView } from './orde
 const DEFAULT_PAGE_SIZE = 20;
 const BILLABLE_SESSIONS_LIMIT = 100;
 const D = Prisma.Decimal;
+// Products are sold in whole units.
+const WHOLE_QUANTITY = /^[1-9]\d*$/;
 
 const orderNotFound = () =>
   new NotFoundException({
@@ -154,6 +160,7 @@ type LineData = Pick<
   Prisma.OrderItemUncheckedCreateInput,
   | 'kind'
   | 'treatmentSessionId'
+  | 'productId'
   | 'patientId'
   | 'description'
   | 'quantity'
@@ -273,12 +280,25 @@ async function createItem(
 const itemSnapshot = (line: LineData) => ({
   kind: line.kind,
   treatmentSessionId: line.treatmentSessionId ?? null,
+  productId: line.productId ?? null,
   description: line.description,
   quantity: new D(line.quantity as Prisma.Decimal.Value).toString(),
   unitPrice: new D(line.unitPrice as Prisma.Decimal.Value).toFixed(2),
   discount: new D(line.discount as Prisma.Decimal.Value).toFixed(2),
   taxRatePercent: new D(line.taxRatePercent as Prisma.Decimal.Value).toString(),
 });
+
+async function assertPatientExists(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  patientId: string,
+): Promise<void> {
+  const patient = await tx.patient.findFirst({
+    where: { id: patientId, tenantId },
+    select: { id: true },
+  });
+  if (!patient) throw patientNotFound();
+}
 
 async function activeProfile(tx: Prisma.TransactionClient, tenantId: string, id: string) {
   const profile = await tx.billingProfile.findFirst({
@@ -295,6 +315,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissionChecker: PermissionChecker,
+    private readonly stockAllocation: StockAllocationService,
   ) {}
 
   async list(tenantId: string, query: ListOrdersQuery) {
@@ -506,13 +527,37 @@ export class OrdersService {
     if (dto.kind === 'FREE' || hasDiscount) {
       await this.permissionChecker.assertAllowed(actor, 'billing.adjust');
     }
+    if (dto.kind === 'PRODUCT' && !WHOLE_QUANTITY.test(dto.quantity ?? '')) {
+      throw lineInvalid('La cantidad debe ser un número entero mayor que cero.');
+    }
 
     return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
       const order = await loadOrderForWrite(tx, tenantId, orderId, dto.version);
       assertEditable(order);
 
       let line: LineData;
-      if (dto.kind === 'TREATMENT_SESSION') {
+      if (dto.kind === 'PRODUCT') {
+        if (!dto.productId) throw lineInvalid('Indique el producto.');
+        await assertSectionInEffect(tx, tenantId, 'core.billing.inventory');
+        const product = await tx.product.findFirst({
+          where: { id: dto.productId, tenantId },
+          select: { id: true, name: true, price: true, taxRatePercent: true, isActive: true },
+        });
+        if (!product) throw productNotFound();
+        if (!product.isActive) throw productInactive();
+        if (dto.patientId) await assertPatientExists(tx, tenantId, dto.patientId);
+        line = {
+          kind: 'PRODUCT',
+          treatmentSessionId: null,
+          productId: product.id,
+          patientId: dto.patientId ?? null,
+          description: product.name,
+          quantity: new D(dto.quantity!),
+          unitPrice: product.price,
+          discount: new D(discount),
+          taxRatePercent: product.taxRatePercent,
+        };
+      } else if (dto.kind === 'TREATMENT_SESSION') {
         if (!dto.treatmentSessionId) throw lineInvalid('Indique la sesión de tratamiento.');
         const session = await tx.treatmentSession.findFirst({
           where: { id: dto.treatmentSessionId, tenantId },
@@ -526,13 +571,7 @@ export class OrdersService {
         if (dto.unitPrice === undefined) throw lineInvalid('Indique el precio unitario.');
         if (dto.taxRatePercent === undefined) throw lineInvalid('Indique la tarifa de IVA.');
         if (!SUPPORTED_FREE_TAX_RATES.includes(dto.taxRatePercent)) throw taxRateUnsupported();
-        if (dto.patientId) {
-          const patient = await tx.patient.findFirst({
-            where: { id: dto.patientId, tenantId },
-            select: { id: true },
-          });
-          if (!patient) throw patientNotFound();
-        }
+        if (dto.patientId) await assertPatientExists(tx, tenantId, dto.patientId);
         line = {
           kind: 'FREE',
           treatmentSessionId: null,
@@ -546,6 +585,17 @@ export class OrdersService {
       }
 
       const created = await createItem(tx, tenantId, actor.userId, order.id, line);
+      if (line.kind === 'PRODUCT') {
+        await this.stockAllocation.reserve(tx, {
+          tenantId,
+          actorId: actor.userId,
+          orderItemId: created.id,
+          productId: line.productId!,
+          branchId: order.branchId,
+          quantity: Number(dto.quantity),
+          today: await clinicToday(tx, tenantId),
+        });
+      }
       await saveTotals(tx, { id: order.id, items: [...order.items, created] });
       await recordBillingAudit(tx, {
         tenantId,
@@ -572,6 +622,9 @@ export class OrdersService {
       const removed = order.items.find((item) => item.id === itemId);
       if (!removed) throw itemNotFound();
 
+      if (removed.kind === 'PRODUCT') {
+        await this.stockAllocation.release(tx, { tenantId, actorId, orderItemIds: [removed.id] });
+      }
       await tx.orderItem.delete({ where: { id: itemId } });
       await saveTotals(tx, {
         id: order.id,
@@ -676,6 +729,17 @@ export class OrdersService {
           cancellationReason: dto.reason,
         },
       });
+      // Only items not yet released still hold stock: release is not idempotent.
+      const heldProductItemIds = order.items
+        .filter((item) => item.kind === 'PRODUCT' && item.releasedAt === null)
+        .map((item) => item.id);
+      if (heldProductItemIds.length > 0) {
+        await this.stockAllocation.release(tx, {
+          tenantId,
+          actorId,
+          orderItemIds: heldProductItemIds,
+        });
+      }
       await tx.orderItem.updateMany({
         where: { orderId: order.id, releasedAt: null },
         data: { releasedAt: now },

@@ -60,6 +60,11 @@ export class AddOrderItemDto {
   @IsString()
   treatmentSessionId?: string;
 
+  @ApiPropertyOptional({ description: 'Required for PRODUCT.' })
+  @IsOptional()
+  @IsString()
+  productId?: string;
+
   @ApiPropertyOptional({ description: 'Required for FREE.' })
   @IsOptional()
   @Transform(trimText)
@@ -68,7 +73,10 @@ export class AddOrderItemDto {
   @MaxLength(300)
   description?: string;
 
-  @ApiPropertyOptional({ example: '1', description: 'FREE only. Defaults to 1.' })
+  @ApiPropertyOptional({
+    example: '1',
+    description: 'FREE: defaults to 1. PRODUCT: required, a whole number of at least 1.',
+  })
   @IsOptional()
   @Matches(QUANTITY, { message: 'La cantidad debe ser un decimal con hasta 6 decimales.' })
   quantity?: string;
