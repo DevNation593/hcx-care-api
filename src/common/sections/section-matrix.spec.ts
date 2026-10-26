@@ -13,6 +13,7 @@ import { ClinicalModulesController } from '../../clinical-modules/clinical-modul
 import { EncountersController } from '../../encounters/encounters.controller';
 import { InvoicingController } from '../../invoicing/invoicing.controller';
 import { ProductsController } from '../../inventory/products.controller';
+import { StockController } from '../../inventory/stock.controller';
 import { NotificationsController } from '../../notifications/notifications.controller';
 import {
   BillableSessionsController,
@@ -77,6 +78,7 @@ describe('section matrix', () => {
     [PaymentsController, 'core.billing.orders'],
     [CashRegistersController, 'core.billing.cash'],
     [ProductsController, 'core.billing.inventory'],
+    [StockController, 'core.billing.inventory'],
     [InvoicingController, 'core.billing.invoicing'],
     [BillingController, 'core.billing.invoicing'],
     [ReportsController, 'core.admin.reports'],

@@ -105,3 +105,10 @@ export const lotNotInBranch = () =>
     code: 'LOT_NOT_IN_BRANCH',
     message: 'El lote no pertenece a la sede de origen.',
   });
+
+export const stockReceiptNotFound = () =>
+  new NotFoundException({
+    statusCode: 404,
+    code: 'STOCK_RECEIPT_NOT_FOUND',
+    message: 'Entrada no encontrada.',
+  });

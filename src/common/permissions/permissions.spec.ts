@@ -20,6 +20,7 @@ import { BillingProfilesController } from '../../billing-profiles/billing-profil
 import { CashRegistersController } from '../../cash-registers/cash-registers.controller';
 import { OrdersController } from '../../orders/orders.controller';
 import { ProductsController } from '../../inventory/products.controller';
+import { StockController } from '../../inventory/stock.controller';
 import { InvoicingController } from '../../invoicing/invoicing.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -55,6 +56,7 @@ const controllers: Controller[] = [
   CashRegistersController,
   OrdersController,
   ProductsController,
+  StockController,
   InvoicingController,
   TreatmentSessionsController,
   ConsentDocumentsController,
@@ -198,6 +200,7 @@ describe('permission catalog', () => {
         'patients.controller.ts',
         'products.controller.ts',
         'record-documents.controller.ts',
+        'stock.controller.ts',
         'specialty-records.controller.ts',
         'treatments.controller.ts',
         'treatment-sessions.controller.ts',
