@@ -48,6 +48,9 @@ export async function takeFromLot(
   tx: Prisma.TransactionClient,
   input: MovementInput,
 ): Promise<boolean> {
+  if (!Number.isInteger(input.quantity) || input.quantity >= 0) {
+    throw new Error(`takeFromLot needs a negative integer quantity, got ${input.quantity}`);
+  }
   const units = -input.quantity;
   const { count } = await tx.stockLot.updateMany({
     where: { id: input.lotId, tenantId: input.tenantId, quantityOnHand: { gte: units } },
@@ -59,6 +62,9 @@ export async function takeFromLot(
 }
 
 export async function addToLot(tx: Prisma.TransactionClient, input: MovementInput): Promise<void> {
+  if (!Number.isInteger(input.quantity) || input.quantity <= 0) {
+    throw new Error(`addToLot needs a positive integer quantity, got ${input.quantity}`);
+  }
   const { count } = await tx.stockLot.updateMany({
     where: { id: input.lotId, tenantId: input.tenantId },
     data: { quantityOnHand: { increment: input.quantity } },

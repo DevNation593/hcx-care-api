@@ -84,6 +84,20 @@ describe('stock ledger', () => {
     expect(tx.stockMovement.create).not.toHaveBeenCalled();
   });
 
+  it.each([0, 2, -1.5, Number.NaN])('takeFromLot rejects a quantity of %s', async (quantity) => {
+    await expect(takeFromLot(client, input({ quantity }))).rejects.toThrow(/negative integer/);
+    expect(tx.stockLot.updateMany).not.toHaveBeenCalled();
+    expect(tx.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -3, 1.5, Number.NaN])('addToLot rejects a quantity of %s', async (quantity) => {
+    await expect(addToLot(client, input({ kind: 'ADJUSTMENT', quantity }))).rejects.toThrow(
+      /positive integer/,
+    );
+    expect(tx.stockLot.updateMany).not.toHaveBeenCalled();
+    expect(tx.stockMovement.create).not.toHaveBeenCalled();
+  });
+
   it('records the initial movement of a new lot without touching its balance', async () => {
     await recordInitialMovement(
       client,
