@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { zonedDateString } from '../common/utils/timezone';
 import { allocateFefo, FefoLot, isLotExpired } from './fefo';
 
 const TODAY = '2026-10-26';
@@ -30,6 +31,15 @@ describe('isLotExpired', () => {
 
   it('never expires without an expiry date', () => {
     expect(isLotExpired(null, TODAY)).toBe(false);
+  });
+
+  it('sells a lot through its expiry day in Guayaquil and not after it', () => {
+    const expiresAt = new Date('2026-10-26');
+    const at2330 = new Date('2026-10-27T04:30:00Z');
+    const at0001 = new Date('2026-10-27T05:01:00Z');
+    expect(isLotExpired(expiresAt, zonedDateString(at2330, 'America/Guayaquil'))).toBe(false);
+    expect(zonedDateString(at0001, 'America/Guayaquil')).toBe('2026-10-27');
+    expect(isLotExpired(expiresAt, zonedDateString(at0001, 'America/Guayaquil'))).toBe(true);
   });
 });
 
