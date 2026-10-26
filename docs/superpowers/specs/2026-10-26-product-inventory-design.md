@@ -11,8 +11,8 @@ inventario de T-27 en `TAREAS_PENDIENTES.md`.
 
 Los estudios estéticos venden productos (protector solar, cremas, sueros) además de sus
 tratamientos. Hoy la caja solo puede cobrar un producto como concepto libre (`OrderItemKind.FREE`):
-exige `billing.adjust`, la cajera escribe precio e IVA a mano, nada descuenta stock, y la web ni
-siquiera ofrece ese tipo de ítem. No hay forma de saber cuántas unidades quedan, cuánto vale el
+exige `billing.adjust`, la cajera escribe descripción, precio e IVA a mano («Agregar concepto» en
+la orden) y nada descuenta stock. No hay forma de saber cuántas unidades quedan, cuánto vale el
 inventario, qué está por vencer ni cuánto margen deja una venta.
 
 ## Objetivo
@@ -240,8 +240,9 @@ Módulo nuevo `api/src/inventory/`, con un servicio por responsabilidad: `produc
 
 | Ruta | Permiso | Notas |
 |---|---|---|
-| `GET /products?search=&barcode=&branchId=&active=` | `billing.create` o `inventory.manage` | Disponible no vencido por sede. Sin costo |
-| `GET /products/:id` | `billing.create` o `inventory.manage` | Con `inventory.manage`, incluye lotes y costos |
+| `GET /products/for-sale?search=&barcode=&branchId=` | `billing.create` | Activos, con disponible no vencido en la sede. Sin costo |
+| `GET /products?search=&active=` | `inventory.manage` | Catálogo con disponible por sede |
+| `GET /products/:id` | `inventory.manage` | Incluye lotes y costos |
 | `POST /products`, `PATCH /products/:id` | `inventory.manage` | |
 | `PATCH /products/:id/active` | `inventory.manage` | `{ isActive }` |
 | `GET /products/:id/lots?branchId=` | `inventory.manage` | |
