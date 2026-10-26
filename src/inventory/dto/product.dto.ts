@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
-  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -13,7 +12,6 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { SUPPORTED_FREE_TAX_RATES } from '../../orders/order-totals';
 import { TREATMENT_CODE_PATTERN } from '../../treatments/dto/treatment.dto';
 import { normalizeCatalogCode } from '../catalog-codes';
 
@@ -69,11 +67,11 @@ export class CreateProductDto {
   @Matches(POSITIVE_MONEY, { message: 'price debe ser mayor que 0.' })
   price: string;
 
-  @ApiProperty({ example: 15, enum: SUPPORTED_FREE_TAX_RATES as number[] })
-  @IsNumber()
-  @IsIn(SUPPORTED_FREE_TAX_RATES as number[], {
-    message: `taxRatePercent debe ser una de: ${SUPPORTED_FREE_TAX_RATES.join(', ')}.`,
+  @ApiProperty({
+    example: 15,
+    description: 'One of 0, 5 or 15; otherwise 422 TAX_RATE_UNSUPPORTED.',
   })
+  @IsNumber()
   taxRatePercent: number;
 
   @ApiProperty({ description: 'Whether each lot carries an expiry date.' })

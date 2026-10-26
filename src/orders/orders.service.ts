@@ -100,7 +100,7 @@ const branchRequired = () =>
 const lineInvalid = (message: string) =>
   new UnprocessableEntityException({ statusCode: 422, code: 'ORDER_LINE_INVALID', message });
 
-const taxRateUnsupported = () =>
+export const taxRateUnsupported = () =>
   new UnprocessableEntityException({
     statusCode: 422,
     code: 'TAX_RATE_UNSUPPORTED',

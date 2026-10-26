@@ -11,6 +11,8 @@ import {
   SetProductActiveDto,
   UpdateProductDto,
 } from './dto/product.dto';
+import { taxRateUnsupported } from '../orders/orders.service';
+import { SUPPORTED_FREE_TAX_RATES } from '../orders/order-totals';
 import { isLotExpired } from './fefo';
 import {
   productBarcodeTaken,
@@ -76,13 +78,17 @@ export interface ProductForSale {
 }
 
 /**
- * Which unique of a product was hit. The barcode index is raw SQL, so its P2002 may name the
- * index or the column; everything the error says about the target is searched. "barcode"
- * contains "code", so it is tested first.
+ * Which unique of a product was hit, from the error target only: the message carries the
+ * failed query's source, which names fields that have nothing to do with the violation. The
+ * target is a list of fields or, for the raw barcode index, an index or constraint name.
+ * "barcode" contains "code", so it is tested first.
  */
 function takenError(error: unknown): Error | null {
-  const { meta, message } = error as { meta?: Record<string, unknown>; message?: unknown };
-  const text = `${JSON.stringify(meta ?? {})} ${typeof message === 'string' ? message : ''}`;
+  const meta = (error as { meta?: { target?: unknown; constraint?: unknown } }).meta;
+  const parts = [meta?.target, meta?.constraint].flatMap((value) =>
+    Array.isArray(value) ? value : value == null ? [] : [value],
+  );
+  const text = parts.map(String).join(' ');
   if (/barcode/i.test(text)) return productBarcodeTaken();
   if (/code/i.test(text)) return productCodeTaken();
   if (/name/i.test(text)) return productNameTaken();
@@ -181,6 +187,7 @@ export class ProductsService {
   async create(tenantId: string, userId: string, dto: CreateProductDto): Promise<ProductDetail> {
     try {
       return await this.transaction(async (tx) => {
+        assertTaxRate(dto.taxRatePercent);
         const code = normalizeCatalogCode(dto.code);
         if (await isCodeUsedByTreatment(tx, tenantId, code)) throw productCodeTaken();
 
@@ -222,6 +229,7 @@ export class ProductsService {
     try {
       return await this.transaction(async (tx) => {
         const product = await this.findOwn(tx, tenantId, id);
+        if (dto.taxRatePercent !== undefined) assertTaxRate(dto.taxRatePercent);
 
         if (dto.tracksExpiry !== undefined && dto.tracksExpiry !== product.tracksExpiry) {
           if ((await tx.stockLot.count({ where: { tenantId, productId: id } })) > 0) {
@@ -377,6 +385,10 @@ export class ProductsService {
       return callback(tx);
     });
   }
+}
+
+function assertTaxRate(rate: number): void {
+  if (!SUPPORTED_FREE_TAX_RATES.includes(rate)) throw taxRateUnsupported();
 }
 
 function mapUnique(error: unknown): unknown {

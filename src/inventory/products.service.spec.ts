@@ -121,7 +121,48 @@ describe('ProductsService', () => {
     });
   });
 
+  describe('create validation', () => {
+    it('classifies by the target even when the message quotes other fields', async () => {
+      prisma.product.create.mockRejectedValue({
+        code: 'P2002',
+        message: [
+          'Invalid `tx.product.create()` invocation:',
+          '',
+          '  code,',
+          '  barcode: dto.barcode?.trim() || null,',
+          '',
+          'Unique constraint failed on the fields: (`tenantId`,`name`)',
+        ].join('\n'),
+        meta: { target: ['tenantId', 'name'] },
+      });
+
+      const error = await failure(service.create('tenant-1', 'user-1', createDto()));
+
+      expect(error.getResponse()).toMatchObject({ code: 'PRODUCT_NAME_TAKEN' });
+    });
+
+    it('rejects an unsupported tax rate with 422 TAX_RATE_UNSUPPORTED', async () => {
+      const error = await failure(
+        service.create('tenant-1', 'user-1', createDto({ taxRatePercent: 12 })),
+      );
+
+      expect(error.getStatus()).toBe(422);
+      expect(error.getResponse()).toMatchObject({ code: 'TAX_RATE_UNSUPPORTED' });
+      expect(prisma.product.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('update', () => {
+    it('rejects an unsupported tax rate with 422 TAX_RATE_UNSUPPORTED', async () => {
+      const error = await failure(
+        service.update('tenant-1', 'user-1', 'product-1', { taxRatePercent: 14 }),
+      );
+
+      expect(error.getStatus()).toBe(422);
+      expect(error.getResponse()).toMatchObject({ code: 'TAX_RATE_UNSUPPORTED' });
+      expect(prisma.product.update).not.toHaveBeenCalled();
+    });
+
     it('refuses to change tracksExpiry once the product has lots', async () => {
       prisma.stockLot.count.mockResolvedValue(1);
 
