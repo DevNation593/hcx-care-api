@@ -37,6 +37,7 @@ import { CashRegistersModule } from './cash-registers/cash-registers.module';
 import { InvoicingModule } from './invoicing/invoicing.module';
 import { OrdersModule } from './orders/orders.module';
 import { TreatmentsModule } from './treatments/treatments.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { TreatmentSessionsModule } from './treatment-sessions/treatment-sessions.module';
 import { DocumentVerificationModule } from './document-verification/document-verification.module';
 import { PermissionsModule } from './common/permissions/permissions.module';
@@ -113,6 +114,7 @@ const throttleTtlMs = throttleTtlRaw < 1000 ? throttleTtlRaw * 1000 : throttleTt
     DocumentTemplatesModule,
     ConsentsModule,
     TreatmentsModule,
+    InventoryModule,
     // Before TreatmentSessionsModule: `treatment-sessions/billable` must not match `:id`.
     OrdersModule,
     InvoicingModule,

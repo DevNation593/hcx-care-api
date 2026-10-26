@@ -19,6 +19,7 @@ import { TreatmentSessionsController } from '../../treatment-sessions/treatment-
 import { BillingProfilesController } from '../../billing-profiles/billing-profiles.controller';
 import { CashRegistersController } from '../../cash-registers/cash-registers.controller';
 import { OrdersController } from '../../orders/orders.controller';
+import { ProductsController } from '../../inventory/products.controller';
 import { InvoicingController } from '../../invoicing/invoicing.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -53,6 +54,7 @@ const controllers: Controller[] = [
   BillingProfilesController,
   CashRegistersController,
   OrdersController,
+  ProductsController,
   InvoicingController,
   TreatmentSessionsController,
   ConsentDocumentsController,
@@ -154,13 +156,7 @@ describe('permission catalog', () => {
 
   it('is exercised by at least one route for every permission', () => {
     const used = new Set(guardedHandlers.map(({ permission }) => permission));
-    // Permissions whose controller lands in a later task of the inventory plan; remove it there.
-    const notRoutedYet: string[] = ['inventory.manage'];
-    expect([...used].sort()).toEqual(
-      PERMISSION_CATALOG.map(({ key }) => key)
-        .filter((key) => !notRoutedYet.includes(key))
-        .sort(),
-    );
+    expect([...used].sort()).toEqual(PERMISSION_CATALOG.map(({ key }) => key).sort());
   });
 
   it.each(guardedHandlers)(
@@ -200,6 +196,7 @@ describe('permission catalog', () => {
         'orders.controller.ts',
         'patient-files.controller.ts',
         'patients.controller.ts',
+        'products.controller.ts',
         'record-documents.controller.ts',
         'specialty-records.controller.ts',
         'treatments.controller.ts',

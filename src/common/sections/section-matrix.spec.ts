@@ -12,6 +12,7 @@ import { DocumentTemplatesController } from '../../document-templates/document-t
 import { ClinicalModulesController } from '../../clinical-modules/clinical-modules.controller';
 import { EncountersController } from '../../encounters/encounters.controller';
 import { InvoicingController } from '../../invoicing/invoicing.controller';
+import { ProductsController } from '../../inventory/products.controller';
 import { NotificationsController } from '../../notifications/notifications.controller';
 import {
   BillableSessionsController,
@@ -75,6 +76,7 @@ describe('section matrix', () => {
     [BillableSessionsController, 'core.billing.orders'],
     [PaymentsController, 'core.billing.orders'],
     [CashRegistersController, 'core.billing.cash'],
+    [ProductsController, 'core.billing.inventory'],
     [InvoicingController, 'core.billing.invoicing'],
     [BillingController, 'core.billing.invoicing'],
     [ReportsController, 'core.admin.reports'],
