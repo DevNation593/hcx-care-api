@@ -15,6 +15,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateBy,
 } from 'class-validator';
 
 const trimText = ({ value }: { value: unknown }) =>
@@ -25,6 +26,21 @@ const MONEY = /^\d{1,8}(\.\d{1,2})?$/;
 const MONEY_MESSAGE = 'El monto debe ser un decimal mayor o igual a 0 con hasta 2 decimales.';
 // Non-negative decimal with at most 6 decimals (positivity is checked by the totals).
 const QUANTITY = /^\d{1,6}(\.\d{1,6})?$/;
+
+/**
+ * QUANTITY for every kind but PRODUCT, whose whole-number rule the service answers with
+ * 422 ORDER_LINE_INVALID. Unlike ValidateIf, it leaves the property's other validators on.
+ */
+const QuantityUnlessProduct = () =>
+  ValidateBy({
+    name: 'quantityUnlessProduct',
+    validator: {
+      validate: (value: unknown, args) =>
+        (args?.object as { kind?: unknown }).kind === 'PRODUCT' ||
+        (typeof value === 'string' && QUANTITY.test(value)),
+      defaultMessage: () => 'La cantidad debe ser un decimal con hasta 6 decimales.',
+    },
+  });
 
 export class CreateOrderDto {
   @ApiPropertyOptional({ description: 'Required when no session fixes the branch.' })
@@ -78,7 +94,8 @@ export class AddOrderItemDto {
     description: 'FREE: defaults to 1. PRODUCT: required, a whole number of at least 1.',
   })
   @IsOptional()
-  @Matches(QUANTITY, { message: 'La cantidad debe ser un decimal con hasta 6 decimales.' })
+  @IsString()
+  @QuantityUnlessProduct()
   quantity?: string;
 
   @ApiPropertyOptional({ example: '25.00', description: 'Required for FREE.' })
