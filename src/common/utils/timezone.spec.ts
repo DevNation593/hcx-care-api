@@ -1,4 +1,19 @@
-import { formatLongDateInZone, getZonedDateParts } from './timezone';
+import { formatLongDateInZone, getZonedDateParts, zonedDateString } from './timezone';
+
+describe('zonedDateString', () => {
+  const instant = new Date('2026-10-27T04:30:00Z');
+
+  it('writes the calendar day of the instant in the requested zone as YYYY-MM-DD', () => {
+    expect(zonedDateString(instant, 'America/Guayaquil')).toBe('2026-10-26');
+    expect(zonedDateString(instant, 'UTC')).toBe('2026-10-27');
+  });
+
+  it('falls back to the clinic default zone when the zone is missing or invalid', () => {
+    expect(zonedDateString(instant, 'Invalid/Zone')).toBe('2026-10-26');
+    expect(zonedDateString(instant, null)).toBe('2026-10-26');
+    expect(zonedDateString(instant)).toBe('2026-10-26');
+  });
+});
 
 describe('getZonedDateParts', () => {
   // Friday 2026-10-02 14:30 UTC

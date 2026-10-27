@@ -118,6 +118,39 @@ describe('invoice acceptance receipts and protected fiscal explanations', () => 
     expect(receipt.lastError).toBeNull();
     expect(crypto.decrypt).not.toHaveBeenCalled();
   });
+  it('sends a product line with the product code and its product id as local id', async () => {
+    tx.invoiceRequest.findUnique.mockResolvedValue(null);
+    tx.order.findFirst.mockResolvedValue({
+      ...(await tx.order.findFirst()),
+      items: [
+        {
+          id: 'item',
+          kind: 'PRODUCT',
+          productId: 'product-1',
+          product: { code: 'SOLAR-50' },
+          description: 'Protector solar',
+          quantity: new Prisma.Decimal(2),
+          unitPrice: new Prisma.Decimal(20),
+          discount: new Prisma.Decimal(0),
+          taxRatePercent: new Prisma.Decimal(0),
+        },
+      ],
+    });
+
+    await service.create('clinic', 'creator', 'order', 'new-key');
+
+    const include = tx.order.findFirst.mock.calls.at(-1)[0].include;
+    expect(include.items.include.product).toEqual({ select: { code: true } });
+    const snapshot = JSON.parse(crypto.encrypt.mock.calls[0][1]);
+    expect(snapshot.lines).toEqual([
+      expect.objectContaining({
+        localId: 'product-1',
+        code: 'SOLAR-50',
+        name: 'Protector solar',
+        quantity: '2.000000',
+      }),
+    ]);
+  });
   it('preserves decrypted SRI explanations for protected detail queries', async () => {
     const detail = await service.get('clinic', 'request');
     expect(detail.lastError.attempts[0].messages[0].message).toBe('PRIVATE_SRI_EXPLANATION');

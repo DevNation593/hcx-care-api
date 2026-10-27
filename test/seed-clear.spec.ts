@@ -19,6 +19,7 @@ async function clearingOrder(): Promise<string[]> {
       get: (_target, model: string) =>
         special[model] ?? {
           findMany: async () => [],
+          updateMany: async () => ({ count: 0 }),
           deleteMany: async () => {
             if (!deleted.includes(model)) deleted.push(model);
             return { count: 0 };

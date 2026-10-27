@@ -87,6 +87,13 @@ export const PERMISSION_CATALOG = [
     roles: ['MASTER'],
     grantable: ['PROFESIONAL', 'ASISTENTE'],
   },
+  {
+    key: 'inventory.manage',
+    group: 'Inventario',
+    label: 'Administrar productos, stock y costos',
+    roles: ['MASTER'],
+    grantable: ['PROFESIONAL', 'ASISTENTE'],
+  },
 ] as const satisfies readonly {
   key: string;
   group: string;

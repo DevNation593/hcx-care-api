@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma, Treatment, TreatmentVersion } from '@prisma/client';
 import { ConsentTemplatesService } from '../consents/consent-templates.service';
+import { isCodeUsedByProduct } from '../inventory/catalog-codes';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTreatmentDto, UpdateTreatmentDto } from './dto/treatment.dto';
 import { parseTreatmentRequirements, TreatmentRequirements } from './treatment-requirements';
@@ -153,6 +154,7 @@ export class TreatmentsService {
           ...(await this.versionIssues(tx, tenantId, dto.version)),
         ];
         if (issues.length > 0) throw invalid(issues);
+        if (await isCodeUsedByProduct(tx, tenantId, dto.code)) throw codeTaken();
 
         const created = await tx.treatment.create({
           data: {
@@ -184,6 +186,9 @@ export class TreatmentsService {
         await this.findOwn(tx, tenantId, id);
         const issues = await this.specialtyIssues(tx, tenantId, dto.specialtyId);
         if (issues.length > 0) throw invalid(issues);
+        if (dto.code !== undefined && (await isCodeUsedByProduct(tx, tenantId, dto.code))) {
+          throw codeTaken();
+        }
 
         const data: Prisma.TreatmentUncheckedUpdateInput = {};
         if (dto.name !== undefined) data.name = dto.name.trim();

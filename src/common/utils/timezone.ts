@@ -37,6 +37,25 @@ export function getZonedDateParts(date: Date, timeZone?: string | null): ZonedDa
 }
 
 /**
+ * The calendar day of an instant in the given IANA time zone as "YYYY-MM-DD".
+ * Falls back to the clinic default zone when the zone is missing or invalid.
+ */
+export function zonedDateString(date: Date, timeZone?: string | null): string {
+  const format = (zone: string) =>
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  try {
+    return format(timeZone || DEFAULT_CLINIC_TIMEZONE);
+  } catch {
+    return format(DEFAULT_CLINIC_TIMEZONE);
+  }
+}
+
+/**
  * The calendar day of an instant in the given IANA time zone, written out in Spanish
  * ("15 de octubre de 2026"). Falls back to UTC when the zone is missing or invalid.
  */

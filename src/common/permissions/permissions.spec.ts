@@ -19,6 +19,9 @@ import { TreatmentSessionsController } from '../../treatment-sessions/treatment-
 import { BillingProfilesController } from '../../billing-profiles/billing-profiles.controller';
 import { CashRegistersController } from '../../cash-registers/cash-registers.controller';
 import { OrdersController } from '../../orders/orders.controller';
+import { ProductsController } from '../../inventory/products.controller';
+import { StockController } from '../../inventory/stock.controller';
+import { InventoryReportsController } from '../../inventory/inventory-reports.controller';
 import { InvoicingController } from '../../invoicing/invoicing.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -53,6 +56,9 @@ const controllers: Controller[] = [
   BillingProfilesController,
   CashRegistersController,
   OrdersController,
+  ProductsController,
+  StockController,
+  InventoryReportsController,
   InvoicingController,
   TreatmentSessionsController,
   ConsentDocumentsController,
@@ -94,6 +100,7 @@ describe('permission catalog', () => {
       'treatments.manage',
       'billing.adjust',
       'cash.manage',
+      'inventory.manage',
     ]);
     expect(grantablePermissions('PROFESIONAL')).toEqual([
       'billing.view',
@@ -101,6 +108,7 @@ describe('permission catalog', () => {
       'treatments.manage',
       'billing.adjust',
       'cash.manage',
+      'inventory.manage',
     ]);
     expect(effectivePermissions('ASISTENTE', [], ['billing.view'])).toContain('billing.view');
     expect(effectivePermissions('ASISTENTE', [], ['clinical_records.view'])).not.toContain(
@@ -118,6 +126,13 @@ describe('permission catalog', () => {
       'treatments.manage',
     );
     expect(effectivePermissions('ASISTENTE', [])).not.toContain('treatments.manage');
+  });
+
+  it('keeps inventory management with the account holder unless it is granted', () => {
+    expect(rolePermissions('MASTER')).toContain('inventory.manage');
+    expect(rolePermissions('ASISTENTE')).not.toContain('inventory.manage');
+    expect(grantablePermissions('ASISTENTE')).toContain('inventory.manage');
+    expect(grantablePermissions('PROFESIONAL')).toContain('inventory.manage');
   });
 
   it('keeps billing and the cash register with the account holder unless they are granted', () => {
@@ -180,12 +195,15 @@ describe('permission catalog', () => {
         'consent-documents.controller.ts',
         'consent-templates.controller.ts',
         'encounters.controller.ts',
+        'inventory-reports.controller.ts',
         'invoicing.controller.ts',
         'next-session-plans.controller.ts',
         'orders.controller.ts',
         'patient-files.controller.ts',
         'patients.controller.ts',
+        'products.controller.ts',
         'record-documents.controller.ts',
+        'stock.controller.ts',
         'specialty-records.controller.ts',
         'treatments.controller.ts',
         'treatment-sessions.controller.ts',
