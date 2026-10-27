@@ -172,6 +172,15 @@ describe('permission catalog', () => {
     }
   });
 
+  it('leaves a cashier with exactly its own permissions despite leftovers of a former assistant', () => {
+    expect(effectivePermissions('CAJERO', ['patients.create'], ['billing.view'])).toEqual([
+      'billing.view',
+      'billing.create',
+      'billing.adjust',
+      'cash.manage',
+    ]);
+  });
+
   it('removes what the platform withdrew from a clinic role, including MASTER', () => {
     expect(effectivePermissions('ASISTENTE', ['appointments.cancel', 'billing.view'])).toEqual([
       'patients.create',

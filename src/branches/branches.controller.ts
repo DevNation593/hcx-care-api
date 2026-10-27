@@ -12,7 +12,7 @@ export class BranchesController {
   constructor(private readonly branchesService: BranchesService) {}
 
   @Get()
-  @Roles('MASTER', 'ASISTENTE', 'PROFESIONAL')
+  @Roles('MASTER', 'ASISTENTE', 'PROFESIONAL', 'CAJERO')
   @ApiOperation({ summary: 'List the branches of the clinic, the main one first' })
   list(@Param('tenantId') tenantId: string) {
     return this.branchesService.list(tenantId);

@@ -28,6 +28,7 @@ export class PatientsController {
   }
 
   @Get()
+  @Roles('MASTER', 'ASISTENTE', 'PROFESIONAL')
   @ApiOperation({ summary: 'List all patients' })
   @ApiQuery({ name: 'search', required: false, description: 'Search by name or email' })
   @ApiResponse({ status: 200, description: 'Patients list' })
@@ -36,6 +37,7 @@ export class PatientsController {
   }
 
   @Get(':patientId')
+  @Roles('MASTER', 'ASISTENTE', 'PROFESIONAL')
   @ApiOperation({ summary: 'Get patient details' })
   @ApiResponse({ status: 200, description: 'Patient found' })
   @ApiResponse({ status: 404, description: 'Patient not found' })

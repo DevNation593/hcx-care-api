@@ -37,6 +37,24 @@ describe('PlatformRolePermissionsService', () => {
     });
   });
 
+  it('shows the cashier with its four permissions and inventory as grantable', async () => {
+    const result = await service.describe('clinic-1', 'CAJERO');
+
+    expect(result.effective).toEqual([
+      'billing.view',
+      'billing.create',
+      'billing.adjust',
+      'cash.manage',
+    ]);
+    expect(result.permissions.map(({ key, allowed, source }) => [key, allowed, source])).toEqual([
+      ['billing.view', true, 'role'],
+      ['billing.create', true, 'role'],
+      ['billing.adjust', true, 'role'],
+      ['cash.manage', true, 'role'],
+      ['inventory.manage', false, 'grant'],
+    ]);
+  });
+
   it('can withdraw a permission from MASTER for the whole clinic', async () => {
     await service.replace('clinic-1', 'MASTER', 'platform-admin', ['patients.create']);
 

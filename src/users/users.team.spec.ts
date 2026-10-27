@@ -224,6 +224,62 @@ describe('UsersService clinic team control', () => {
     expect(users[0].managedByProvider).toBe(false);
   });
 
+  it('creates a cashier without a professional profile and without checking seats', async () => {
+    subscription.seatsPsychologistsMax = 0;
+    const result = await service.createForTenant(
+      'tenant-1',
+      member({ role: 'CAJERO' }) as any,
+      'admin-1',
+    );
+    expect(result).toMatchObject({ role: 'CAJERO', isActive: true });
+    expect(users[0].professionalProfile).toBeNull();
+    expect(subscription.seatsPsychologistsUsed).toBe(0);
+  });
+
+  it('rejects a professional profile for a cashier as for an assistant', async () => {
+    await expect(
+      service.createForTenant(
+        'tenant-1',
+        member({ role: 'CAJERO', professionalProfile: { specialtyId: 'specialty-1' } }) as any,
+        'admin-1',
+      ),
+    ).rejects.toMatchObject({ response: { code: 'PROFESSIONAL_PROFILE_NOT_ALLOWED' } });
+    expect(users).toHaveLength(0);
+  });
+
+  it('words the not-assignable error with the cashier role', async () => {
+    await expect(
+      service.createForTenant('tenant-1', member({ role: 'ADMIN' }) as any, 'admin-1'),
+    ).rejects.toMatchObject({
+      status: 400,
+      response: {
+        code: 'ROLE_NOT_ASSIGNABLE',
+        message: 'Solo se pueden asignar los roles Profesional, Asistente o Cajero.',
+      },
+    });
+  });
+
+  it.each([
+    ['ASISTENTE', 'CAJERO'],
+    ['CAJERO', 'ASISTENTE'],
+  ])('changes a %s to %s with no professional profile needed', async (from, to) => {
+    seed({ role: 'MASTER' });
+    const target = seed({ role: from });
+    await expect(
+      service.update('tenant-1', target.id, { role: to } as never, 'user-1'),
+    ).resolves.toBeDefined();
+    expect(target.role).toBe(to);
+  });
+
+  it('requires a profile when changing a cashier to professional', async () => {
+    seed({ role: 'MASTER' });
+    const cashier = seed({ role: 'CAJERO' });
+    await expect(
+      service.update('tenant-1', cashier.id, { role: 'PROFESIONAL' } as never, 'user-1'),
+    ).rejects.toMatchObject({ response: { code: 'PROFESSIONAL_SPECIALTY_REQUIRED' } });
+    expect(cashier.role).toBe('CAJERO');
+  });
+
   it('requires a specialty for a professional and rejects an assistant profile', async () => {
     await expect(
       service.createForTenant('tenant-1', member({ role: 'PROFESIONAL' }) as any, 'admin-1'),

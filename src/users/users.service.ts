@@ -57,13 +57,17 @@ const selfUserSelect = {
   professionalProfile: { include: { specialty: true } },
 } satisfies Prisma.UserSelect;
 
-const ASSIGNABLE_TEAM_ROLES: readonly UserRole[] = [UserRole.PROFESIONAL, UserRole.ASISTENTE];
+const ASSIGNABLE_TEAM_ROLES: readonly UserRole[] = [
+  UserRole.PROFESIONAL,
+  UserRole.ASISTENTE,
+  UserRole.CAJERO,
+];
 
 const roleNotAssignable = () =>
   new BadRequestException({
     statusCode: 400,
     code: 'ROLE_NOT_ASSIGNABLE',
-    message: 'Solo se pueden asignar los roles Profesional o Asistente.',
+    message: 'Solo se pueden asignar los roles Profesional, Asistente o Cajero.',
   });
 
 @Injectable()
@@ -396,7 +400,7 @@ export class UsersService {
     const nextRole = dto.role ?? user.role;
     const remove =
       dto.professionalProfile === null ||
-      (dto.role === UserRole.ASISTENTE &&
+      ((dto.role === UserRole.ASISTENTE || dto.role === UserRole.CAJERO) &&
         current &&
         dto.professionalProfile === undefined &&
         !input);
