@@ -10,7 +10,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { PlatformAuditService } from './platform-audit.service';
 
-export const CLINIC_ROLES = ['MASTER', 'PROFESIONAL', 'ASISTENTE'] as const;
+export const CLINIC_ROLES = ['MASTER', 'PROFESIONAL', 'ASISTENTE', 'CAJERO'] as const;
 export type ClinicRole = (typeof CLINIC_ROLES)[number];
 
 export function isClinicRole(role: string): role is ClinicRole {

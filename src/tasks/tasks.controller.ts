@@ -26,6 +26,7 @@ export class TasksController {
   }
 
   @Get()
+  @Roles('MASTER', 'ASISTENTE', 'PROFESIONAL')
   @ApiOperation({ summary: 'List tasks with filters' })
   @ApiQuery({ name: 'patientId', required: false })
   @ApiQuery({ name: 'assignedToId', required: false })
@@ -44,6 +45,7 @@ export class TasksController {
   }
 
   @Get(':taskId')
+  @Roles('MASTER', 'ASISTENTE', 'PROFESIONAL')
   @ApiOperation({ summary: 'Get task details' })
   @ApiResponse({ status: 200, description: 'Task found' })
   async findOne(

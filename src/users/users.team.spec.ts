@@ -87,6 +87,7 @@ describe('UsersService clinic team control', () => {
         ),
       },
       appointment: { count: jest.fn().mockResolvedValue(0) },
+      task: { count: jest.fn().mockResolvedValue(0) },
       user: {
         findUnique: jest.fn(
           async ({ where }) =>
@@ -222,6 +223,94 @@ describe('UsersService clinic team control', () => {
     await service.createForTenant('tenant-1', input as any, 'admin-1');
     expect(users[0].role).toBe(role);
     expect(users[0].managedByProvider).toBe(false);
+  });
+
+  it('creates a cashier without a professional profile and without checking seats', async () => {
+    subscription.seatsPsychologistsMax = 0;
+    const result = await service.createForTenant(
+      'tenant-1',
+      member({ role: 'CAJERO' }) as any,
+      'admin-1',
+    );
+    expect(result).toMatchObject({ role: 'CAJERO', isActive: true });
+    expect(users[0].professionalProfile).toBeNull();
+    expect(subscription.seatsPsychologistsUsed).toBe(0);
+  });
+
+  it('rejects a professional profile for a cashier as for an assistant', async () => {
+    await expect(
+      service.createForTenant(
+        'tenant-1',
+        member({ role: 'CAJERO', professionalProfile: { specialtyId: 'specialty-1' } }) as any,
+        'admin-1',
+      ),
+    ).rejects.toMatchObject({ response: { code: 'PROFESSIONAL_PROFILE_NOT_ALLOWED' } });
+    expect(users).toHaveLength(0);
+  });
+
+  it('words the not-assignable error with the cashier role', async () => {
+    await expect(
+      service.createForTenant('tenant-1', member({ role: 'ADMIN' }) as any, 'admin-1'),
+    ).rejects.toMatchObject({
+      status: 400,
+      response: {
+        code: 'ROLE_NOT_ASSIGNABLE',
+        message: 'Solo se pueden asignar los roles Profesional, Asistente o Cajero.',
+      },
+    });
+  });
+
+  it.each([
+    ['ASISTENTE', 'CAJERO'],
+    ['CAJERO', 'ASISTENTE'],
+  ])('changes a %s to %s with no professional profile needed', async (from, to) => {
+    seed({ role: 'MASTER' });
+    const target = seed({ role: from });
+    await expect(
+      service.update('tenant-1', target.id, { role: to } as never, 'user-1'),
+    ).resolves.toBeDefined();
+    expect(target.role).toBe(to);
+  });
+
+  it('refuses to turn someone with open tasks into a cashier', async () => {
+    seed({ role: 'MASTER' });
+    const target = seed({ role: 'ASISTENTE' });
+    db.task.count.mockResolvedValue(2);
+    await expect(
+      service.update('tenant-1', target.id, { role: 'CAJERO' } as never, 'user-1'),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: {
+        statusCode: 409,
+        code: 'USER_HAS_OPEN_TASKS',
+        message:
+          'Reasigna las actividades abiertas de esta persona antes de convertirla en cajero.',
+      },
+    });
+    expect(db.task.count).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant-1',
+        assignedToId: target.id,
+        status: { in: ['PENDING', 'IN_PROGRESS'] },
+      },
+    });
+    expect(target.role).toBe('ASISTENTE');
+  });
+
+  it('turns someone without open tasks into a cashier', async () => {
+    seed({ role: 'MASTER' });
+    const target = seed({ role: 'ASISTENTE' });
+    await service.update('tenant-1', target.id, { role: 'CAJERO' } as never, 'user-1');
+    expect(target.role).toBe('CAJERO');
+  });
+
+  it('requires a profile when changing a cashier to professional', async () => {
+    seed({ role: 'MASTER' });
+    const cashier = seed({ role: 'CAJERO' });
+    await expect(
+      service.update('tenant-1', cashier.id, { role: 'PROFESIONAL' } as never, 'user-1'),
+    ).rejects.toMatchObject({ response: { code: 'PROFESSIONAL_SPECIALTY_REQUIRED' } });
+    expect(cashier.role).toBe('CAJERO');
   });
 
   it('requires a specialty for a professional and rejects an assistant profile', async () => {
@@ -376,6 +465,7 @@ describe('UsersService clinic team control', () => {
     ],
     ['MASTER', { professionalProfile: null }, true, null],
     ['PROFESIONAL', { role: 'ASISTENTE' }, true, null],
+    ['PROFESIONAL', { role: 'CAJERO' }, true, null],
   ])(
     'deactivates treating assignments after %s loses clinical capacity through %j',
     async (role, change, expectedAccountActive, expectedProfileActive) => {
@@ -392,8 +482,11 @@ describe('UsersService clinic team control', () => {
         { tenantId: 'tenant-1', professionalId: 'another-professional', isActive: true },
       );
 
+      subscription.seatsPsychologistsUsed = 1;
+
       await service.update('tenant-1', target.id, change as any, 'admin-1');
 
+      expect(subscription.seatsPsychologistsUsed).toBe(0);
       expect(target.isActive).toBe(expectedAccountActive);
       expect(target.professionalProfile?.isActive ?? null).toBe(expectedProfileActive);
       expect(assignments.map((row) => row.isActive)).toEqual([false, false, true, true]);
