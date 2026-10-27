@@ -2,6 +2,7 @@ export type CanonicalRole =
   | 'MASTER'
   | 'PROFESIONAL'
   | 'ASISTENTE'
+  | 'CAJERO'
   | 'SOPORTE'
   | 'PACIENTE'
   | 'ADMIN';
@@ -10,6 +11,7 @@ const CANONICAL_ROLES: readonly string[] = [
   'MASTER',
   'PROFESIONAL',
   'ASISTENTE',
+  'CAJERO',
   'SOPORTE',
   'PACIENTE',
   'ADMIN',
@@ -27,3 +29,4 @@ export function areRolesEquivalent(actual: string, required: string): boolean {
 
 export const isMasterRole = (role: string): boolean => role === 'MASTER';
 export const isProfessionalRole = (role: string): boolean => role === 'PROFESIONAL';
+export const isCashierRole = (role: string): boolean => role === 'CAJERO';

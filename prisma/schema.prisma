@@ -22,6 +22,7 @@ enum UserRole {
   ASISTENTE
   SOPORTE // Obsoleto: sus funciones pasaron a ADMIN.
   PACIENTE // Paciente de un cliente
+  CAJERO // Cobra, factura y maneja la caja; sin acceso a agenda, pacientes ni historia clínica.
   MASTER // Titular de la cuenta del consultorio. Uno por tenant (índice parcial User_tenantId_master_key).
 }
 

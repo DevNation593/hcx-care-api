@@ -77,6 +77,56 @@ describe('RolesGuard', () => {
     expect(() => guard.canActivate(contextFor('SOPORTE'))).toThrow(ForbiddenException);
   });
 
+  describe('a role outside the list on a permission-guarded route', () => {
+    const run = (role: string, roles: string[], permission?: string) => {
+      const reflector = new Reflector();
+      const metadata: Record<string, unknown> = {
+        [ROLES_KEY]: roles,
+        [REQUIRE_PERMISSION_KEY]: permission,
+      };
+      jest
+        .spyOn(reflector, 'getAllAndOverride')
+        .mockImplementation((key) => metadata[key as string]);
+      const context = {
+        getHandler: () => undefined,
+        getClass: () => undefined,
+        switchToHttp: () => ({ getRequest: () => ({ user: { role } }) }),
+      } as unknown as ExecutionContext;
+      return () => new RolesGuard(reflector).canActivate(context);
+    };
+
+    it('lets a cashier through when the permission is one of its role', () => {
+      expect(run('CAJERO', ['MASTER'], 'billing.view')()).toBe(true);
+      expect(run('CAJERO', ['MASTER'], 'cash.manage')()).toBe(true);
+    });
+
+    it('lets a cashier through for a grantable permission, as an assistant', () => {
+      expect(run('CAJERO', ['MASTER'], 'inventory.manage')()).toBe(true);
+      expect(run('ASISTENTE', ['MASTER'], 'billing.view')()).toBe(true);
+    });
+
+    it('keeps a route without a permission closed to a cashier', () => {
+      expect(run('CAJERO', ['MASTER'])).toThrow(ForbiddenException);
+    });
+
+    it('keeps clinical routes closed to a cashier', () => {
+      expect(run('CAJERO', ['MASTER', 'PROFESIONAL'], 'clinical_records.view')).toThrow(
+        ForbiddenException,
+      );
+      expect(run('CAJERO', ['MASTER', 'ASISTENTE', 'PROFESIONAL'], 'patients.create')).toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('does not open a route to a role whose default permissions lack it', () => {
+      expect(run('ASISTENTE', ['MASTER'], 'billing.view')()).toBe(true); // grantable only
+      expect(run('ASISTENTE', ['MASTER', 'PROFESIONAL'], 'clinical_records.view')).toThrow(
+        ForbiddenException,
+      );
+      expect(run('SOPORTE', ['MASTER'], 'billing.view')).toThrow(ForbiddenException);
+    });
+  });
+
   it('allows a public route without a user', () => {
     const { guard, context } = setup(undefined, ['MASTER'], true);
     expect(guard.canActivate(context)).toBe(true);
