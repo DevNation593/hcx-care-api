@@ -91,6 +91,10 @@ function createMemoryDatabase() {
     findFirst: async ({ where }: { where?: Row } = {}) => find(model, where) ?? null,
     findMany: async ({ where }: { where?: Row } = {}) =>
       rows(model).filter((row) => matches(row, where)),
+    updateMany: async ({ data }: { data: Row }) => {
+      rows(model).forEach((row) => Object.assign(row, data));
+      return { count: rows(model).length };
+    },
     deleteMany: async () => {
       const count = rows(model).length;
       tables.set(model, []);
@@ -230,6 +234,40 @@ describe('demo seed', () => {
         CLINICAL_MODULES.filter((m) => m.healthOnly).map((m) => m.moduleKey),
       );
       expect(of('specialtyRecord').filter((r) => healthOnly.has(r.moduleKey))).toEqual([]);
+    });
+
+    it('stocks three products whose lots match their movements', () => {
+      expect(of('product')).toHaveLength(3);
+      expect(of('stockReceipt')).toHaveLength(1);
+      const movements = of('stockMovement');
+      expect(movements.every((m) => m.kind === 'RECEIPT')).toBe(true);
+      const lots = of('stockLot');
+      expect(lots).toHaveLength(4);
+      for (const lot of lots) {
+        const sum = movements
+          .filter((m) => m.lotId === lot.id)
+          .reduce((total, m) => total + m.quantity, 0);
+        expect(sum).toBeGreaterThan(0);
+        expect(lot.quantityOnHand).toBe(sum);
+      }
+    });
+
+    it('keeps product codes apart from treatment codes', () => {
+      const treatmentCodes = new Set(of('treatment').map((t) => t.code));
+      for (const product of of('product')) expect(treatmentCodes.has(product.code)).toBe(false);
+    });
+
+    it('has a lot expiring within 30 days and a product under its minimum', () => {
+      const today = new Date(NOW.getTime() - 5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const limit = new Date(`${today}T00:00:00.000Z`).getTime() + 30 * DAY_MS;
+      expect(of('stockLot').some((l) => l.expiresAt && l.expiresAt.getTime() < limit)).toBe(true);
+      const low = of('product').filter((product) => {
+        const onHand = of('stockLot')
+          .filter((l) => l.productId === product.id)
+          .reduce((total, l) => total + l.quantityOnHand, 0);
+        return onHand < product.minStock;
+      });
+      expect(low.map((product) => product.code)).toEqual(['ESP-FACIAL']);
     });
   });
 

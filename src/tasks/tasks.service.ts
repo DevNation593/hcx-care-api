@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { LEGACY_BILLING_OMIT } from '../patients/legacy-billing';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,6 +11,8 @@ import { PUBLIC_USER_SELECT } from '../common/utils/public-user-select';
 import { CreateTaskDto, UpdateTaskDto } from './dto/task.dto';
 
 export type TaskActor = { userId: string; role: string };
+
+const TASK_ASSIGNEE_ROLES: string[] = ['MASTER', 'ASISTENTE', 'PROFESIONAL'];
 
 @Injectable()
 export class TasksService {
@@ -38,6 +45,15 @@ export class TasksService {
 
     if (!user) {
       throw new NotFoundException('Usuario asignado no encontrado en esta clínica');
+    }
+
+    // Tasks carry patient data; staff without clinical access (cashier) cannot receive them.
+    if (!TASK_ASSIGNEE_ROLES.includes(toCanonicalRole(user.role) as string)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'TASK_ASSIGNEE_NOT_ALLOWED',
+        message: 'Solo se pueden asignar actividades al titular, a profesionales o a asistentes.',
+      });
     }
   }
 

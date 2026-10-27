@@ -14,7 +14,7 @@ import {
   validateFormSchema,
 } from '../src/clinical-forms/form-schema';
 import { CUSTOM_MODULE_PREFIX } from '../src/clinical-modules/clinical-module-registry';
-import { formatLongDateInZone } from '../src/common/utils/timezone';
+import { formatLongDateInZone, zonedDateString } from '../src/common/utils/timezone';
 import { renderConsentPdf } from '../src/consents/consent-pdf';
 import { consentChecksum, renderConsentText } from '../src/consents/consent-text';
 import { parseTreatmentRequirements } from '../src/treatments/treatment-requirements';
@@ -624,6 +624,100 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
   await book(camila, sofia, facial, 'SCHEDULED', { dayOffset: 1, time: '09:00' });
   await book(valentina, lucia, peeling, 'SCHEDULED', { dayOffset: 15, time: '10:00' });
   await book(camila, lucia, laser, 'SCHEDULED', { dayOffset: 5, time: '17:00' });
+
+  // ------------------------------------------------------------------ products and stock
+  const mainBranch = await db.branch.findFirst({ where: { tenantId, isMain: true } });
+  const product = (data: Omit<Prisma.ProductUncheckedCreateInput, 'tenantId' | 'createdById'>) =>
+    db.product.create({
+      data: { tenantId, createdById: studio.master.id, createdAt: clock.days(-20), ...data },
+    });
+  const sunscreen = await product({
+    code: 'PROT-SPF50',
+    name: 'Protector solar SPF50',
+    category: 'Cuidado de la piel',
+    price: 18,
+    taxRatePercent: 15,
+    tracksExpiry: true,
+    minStock: 5,
+  });
+  const serum = await product({
+    code: 'SER-VITC',
+    name: 'Sérum vitamina C',
+    category: 'Cuidado de la piel',
+    price: 32,
+    taxRatePercent: 15,
+    tracksExpiry: true,
+    minStock: 3,
+  });
+  const sponge = await product({
+    code: 'ESP-FACIAL',
+    name: 'Esponja facial',
+    category: 'Accesorios',
+    price: 4.5,
+    taxRatePercent: 15,
+    tracksExpiry: false,
+    minStock: 10,
+  });
+
+  // Lots expire on a calendar date: N days from the clinic's today, at UTC midnight.
+  const [year, month, day] = zonedDateString(clock.now, TIMEZONE).split('-').map(Number);
+  const expiresIn = (days: number) => new Date(Date.UTC(year, month - 1, day + days));
+
+  const receivedAt = clock.days(-10);
+  const receipt = await db.stockReceipt.create({
+    data: {
+      tenantId,
+      branchId: mainBranch.id,
+      supplierName: 'Distribuidora Dermocosmética Andina',
+      documentNumber: '001-002-000004517',
+      receivedAt,
+      note: 'Pedido mensual de productos de venta.',
+      createdById: studio.master.id,
+      createdAt: receivedAt,
+    },
+  });
+  const lots = [
+    { item: sunscreen, lotNumber: 'PS-2611', expiresAt: expiresIn(20), quantity: 4, unitCost: 9 },
+    {
+      item: sunscreen,
+      lotNumber: 'PS-2704',
+      expiresAt: expiresIn(180),
+      quantity: 12,
+      unitCost: 9.5,
+    },
+    { item: serum, lotNumber: 'VC-2705', expiresAt: expiresIn(210), quantity: 6, unitCost: 15 },
+    { item: sponge, lotNumber: null, expiresAt: null, quantity: 6, unitCost: 1.2 },
+  ];
+  for (const { item, lotNumber, expiresAt, quantity, unitCost } of lots) {
+    const lot = await db.stockLot.create({
+      data: {
+        tenantId,
+        productId: item.id,
+        branchId: mainBranch.id,
+        lotNumber,
+        expiresAt,
+        unitCost,
+        quantityReceived: quantity,
+        quantityOnHand: quantity,
+        receiptId: receipt.id,
+        receivedAt,
+      },
+    });
+    await db.stockMovement.create({
+      data: {
+        tenantId,
+        kind: 'RECEIPT',
+        productId: item.id,
+        branchId: mainBranch.id,
+        lotId: lot.id,
+        quantity,
+        unitCost,
+        receiptId: receipt.id,
+        createdById: studio.master.id,
+        createdAt: receivedAt,
+      },
+    });
+  }
 
   await syncUsage(ctx, studio);
   await db.tenantSubscription.update({

@@ -19,11 +19,15 @@ import { TreatmentSessionsController } from '../../treatment-sessions/treatment-
 import { BillingProfilesController } from '../../billing-profiles/billing-profiles.controller';
 import { CashRegistersController } from '../../cash-registers/cash-registers.controller';
 import { OrdersController } from '../../orders/orders.controller';
+import { ProductsController } from '../../inventory/products.controller';
+import { StockController } from '../../inventory/stock.controller';
+import { InventoryReportsController } from '../../inventory/inventory-reports.controller';
 import { InvoicingController } from '../../invoicing/invoicing.controller';
 import { TreatmentsController } from '../../treatments/treatments.controller';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { PermissionGuard } from '../guards/permission.guard';
+import { RolesGuard } from '../guards/roles.guard';
 import {
   effectivePermissions,
   grantablePermissions,
@@ -53,6 +57,9 @@ const controllers: Controller[] = [
   BillingProfilesController,
   CashRegistersController,
   OrdersController,
+  ProductsController,
+  StockController,
+  InventoryReportsController,
   InvoicingController,
   TreatmentSessionsController,
   ConsentDocumentsController,
@@ -94,6 +101,7 @@ describe('permission catalog', () => {
       'treatments.manage',
       'billing.adjust',
       'cash.manage',
+      'inventory.manage',
     ]);
     expect(grantablePermissions('PROFESIONAL')).toEqual([
       'billing.view',
@@ -101,6 +109,7 @@ describe('permission catalog', () => {
       'treatments.manage',
       'billing.adjust',
       'cash.manage',
+      'inventory.manage',
     ]);
     expect(effectivePermissions('ASISTENTE', [], ['billing.view'])).toContain('billing.view');
     expect(effectivePermissions('ASISTENTE', [], ['clinical_records.view'])).not.toContain(
@@ -120,6 +129,13 @@ describe('permission catalog', () => {
     expect(effectivePermissions('ASISTENTE', [])).not.toContain('treatments.manage');
   });
 
+  it('keeps inventory management with the account holder unless it is granted', () => {
+    expect(rolePermissions('MASTER')).toContain('inventory.manage');
+    expect(rolePermissions('ASISTENTE')).not.toContain('inventory.manage');
+    expect(grantablePermissions('ASISTENTE')).toContain('inventory.manage');
+    expect(grantablePermissions('PROFESIONAL')).toContain('inventory.manage');
+  });
+
   it('keeps billing and the cash register with the account holder unless they are granted', () => {
     const keys = ['billing.view', 'billing.create', 'billing.adjust', 'cash.manage'];
 
@@ -131,6 +147,38 @@ describe('permission catalog', () => {
         expect(effectivePermissions(role, [], [key])).toContain(key);
       }
     }
+  });
+
+  it('gives the cashier billing and the cash register, and only inventory on request', () => {
+    expect(rolePermissions('CAJERO')).toEqual([
+      'billing.view',
+      'billing.create',
+      'billing.adjust',
+      'cash.manage',
+    ]);
+    expect(grantablePermissions('CAJERO')).toEqual(['inventory.manage']);
+
+    const clinical = PERMISSION_CATALOG.filter(
+      ({ key }) =>
+        key.startsWith('patients.') ||
+        key.startsWith('appointments.') ||
+        key.startsWith('clinical_records.') ||
+        key === 'treatments.manage',
+    );
+    expect(clinical.length).toBeGreaterThan(0);
+    for (const entry of clinical) {
+      expect(entry.roles as readonly string[]).not.toContain('CAJERO');
+      expect((entry as { grantable?: readonly string[] }).grantable ?? []).not.toContain('CAJERO');
+    }
+  });
+
+  it('leaves a cashier with exactly its own permissions despite leftovers of a former assistant', () => {
+    expect(effectivePermissions('CAJERO', ['patients.create'], ['billing.view'])).toEqual([
+      'billing.view',
+      'billing.create',
+      'billing.adjust',
+      'cash.manage',
+    ]);
   });
 
   it('removes what the platform withdrew from a clinic role, including MASTER', () => {
@@ -180,12 +228,15 @@ describe('permission catalog', () => {
         'consent-documents.controller.ts',
         'consent-templates.controller.ts',
         'encounters.controller.ts',
+        'inventory-reports.controller.ts',
         'invoicing.controller.ts',
         'next-session-plans.controller.ts',
         'orders.controller.ts',
         'patient-files.controller.ts',
         'patients.controller.ts',
+        'products.controller.ts',
         'record-documents.controller.ts',
+        'stock.controller.ts',
         'specialty-records.controller.ts',
         'treatments.controller.ts',
         'treatment-sessions.controller.ts',
@@ -255,6 +306,42 @@ describe('PermissionGuard', () => {
 
     db.tenantRolePermission.findFirst.mockResolvedValueOnce({ id: 'grant' });
     await expect(guard.canActivate(context('restricted', assistant))).resolves.toBe(true);
+  });
+
+  it('refuses a cashier whose own permission was withdrawn, and lets the others through', async () => {
+    const cashier = { ...professional, role: 'CAJERO' };
+    db.tenantRolePermission.findFirst.mockResolvedValueOnce({ id: 'withdrawn' });
+    await expect(guard.canActivate(context('restricted', cashier))).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'PERMISSION_DENIED', permission: 'billing.create' },
+    });
+    expect(db.tenantRolePermission.findFirst.mock.calls[0][0].where).toMatchObject({
+      role: 'CAJERO',
+      permission: 'billing.create',
+      granted: false,
+    });
+
+    db.tenantRolePermission.findFirst.mockResolvedValueOnce(null);
+    await expect(guard.canActivate(context('restricted', cashier))).resolves.toBe(true);
+  });
+
+  it('refuses an assistant without the billing.view grant on GET /orders, through both guards', async () => {
+    const handler = OrdersController.prototype.list;
+    const orders = {
+      getHandler: () => handler,
+      getClass: () => OrdersController,
+      switchToHttp: () => ({
+        getRequest: () => ({ user: { ...professional, role: 'ASISTENTE' } }),
+      }),
+    } as unknown as ExecutionContext;
+
+    // The role guard lets a grantable permission through; the permission guard decides.
+    expect(new RolesGuard(new Reflector()).canActivate(orders)).toBe(true);
+    db.tenantRolePermission.findFirst.mockResolvedValueOnce(null);
+    await expect(guard.canActivate(orders)).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'PERMISSION_DENIED', permission: 'billing.view' },
+    });
   });
 
   it('does not query for unguarded or public routes', async () => {

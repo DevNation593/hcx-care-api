@@ -23,6 +23,7 @@ describe('TreatmentsService', () => {
     formDefinitionVersion: { findFirst: jest.fn() },
     consentTemplateVersion: { findFirst: jest.fn() },
     tenantSpecialty: { findUnique: jest.fn() },
+    product: { findFirst: jest.fn() },
   };
   const db = prisma as unknown as PrismaService;
   const service = new TreatmentsService(db, new ConsentTemplatesService(db));
@@ -114,6 +115,26 @@ describe('TreatmentsService', () => {
       });
       expect(result.versions[0]).toMatchObject({ version: 1, price: 120.5, taxRatePercent: 12 });
       expect(typeof result.versions[0].price).toBe('number');
+    });
+
+    it('rejects a code that a product already has with 409 TREATMENT_CODE_TAKEN', async () => {
+      prisma.product.findFirst.mockResolvedValue({ id: 'product-1' });
+
+      const error = await failure(
+        service.create('tenant-1', 'user-1', {
+          name: 'Botox',
+          code: ' prot-01 ',
+          version: input(),
+        }),
+      );
+
+      expect(error.getStatus()).toBe(409);
+      expect(error.getResponse()).toMatchObject({ code: 'TREATMENT_CODE_TAKEN' });
+      expect(prisma.product.findFirst.mock.calls[0][0].where).toMatchObject({
+        tenantId: 'tenant-1',
+        code: 'PROT-01',
+      });
+      expect(prisma.treatment.create).not.toHaveBeenCalled();
     });
 
     it('maps a taken name to 409 TREATMENT_NAME_TAKEN', async () => {
@@ -420,6 +441,15 @@ describe('TreatmentsService', () => {
 
       await invalidIssues(service.update('tenant-1', 'treatment-1', { specialtyId: 'other' }));
 
+      expect(prisma.treatment.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a new code that a product already has with 409 TREATMENT_CODE_TAKEN', async () => {
+      prisma.product.findFirst.mockResolvedValue({ id: 'product-1' });
+
+      const error = await failure(service.update('tenant-1', 'treatment-1', { code: 'prot-01' }));
+
+      expect(error.getResponse()).toMatchObject({ code: 'TREATMENT_CODE_TAKEN' });
       expect(prisma.treatment.update).not.toHaveBeenCalled();
     });
 

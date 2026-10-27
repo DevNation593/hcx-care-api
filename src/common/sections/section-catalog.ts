@@ -27,6 +27,7 @@ export const SECTION_KEYS = [
   'core.billing.orders',
   'core.billing.cash',
   'core.billing.invoicing',
+  'core.billing.inventory',
   'core.admin',
   'core.admin.team',
   'core.admin.branches',
@@ -163,6 +164,12 @@ export const SECTION_CATALOG: readonly SectionDefinition[] = [
   {
     key: 'core.billing.invoicing',
     name: 'Facturación electrónica',
+    parent: 'core.billing',
+    requires: ['core.billing.orders'],
+  },
+  {
+    key: 'core.billing.inventory',
+    name: 'Inventario',
     parent: 'core.billing',
     requires: ['core.billing.orders'],
   },

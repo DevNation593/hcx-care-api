@@ -31,6 +31,7 @@ export interface OrderView {
     id: string;
     kind: OrderItemKind;
     treatmentSessionId: string | null;
+    productId: string | null;
     patient: { id: string; firstName: string; lastName: string } | null;
     description: string;
     quantity: string;
@@ -95,6 +96,7 @@ export function toOrderView(order: OrderWithRelations): OrderView {
       id: item.id,
       kind: item.kind,
       treatmentSessionId: item.treatmentSessionId,
+      productId: item.productId,
       patient: item.patient
         ? {
             id: item.patient.id,

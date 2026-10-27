@@ -1,17 +1,23 @@
 import {
   areRolesEquivalent,
+  isCashierRole,
   isMasterRole,
   isProfessionalRole,
   toCanonicalRole,
 } from './role-compatibility';
 
 describe('role compatibility', () => {
-  it.each(['MASTER', 'PROFESIONAL', 'ASISTENTE', 'SOPORTE', 'PACIENTE', 'ADMIN'] as const)(
-    'keeps %s as a canonical role',
-    (role) => {
-      expect(toCanonicalRole(role)).toBe(role);
-    },
-  );
+  it.each([
+    'MASTER',
+    'PROFESIONAL',
+    'ASISTENTE',
+    'CAJERO',
+    'SOPORTE',
+    'PACIENTE',
+    'ADMIN',
+  ] as const)('keeps %s as a canonical role', (role) => {
+    expect(toCanonicalRole(role)).toBe(role);
+  });
 
   it.each(['CLIENTE', 'PSICOLOGO', 'OTRO', ''])('does not resolve %s', (role) => {
     expect(toCanonicalRole(role)).toBeUndefined();
@@ -23,6 +29,12 @@ describe('role compatibility', () => {
     expect(areRolesEquivalent('CLIENTE', 'MASTER')).toBe(false);
     expect(areRolesEquivalent('PSICOLOGO', 'PROFESIONAL')).toBe(false);
     expect(areRolesEquivalent('CLIENTE', 'CLIENTE')).toBe(false);
+  });
+
+  it('classifies the cashier', () => {
+    expect(isCashierRole('CAJERO')).toBe(true);
+    expect(isCashierRole('ASISTENTE')).toBe(false);
+    expect(isCashierRole('MASTER')).toBe(false);
   });
 
   it('classifies the account holder and professionals', () => {

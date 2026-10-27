@@ -94,9 +94,9 @@ export class OrdersController {
   @Roles('MASTER')
   @RequirePermission('billing.create')
   @ApiOperation({
-    summary: 'Add a treatment session or a free item',
+    summary: 'Add a treatment session, a catalog product or a free item',
     description:
-      'FREE items and discounts also need billing.adjust. 409 ORDER_NOT_EDITABLE, 409 ORDER_VERSION_CONFLICT, 422 TAX_RATE_UNSUPPORTED.',
+      'FREE items and discounts also need billing.adjust. A PRODUCT takes price and tax from the catalog and draws its stock from the order branch (first expired, first out). 403 SECTION_NOT_ENABLED (PRODUCT without core.billing.inventory), 404 PRODUCT_NOT_FOUND, 409 ORDER_NOT_EDITABLE, 409 ORDER_VERSION_CONFLICT, 409 PRODUCT_INACTIVE, 409 INSUFFICIENT_STOCK, 422 ORDER_LINE_INVALID, 422 TAX_RATE_UNSUPPORTED.',
   })
   addItem(
     @Param('tenantId') tenantId: string,
@@ -110,7 +110,11 @@ export class OrdersController {
   @Delete(':id/items/:itemId')
   @Roles('MASTER')
   @RequirePermission('billing.create')
-  @ApiOperation({ summary: 'Remove an item; pass the order version as ?version=' })
+  @ApiOperation({
+    summary: 'Remove an item; pass the order version as ?version=',
+    description:
+      'A PRODUCT line returns its units to the lots it came from. 404 ORDER_ITEM_NOT_FOUND, 409 ORDER_NOT_EDITABLE.',
+  })
   removeItem(
     @Param('tenantId') tenantId: string,
     @CurrentUser() user: AuthUser,
@@ -181,7 +185,7 @@ export class OrdersController {
   @Roles('MASTER')
   @RequirePermission('billing.create')
   @ApiOperation({
-    summary: 'Cancel an order and release its sessions',
+    summary: 'Cancel an order and release its sessions and product stock',
     description: '409 ORDER_HAS_PAYMENTS.',
   })
   cancel(
