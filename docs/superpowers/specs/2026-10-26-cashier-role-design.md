@@ -63,8 +63,11 @@ En `src/common/permissions/permission-catalog.ts`:
 | `inventory.manage` | `MASTER` | `PROFESIONAL`, `ASISTENTE`, `CAJERO` |
 
 Ningún otro permiso del catálogo menciona a `CAJERO`. Las rutas de caja, órdenes, pagos, perfiles de
-facturación, facturación e inventario ya usan `@Roles('MASTER')` + `@RequirePermission(...)`, que
-deja pasar a quien tenga el permiso por su rol o concedido; no cambian. Las rutas con listas de roles
+facturación, facturación e inventario usan `@Roles('MASTER')` + `@RequirePermission(...)` y no
+cambian. Lo que cambia es `RolesGuard` (`src/common/guards/roles.guard.ts`): hoy, a un rol fuera de la
+lista solo lo deja pasar si el permiso de la ruta es **concedible** para ese rol; pasa a dejarlo pasar
+también si el permiso es **de su rol** (`rolePermissions(role)`). `PermissionGuard` sigue teniendo la
+última palabra y respeta lo que el titular o la plataforma le hayan retirado. Las rutas con listas de roles
 explícitas (`'MASTER', 'ASISTENTE', 'PROFESIONAL'` y similares) no se tocan, así que el cajero queda
 fuera de pacientes, citas, sedes, tratamientos, consentimientos, notas, registros y archivos.
 
