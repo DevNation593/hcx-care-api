@@ -87,6 +87,7 @@ describe('UsersService clinic team control', () => {
         ),
       },
       appointment: { count: jest.fn().mockResolvedValue(0) },
+      task: { count: jest.fn().mockResolvedValue(0) },
       user: {
         findUnique: jest.fn(
           async ({ where }) =>
@@ -269,6 +270,38 @@ describe('UsersService clinic team control', () => {
       service.update('tenant-1', target.id, { role: to } as never, 'user-1'),
     ).resolves.toBeDefined();
     expect(target.role).toBe(to);
+  });
+
+  it('refuses to turn someone with open tasks into a cashier', async () => {
+    seed({ role: 'MASTER' });
+    const target = seed({ role: 'ASISTENTE' });
+    db.task.count.mockResolvedValue(2);
+    await expect(
+      service.update('tenant-1', target.id, { role: 'CAJERO' } as never, 'user-1'),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: {
+        statusCode: 409,
+        code: 'USER_HAS_OPEN_TASKS',
+        message:
+          'Reasigna las actividades abiertas de esta persona antes de convertirla en cajero.',
+      },
+    });
+    expect(db.task.count).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant-1',
+        assignedToId: target.id,
+        status: { in: ['PENDING', 'IN_PROGRESS'] },
+      },
+    });
+    expect(target.role).toBe('ASISTENTE');
+  });
+
+  it('turns someone without open tasks into a cashier', async () => {
+    seed({ role: 'MASTER' });
+    const target = seed({ role: 'ASISTENTE' });
+    await service.update('tenant-1', target.id, { role: 'CAJERO' } as never, 'user-1');
+    expect(target.role).toBe('CAJERO');
   });
 
   it('requires a profile when changing a cashier to professional', async () => {

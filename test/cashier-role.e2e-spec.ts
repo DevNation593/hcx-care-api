@@ -252,7 +252,11 @@ describe('Cashier role: cash desk without clinical reach (E2E)', () => {
 
   it('4. the cashier cannot read patients, appointments or clinical notes', async () => {
     for (const path of ['patients', 'appointments', 'clinical-notes']) {
-      await request(server()).get(`${base()}/${path}`).set(as('cashier')).expect(403);
+      const refused = await request(server())
+        .get(`${base()}/${path}`)
+        .set(as('cashier'))
+        .expect(403);
+      expect(refused.body.message).toMatch(/Required roles/);
     }
   });
 
@@ -271,7 +275,12 @@ describe('Cashier role: cash desk without clinical reach (E2E)', () => {
       .send({ allowed: CASHIER_PERMISSIONS.filter((p) => p !== 'billing.adjust') })
       .expect(200);
 
-    await discount(created.body).expect(403);
+    const refused = await discount(created.body).expect(403);
+    expect(refused.body).toMatchObject({
+      code: 'PERMISSION_DENIED',
+      permission: 'billing.adjust',
+      message: 'El administrador de la plataforma retiró este permiso de tu rol.',
+    });
     const unchanged = await request(server())
       .get(`${base()}/orders/${created.body.id}`)
       .set(as('cashier'))
@@ -287,7 +296,14 @@ describe('Cashier role: cash desk without clinical reach (E2E)', () => {
   });
 
   it('6. the inventory is closed to the cashier until inventory.manage is granted', async () => {
-    await request(server()).get(`${base()}/products`).set(as('cashier')).expect(403);
+    const refused = await request(server())
+      .get(`${base()}/products`)
+      .set(as('cashier'))
+      .expect(403);
+    expect(refused.body).toMatchObject({
+      code: 'PERMISSION_DENIED',
+      permission: 'inventory.manage',
+    });
 
     await request(server())
       .put(roleUrl())
@@ -298,5 +314,36 @@ describe('Cashier role: cash desk without clinical reach (E2E)', () => {
       .expect(200);
 
     await request(server()).get(`${base()}/products`).set(as('cashier')).expect(200);
+  });
+
+  it('7. the owner cannot assign a patient task to the cashier', async () => {
+    const born = new Date();
+    born.setUTCFullYear(born.getUTCFullYear() - 30);
+    const patient = await request(server())
+      .post(`${base()}/patients`)
+      .set(as('master'))
+      .send({
+        firstName: 'Paciente',
+        lastName: 'Tarea',
+        dateOfBirth: born.toISOString().slice(0, 10),
+        identificationType: 'PASSPORT',
+        identificationNumber: `TK${Date.now()}`,
+      })
+      .expect(201);
+
+    const refused = await request(server())
+      .post(`${base()}/tasks`)
+      .set(as('master'))
+      .send({
+        title: 'Llamar al paciente',
+        patientId: patient.body.id,
+        priority: 'MEDIUM',
+        assignedToId: cashierId,
+      })
+      .expect(400);
+    expect(refused.body).toMatchObject({
+      code: 'TASK_ASSIGNEE_NOT_ALLOWED',
+      message: 'Solo se pueden asignar actividades al titular, a profesionales o a asistentes.',
+    });
   });
 });

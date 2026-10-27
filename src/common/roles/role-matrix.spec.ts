@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ExecutionContext } from '@nestjs/common';
+import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { RolesGuard } from '../guards/roles.guard';
 import { PLATFORM_ROUTE_KEY } from '../decorators/platform-route.decorator';
@@ -247,7 +247,8 @@ describe('role matrix', () => {
               getClass: () => controller,
               switchToHttp: () => ({ getRequest: () => ({ user: { role: 'CAJERO' } }) }),
             } as unknown as ExecutionContext);
-          } catch {
+          } catch (error) {
+            if (!(error instanceof ForbiddenException)) throw error;
             continue;
           }
           const route = `${controller.name}.${name}`;

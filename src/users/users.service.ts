@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma, TenantType, UserRole } from '@prisma/client';
+import { Prisma, TaskStatus, TenantType, UserRole } from '@prisma/client';
 import { CreateTenantUserDto, CreateUserDto, InviteUserDto, UpdateUserDto } from './dto/user.dto';
 import { AuthService } from '../auth/auth.service';
 import { isMasterRole, isProfessionalRole } from '../common/roles/role-compatibility';
@@ -451,6 +451,23 @@ export class UsersService {
       input !== undefined ||
       dto.professionalProfile !== undefined;
     if (touchesRoleOrProfile) this.profiles.validateRoleProfile(nextRole, profile);
+    if (dto.role === UserRole.CAJERO && user.role !== UserRole.CAJERO) {
+      const openTasks = await tx.task.count({
+        where: {
+          tenantId,
+          assignedToId: userId,
+          status: { in: [TaskStatus.PENDING, TaskStatus.IN_PROGRESS] },
+        },
+      });
+      if (openTasks > 0) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'USER_HAS_OPEN_TASKS',
+          message:
+            'Reasigna las actividades abiertas de esta persona antes de convertirla en cajero.',
+        });
+      }
+    }
     const hadClinicalCapacity = user.isActive && current?.isActive === true;
     const willHaveClinicalCapacity =
       (dto.isActive ?? user.isActive) &&

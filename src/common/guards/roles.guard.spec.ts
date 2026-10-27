@@ -209,7 +209,8 @@ describe('RolesGuard against the real route metadata', () => {
                 getClass: () => controller,
                 switchToHttp: () => ({ getRequest: () => ({ user: { role } }) }),
               } as unknown as ExecutionContext);
-            } catch {
+            } catch (error) {
+              if (!(error instanceof ForbiddenException)) throw error;
               admitted = false;
             }
             expect({ route: `${controller.name}.${name}`, role, admitted }).toEqual({
