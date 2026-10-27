@@ -432,6 +432,7 @@ describe('UsersService clinic team control', () => {
     ],
     ['MASTER', { professionalProfile: null }, true, null],
     ['PROFESIONAL', { role: 'ASISTENTE' }, true, null],
+    ['PROFESIONAL', { role: 'CAJERO' }, true, null],
   ])(
     'deactivates treating assignments after %s loses clinical capacity through %j',
     async (role, change, expectedAccountActive, expectedProfileActive) => {
@@ -448,8 +449,11 @@ describe('UsersService clinic team control', () => {
         { tenantId: 'tenant-1', professionalId: 'another-professional', isActive: true },
       );
 
+      subscription.seatsPsychologistsUsed = 1;
+
       await service.update('tenant-1', target.id, change as any, 'admin-1');
 
+      expect(subscription.seatsPsychologistsUsed).toBe(0);
       expect(target.isActive).toBe(expectedAccountActive);
       expect(target.professionalProfile?.isActive ?? null).toBe(expectedProfileActive);
       expect(assignments.map((row) => row.isActive)).toEqual([false, false, true, true]);
