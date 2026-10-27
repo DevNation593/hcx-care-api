@@ -167,8 +167,17 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   await db.invoicingConnection.deleteMany();
   // Payments restrict deleting their order and cash register; items restrict their session.
   await db.payment.deleteMany();
+  await db.orderItemLot.deleteMany();
   await db.orderItem.deleteMany();
   await db.order.deleteMany();
+  // Inventory: movements and sale allocations first, then lots (transfer-derived ones point at
+  // their source lot), receipts, transfers and products. They restrict users and branches.
+  await db.stockMovement.deleteMany();
+  await db.stockLot.updateMany({ data: { sourceLotId: null } });
+  await db.stockLot.deleteMany();
+  await db.stockReceipt.deleteMany();
+  await db.stockTransfer.deleteMany();
+  await db.product.deleteMany();
   await db.cashRegisterSession.deleteMany();
   await db.patientBillingProfile.deleteMany();
   // Consent evidence restricts deleting its document.

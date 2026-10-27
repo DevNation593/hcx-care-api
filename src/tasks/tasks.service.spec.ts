@@ -33,7 +33,12 @@ describe('TasksService visibility per professional', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     prisma.patient.findFirst.mockResolvedValue({ id: 'patient-1', tenantId });
-    prisma.user.findFirst.mockResolvedValue({ id: 'someone', tenantId, isActive: true });
+    prisma.user.findFirst.mockResolvedValue({
+      id: 'someone',
+      tenantId,
+      isActive: true,
+      role: 'PROFESIONAL',
+    });
     prisma.task.findMany.mockResolvedValue([]);
     prisma.task.findFirst.mockResolvedValue(task());
     prisma.task.create.mockImplementation(async ({ data }) => ({ id: 'task-new', ...data }));
@@ -155,6 +160,26 @@ describe('TasksService visibility per professional', () => {
       const data = prisma.task.create.mock.calls[0][0].data;
       expect(data.assignedTo).toEqual({ connect: { id: 'pro-1' } });
       expect(data.createdBy).toEqual({ connect: { id: 'pro-1' } });
+    });
+
+    it('refuses to assign a task to a cashier', async () => {
+      prisma.user.findFirst.mockResolvedValue({
+        id: 'cashier-1',
+        tenantId,
+        isActive: true,
+        role: 'CAJERO',
+      });
+      await expect(
+        service.create(tenantId, admin, { ...input, assignedToId: 'cashier-1' } as never),
+      ).rejects.toMatchObject({
+        status: 400,
+        response: {
+          statusCode: 400,
+          code: 'TASK_ASSIGNEE_NOT_ALLOWED',
+          message: 'Solo se pueden asignar actividades al titular, a profesionales o a asistentes.',
+        },
+      });
+      expect(prisma.task.create).not.toHaveBeenCalled();
     });
 
     it('lets an administrator assign a task to any clinic user', async () => {

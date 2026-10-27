@@ -86,6 +86,21 @@ describe('section catalog', () => {
       'core.billing.invoicing',
     ]);
   });
+  it('requires orders for inventory', () => {
+    expect(SECTION_CATALOG.find((x) => x.key === 'core.billing.inventory')).toMatchObject({
+      parent: 'core.billing',
+      requires: ['core.billing.orders'],
+    });
+    expect(() => validateSections(['core.billing', 'core.billing.inventory'])).toThrow(
+      expect.objectContaining({
+        response: expect.objectContaining({
+          code: 'SECTION_DEPENDENCY',
+          section: 'core.billing.inventory',
+          requires: ['core.billing.orders'],
+        }),
+      }),
+    );
+  });
   it('accepts the whole catalog', () => {
     expect(validateSections([...SECTION_KEYS])).toEqual([...SECTION_KEYS]);
   });

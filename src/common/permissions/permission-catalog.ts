@@ -55,15 +55,15 @@ export const PERMISSION_CATALOG = [
     key: 'billing.view',
     group: 'Facturación',
     label: 'Ver facturas',
-    roles: ['MASTER'],
-    // Billing is the master role's by default; the platform may grant it to other clinic roles.
+    roles: ['MASTER', 'CAJERO'],
+    // Billing is the master's and the cashier's by default; the platform may grant it to others.
     grantable: ['PROFESIONAL', 'ASISTENTE'],
   },
   {
     key: 'billing.create',
     group: 'Facturación',
     label: 'Emitir facturas',
-    roles: ['MASTER'],
+    roles: ['MASTER', 'CAJERO'],
     grantable: ['PROFESIONAL', 'ASISTENTE'],
   },
   {
@@ -77,15 +77,22 @@ export const PERMISSION_CATALOG = [
     key: 'billing.adjust',
     group: 'Facturación',
     label: 'Aplicar descuentos, conceptos libres y devoluciones',
-    roles: ['MASTER'],
+    roles: ['MASTER', 'CAJERO'],
     grantable: ['PROFESIONAL', 'ASISTENTE'],
   },
   {
     key: 'cash.manage',
     group: 'Caja',
     label: 'Abrir y cerrar la caja',
-    roles: ['MASTER'],
+    roles: ['MASTER', 'CAJERO'],
     grantable: ['PROFESIONAL', 'ASISTENTE'],
+  },
+  {
+    key: 'inventory.manage',
+    group: 'Inventario',
+    label: 'Administrar productos, stock y costos',
+    roles: ['MASTER'],
+    grantable: ['PROFESIONAL', 'ASISTENTE', 'CAJERO'],
   },
 ] as const satisfies readonly {
   key: string;

@@ -65,6 +65,7 @@ export class InvoiceRequestsService {
                     treatmentVersion: { select: { treatment: { select: { code: true } } } },
                   },
                 },
+                product: { select: { code: true } },
               },
             },
             payments: { where: { status: 'RECORDED' } },
@@ -128,10 +129,17 @@ export class InvoiceRequestsService {
           emissionPointCode: p.emissionPointCode,
           issueDate: new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10),
           lines: order.items.map((i) => ({
-            localId: i.kind === 'TREATMENT_SESSION' ? i.treatmentSession!.treatmentVersionId : i.id,
+            localId:
+              i.kind === 'TREATMENT_SESSION'
+                ? i.treatmentSession!.treatmentVersionId
+                : i.kind === 'PRODUCT'
+                  ? i.productId!
+                  : i.id,
             ...(i.kind === 'TREATMENT_SESSION'
               ? { code: i.treatmentSession!.treatmentVersion.treatment.code }
-              : {}),
+              : i.kind === 'PRODUCT'
+                ? { code: i.product!.code }
+                : {}),
             name: i.description,
             quantity: i.quantity.toFixed(6),
             unitPrice: i.unitPrice.toFixed(2),

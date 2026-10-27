@@ -1,5 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { RolesGuard } from '../guards/roles.guard';
 import { PLATFORM_ROUTE_KEY } from '../decorators/platform-route.decorator';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { AppointmentsController } from '../../appointments/appointments.controller';
@@ -38,6 +41,7 @@ type Controller = { name: string; prototype: object };
 const MASTER = ['MASTER'];
 const CLINICAL = ['MASTER', 'PROFESIONAL'];
 const TEAM = ['MASTER', 'ASISTENTE', 'PROFESIONAL'];
+const TEAM_AND_CASHIER = [...TEAM, 'CAJERO'];
 
 function handlerRoles(controller: Controller, handler: string): string[] | undefined {
   return Reflect.getMetadata(ROLES_KEY, (controller.prototype as Record<string, object>)[handler]);
@@ -98,7 +102,7 @@ describe('role matrix', () => {
     [CatalogsController, 'listMedications', CLINICAL],
     [CatalogsController, 'createMedication', CLINICAL],
     [CatalogsController, 'updateMedication', CLINICAL],
-    [BranchesController, 'list', TEAM],
+    [BranchesController, 'list', TEAM_AND_CASHIER],
     [BranchesController, 'create', MASTER],
     [BranchesController, 'update', MASTER],
     [BranchesController, 'setProfessionals', MASTER],
@@ -123,6 +127,10 @@ describe('role matrix', () => {
     [ClinicalNotesController, 'update', ['PROFESIONAL']],
     [NextSessionPlansController, 'create', ['PROFESIONAL']],
     [NextSessionPlansController, 'update', ['PROFESIONAL']],
+    [PatientsController, 'findAll', TEAM],
+    [PatientsController, 'findOne', TEAM],
+    [TasksController, 'findAll', TEAM],
+    [TasksController, 'findOne', TEAM],
     [PatientsController, 'create', TEAM],
     [PatientsController, 'update', TEAM],
   ] as [Controller, string, string[]][])('%p.%s requires %j', (controller, handler, expected) => {
@@ -203,6 +211,101 @@ describe('role matrix', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('cashier reaches only billing, cash and inventory routes and the branch list', () => {
+    const guard = new RolesGuard(new Reflector());
+    const cashierControllers = [
+      'OrdersController',
+      'PaymentsController',
+      'BillableSessionsController',
+      'CashRegistersController',
+      'BillingProfilesController',
+      'InvoicingController',
+      'BillingController',
+      'ProductsController',
+      'StockController',
+      'InventoryReportsController',
+    ];
+    const cashierRoutes = ['BranchesController.list', 'TreatmentSessionsController.compliance'];
+    const reached: string[] = [];
+    const outside: string[] = [];
+    const open: string[] = [];
+
+    for (const file of controllerFiles(path.resolve(__dirname, '../..'))) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      for (const value of Object.values(require(file)) as unknown[]) {
+        if (typeof value !== 'function' || !value.prototype) continue;
+        const controller = value as Controller;
+        for (const name of Object.getOwnPropertyNames(controller.prototype)) {
+          const handler = (controller.prototype as Record<string, unknown>)[name];
+          if (name === 'constructor' || typeof handler !== 'function') continue;
+          const names = !!(handlerRoles(controller, name) ?? classRoles(controller))?.length;
+          try {
+            guard.canActivate({
+              getHandler: () => handler,
+              getClass: () => controller,
+              switchToHttp: () => ({ getRequest: () => ({ user: { role: 'CAJERO' } }) }),
+            } as unknown as ExecutionContext);
+          } catch (error) {
+            if (!(error instanceof ForbiddenException)) throw error;
+            continue;
+          }
+          const route = `${controller.name}.${name}`;
+          if (!names) {
+            open.push(route);
+            continue;
+          }
+          reached.push(route);
+          if (!cashierControllers.includes(controller.name) && !cashierRoutes.includes(route)) {
+            outside.push(route);
+          }
+        }
+      }
+    }
+
+    expect(reached.length).toBeGreaterThan(30);
+    expect(reached).toContain('BranchesController.list');
+    expect(outside).toEqual([]);
+    // Routes without @Roles are open to every signed-in role. None may carry patient, agenda,
+    // clinical, treatment or file data: a new open route must be added here on purpose.
+    expect(open.sort()).toEqual([
+      'AuthController.changePassword',
+      'AuthController.forgotPassword',
+      'AuthController.login',
+      'AuthController.logout',
+      'AuthController.logoutAll',
+      'AuthController.refresh',
+      'AuthController.resetPassword',
+      'DocumentVerificationController.verify',
+      'HealthController.checkHealth',
+      'InvoicingController.download',
+      'InvoicingWebhookController.receive',
+      'NotificationsController.getPreferences',
+      'NotificationsController.getUserNotifications',
+      'NotificationsController.getWebPushKey',
+      'NotificationsController.markAllAsRead',
+      'NotificationsController.markAsRead',
+      'NotificationsController.registerFcmToken',
+      'NotificationsController.removeFcmToken',
+      'NotificationsController.subscribeWebPush',
+      'NotificationsController.unsubscribeWebPush',
+      'NotificationsController.updatePreferences',
+      'SpecialtiesController.listModules',
+      'SpecialtiesController.listSpecialties',
+      'SpecialtyCatalogController.list',
+      'SubscriptionController.getCurrentSubscription',
+      'SubscriptionController.getUsageMetrics',
+      'TenantSettingsController.findOne',
+      'TenantsController.findOne',
+      'TenantsController.getSubscription',
+      'UserPermissionsController.describe',
+      'UsersController.changePassword',
+      'UsersController.findAll',
+      'UsersController.findOne',
+      'UsersController.updateSelf',
+      'UsersController.uploadAvatar',
+    ]);
   });
 
   it.each(platformControllers)('%p is a platform route', (controller) => {
