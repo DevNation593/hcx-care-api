@@ -2,7 +2,7 @@ import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
-import { areRolesEquivalent } from '../roles/role-compatibility';
+import { areRolesEquivalent, isCashierRole } from '../roles/role-compatibility';
 import {
   grantablePermissions,
   Permission,
@@ -43,16 +43,18 @@ export class RolesGuard implements CanActivate {
     const hasRole = requiredRoles.some((role) => areRolesEquivalent(user.role, role));
 
     if (!hasRole) {
-      // A role outside the list may still hold the route's permission by default (the cashier's
-      // own) or through a platform grant; the permission guard, which reads the grants and the
-      // withdrawals, has the last word.
+      // A role outside the list may still hold the route's permission through a platform grant,
+      // or, for the cashier only, by default: its own permissions open the MASTER-only billing
+      // routes. Other roles keep the list as final for permissions they hold by default (a MASTER
+      // must not reach PROFESIONAL-only clinical writes). The permission guard, which reads the
+      // grants and the withdrawals, has the last word.
       const permission = this.reflector.getAllAndOverride<Permission | undefined>(
         REQUIRE_PERMISSION_KEY,
         [context.getHandler(), context.getClass()],
       );
       if (
         permission &&
-        (rolePermissions(user.role).includes(permission) ||
+        ((isCashierRole(user.role) && rolePermissions(user.role).includes(permission)) ||
           grantablePermissions(user.role).includes(permission))
       ) {
         return true;
