@@ -105,6 +105,8 @@ describe('Product inventory: receipt, sale, invoice, cancel, transfer, adjustmen
         seatsPsychologistsMax: 5,
         maxActivePatients: 100,
         storageGB: 1,
+        // The tests open a second branch.
+        maxBranches: 2,
         monthlyElectronicInvoicesLimit: 50,
       },
     });

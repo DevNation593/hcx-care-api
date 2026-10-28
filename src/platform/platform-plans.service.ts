@@ -29,6 +29,7 @@ export interface PlanView {
   storageGB: number;
   monthlyElectronicInvoicesLimit: number;
   includedSpecialties: number;
+  maxBranches: number;
   trialDays: number;
   modules: SectionKey[];
   clinicsCount: number;
@@ -312,6 +313,7 @@ function toView(plan: PlanWithModules & { _count: { subscriptions: number } }): 
     storageGB: plan.storageGB,
     monthlyElectronicInvoicesLimit: plan.monthlyElectronicInvoicesLimit,
     includedSpecialties: plan.includedSpecialties,
+    maxBranches: plan.maxBranches,
     trialDays: plan.trialDays,
     // Catalog order, so the panel and the audit read the same way every time.
     modules: SECTION_CATALOG.map(({ key }) => key).filter((key) => keys.has(key)),

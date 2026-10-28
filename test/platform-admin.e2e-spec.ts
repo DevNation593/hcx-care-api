@@ -115,7 +115,7 @@ describe('Platform admin panel (E2E)', () => {
         masterLastName: 'E2E',
         masterEmail,
         temporaryPassword,
-        planId: 'plan_clinic_basic',
+        planId: 'plan_profesional',
         specialtyCodes: ['PSYCHOLOGY'],
         sections: SECTION_KEYS.filter((key) => key !== 'core.agenda.tasks'),
       })
@@ -145,7 +145,7 @@ describe('Platform admin panel (E2E)', () => {
           masterLastName: 'Estudio',
           masterEmail: 'titular@estudio-e2e.test',
           temporaryPassword,
-          planId: 'plan_clinic_basic',
+          planId: 'plan_profesional',
           trialDays: 0,
           specialtyCodes: ['AESTHETICS'],
           ...extra,
@@ -341,7 +341,7 @@ describe('Platform admin panel (E2E)', () => {
     expect(selection.body.specialties.map((specialty: { code: string }) => specialty.code)).toEqual(
       ['PSYCHOLOGY', 'NUTRITION'],
     );
-    // Clínica Básico includes two specialties: no extra charge.
+    // Profesional includes two specialties: no extra charge.
     expect(selection.body.pricing.specialtyAddonsPrice).toBe(0);
 
     await http().patch(moduleUrl).set(bearer(masterToken)).send({ enabled: false }).expect(403);
@@ -456,6 +456,7 @@ describe('Platform admin panel (E2E)', () => {
         storageGB: 3,
         monthlyElectronicInvoicesLimit: 20,
         includedSpecialties: 1,
+        maxBranches: 3,
         trialDays: 0,
         modules: SECTION_KEYS.filter((key) => key !== 'core.agenda.tasks'),
       };
@@ -486,6 +487,7 @@ describe('Platform admin panel (E2E)', () => {
         status: 'ACTIVE',
         maxActivePatients: 200,
         storageGB: 3,
+        maxBranches: 3,
         overriddenFields: [],
         // 50 plus the second specialty of the clinic beyond the one included, at 10.
         monthlyTotal: 60,
