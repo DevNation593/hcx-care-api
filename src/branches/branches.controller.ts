@@ -23,7 +23,8 @@ export class BranchesController {
   @Roles('MASTER')
   @ApiOperation({
     summary: 'Create a branch',
-    description: 'A PERSONAL tenant has a single branch (409 BRANCH_LIMIT_REACHED).',
+    description:
+      'Active branches are capped by the plan (maxBranches); a PERSONAL tenant has a single one (409 BRANCH_LIMIT_REACHED).',
   })
   create(@Param('tenantId') tenantId: string, @Body() dto: CreateBranchDto) {
     return this.branchesService.create(tenantId, dto);

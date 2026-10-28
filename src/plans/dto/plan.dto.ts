@@ -23,7 +23,7 @@ const upperCode = ({ value }: { value: unknown }) =>
 const money = { maxDecimalPlaces: 2 };
 
 export class CreatePlanDto {
-  @ApiProperty({ example: 'CLINIC_PRO', description: 'A-Z, 0-9 and _, stored uppercase.' })
+  @ApiProperty({ example: 'CENTRO', description: 'A-Z, 0-9 and _, stored uppercase.' })
   @Transform(upperCode)
   @IsString()
   @Matches(/^[A-Z0-9][A-Z0-9_]{1,39}$/, {
@@ -94,6 +94,13 @@ export class CreatePlanDto {
   @IsInt()
   @Min(1)
   includedSpecialties: number;
+
+  @ApiProperty({
+    description: 'Active branches. A personal practice keeps one whatever this says.',
+  })
+  @IsInt()
+  @Min(1)
+  maxBranches: number;
 
   @ApiProperty({ description: 'Trial days suggested when the plan is given to a clinic.' })
   @IsInt()
