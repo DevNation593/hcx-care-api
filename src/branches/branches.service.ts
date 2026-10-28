@@ -10,9 +10,6 @@ import { CreateBranchDto, UpdateBranchDto } from './dto/branch.dto';
 
 export const MAIN_BRANCH_NAME = 'Sede principal';
 
-/** A practice of one professional works from one place; clinics are capped only against abuse. */
-const MAX_ACTIVE_BRANCHES: Record<TenantType, number> = { PERSONAL: 1, CLINIC: 50 };
-
 type BranchDb = PrismaService | Prisma.TransactionClient;
 
 const isUniqueViolation = (error: unknown) =>
@@ -227,20 +224,29 @@ export class BranchesService {
     }
   }
 
+  /**
+   * The plan sets how many branches can be active. A practice of one professional works from one
+   * place whatever its plan says.
+   */
   private async assertRoomForAnother(tx: Prisma.TransactionClient, tenantId: string) {
     const [tenant, active] = await Promise.all([
-      tx.tenant.findUnique({ where: { id: tenantId }, select: { tenantType: true } }),
+      tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { tenantType: true, subscription: { select: { maxBranches: true } } },
+      }),
       tx.branch.count({ where: { tenantId, isActive: true } }),
     ]);
-    const limit = MAX_ACTIVE_BRANCHES[tenant?.tenantType ?? 'PERSONAL'];
+    const personal = (tenant?.tenantType ?? TenantType.PERSONAL) === TenantType.PERSONAL;
+    const limit = personal ? 1 : (tenant?.subscription?.maxBranches ?? 1);
     if (active >= limit) {
       throw new ConflictException({
         statusCode: 409,
         code: 'BRANCH_LIMIT_REACHED',
-        message:
-          limit === 1
-            ? 'Un consultorio individual trabaja con una sola sede.'
-            : `Un consultorio puede tener hasta ${limit} sedes activas.`,
+        message: personal
+          ? 'Un consultorio individual trabaja con una sola sede.'
+          : limit === 1
+            ? 'Tu plan incluye una sola sede activa.'
+            : `Tu plan incluye hasta ${limit} sedes activas.`,
         limit,
       });
     }

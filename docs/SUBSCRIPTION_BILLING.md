@@ -1,6 +1,6 @@
 # Planes, cobro y ciclo de vida de la suscripción
 
-**Fecha:** 2026-10-25 · **Antes:** 2026-10-01 (T-05 y T-06)
+**Fecha:** 2026-10-28 · **Antes:** 2026-10-25, 2026-10-01 (T-05 y T-06)
 
 ## Decisión
 
@@ -10,7 +10,7 @@ No hay proveedor de cobro integrado. El cobro es **manual con aprobación explí
 
 ## Planes
 
-Un plan tiene código (fijo), nombre, tipo de consultorio (`PERSONAL` o `CLINIC`), precio base, precio por profesional y por especialidad adicional, límites (profesionales, pacientes activos, GB, facturas electrónicas al mes, especialidades incluidas), días de prueba sugeridos y los módulos/submódulos del catálogo que incluye.
+Un plan tiene código (fijo), nombre, tipo de consultorio (`PERSONAL` o `CLINIC`), precio base, precio por profesional y por especialidad adicional, límites (profesionales, pacientes activos, GB, facturas electrónicas al mes, especialidades incluidas, sedes activas), días de prueba sugeridos y los módulos/submódulos del catálogo que incluye.
 
 | Ruta | Uso |
 | --- | --- |
@@ -21,9 +21,29 @@ Un plan tiene código (fijo), nombre, tipo de consultorio (`PERSONAL` o `CLINIC`
 
 Las ediciones se auditan en el tenant de la plataforma con la entidad `PLAN`.
 
+### Catálogo vigente (`20261028000000_plan_ladder`)
+
+Precios en USD al mes, más IVA.
+
+| Código | Plan | Tipo | Precio | Profesionales | Profesional extra | Sedes | Comprobantes/mes | Pacientes activos | GB | Especialidades | Especialidad extra |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `ESENCIAL` | Esencial | `PERSONAL` | 24,90 | 1 | — | 1 | 30 | 100 | 3 | 1 | 10 |
+| `PROFESIONAL` | Profesional | `CLINIC` | 44,90 | 3 | 14 | 1 | 100 | 300 | 10 | 2 | 10 |
+| `CENTRO` | Centro | `CLINIC` | 79,90 | 6 | 12 | 2 | 300 | 600 | 25 | 3 | 10 |
+| `CLINICA` | Clínica | `CLINIC` | 149,90 | 15 | 10 | 5 | 1.000 | 1.500 | 60 | 5 | 10 |
+| `CLINIC_ENTERPRISE` | Personalizado | `CLINIC` | A medida | 999 | — | 50 | 3.000 | Sin límite | 100 | Todas | 15 |
+
+Los cuatro primeros tienen 14 días de prueba. Llenar un plan con profesionales extra cuesta más que el plan siguiente, que además trae más sedes y comprobantes.
+
+`PERSONAL_BASIC`, `PERSONAL_PRO`, `CLINIC_BASIC` y `CLINIC_PRO` quedan archivados: sus consultorios los conservan con el mismo precio y límites, y con las sedes que ya podían tener (1 en un consultorio individual, 50 en una clínica). Pasarlos a un plan nuevo es un cambio de plan desde el panel.
+
+### Sedes
+
+`maxBranches` limita las sedes **activas**: crear una sede o reactivar una inactiva por encima del límite responde `409 BRANCH_LIMIT_REACHED` con `limit`. Desactivar una sede libera su lugar. Un consultorio `PERSONAL` trabaja con una sola sede, diga lo que diga su plan.
+
 ### Valores de cada consultorio
 
-`TenantSubscription` guarda los valores vigentes (`basePrice`, `pricePerSeat`, `specialtyPrice`, `currency`, `seatsPsychologistsMax`, `maxActivePatients`, `storageGB`, `monthlyElectronicInvoicesLimit`, `includedSpecialties`); los bloqueos leen esas columnas. `overriddenFields` lista las que el `ADMIN` fijó para ese consultorio: editar el plan no las toca.
+`TenantSubscription` guarda los valores vigentes (`basePrice`, `pricePerSeat`, `specialtyPrice`, `currency`, `seatsPsychologistsMax`, `maxActivePatients`, `storageGB`, `monthlyElectronicInvoicesLimit`, `includedSpecialties`, `maxBranches`); los bloqueos leen esas columnas. `overriddenFields` lista las que el `ADMIN` fijó para ese consultorio: editar el plan no las toca.
 
 - `PUT /platform/tenants/:tenantId/subscription/overrides` — `{ values, reset?, reason }`: fija valores propios o los devuelve al plan.
 - `PUT /platform/tenants/:tenantId/sections` — módulos del consultorio. Una fila que coincide con lo que da el plan queda `source = PLAN`; una que difiere, `OVERRIDE`, y sobrevive a las ediciones del plan.
@@ -84,7 +104,8 @@ Crea los cinco planes que el código definía (los mismos valores que `src/plans
 
 ## Lo que no cubre
 
-- **Sitio público de precios:** es estático (`web/src/content/site.ts`) y no lee los planes de la base.
+- **Sitio público de precios:** es estático (`web/src/content/site.ts`) y no lee los planes de la base; copia el catálogo vigente de arriba.
+- **Comprobantes adicionales:** no hay paquetes; un consultorio que necesita más sin cambiar de plan recibe un ajuste de `monthlyElectronicInvoicesLimit`.
 - **Avisos al consultorio** (cobro emitido, pago confirmado, vencimiento): dependen del servicio de correo (T-07).
 - **Instrucciones de pago:** la web muestra un texto genérico.
 - **Facturación anual:** no existe.

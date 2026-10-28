@@ -72,9 +72,9 @@ describe('Subscription billing (E2E)', () => {
     await app.close();
   });
 
-  it('starts on a trial of Clínica Básico', async () => {
+  it('starts on a trial of Profesional', async () => {
     expect(await subscription()).toMatchObject({
-      planId: 'plan_clinic_basic',
+      planId: 'plan_profesional',
       status: 'TRIALING',
       seatsPsychologistsMax: 3,
     });
@@ -110,10 +110,10 @@ describe('Subscription billing (E2E)', () => {
     expect(listed.body[0]).toMatchObject({
       kind: 'RENEWAL',
       status: 'PENDING',
-      planId: 'plan_clinic_basic',
-      planName: 'Clínica Básico',
+      planId: 'plan_profesional',
+      planName: 'Profesional',
     });
-    expect(Number(listed.body[0].amount)).toBe(99);
+    expect(Number(listed.body[0].amount)).toBe(44.9);
     paymentId = listed.body[0].id;
     expect((await subscription()).status).toBe('TRIALING');
   });
@@ -138,7 +138,7 @@ describe('Subscription billing (E2E)', () => {
     const first = await confirm();
     expect(first.body.alreadyConfirmed).toBe(false);
     const active = await subscription();
-    expect(active).toMatchObject({ planId: 'plan_clinic_basic', status: 'ACTIVE' });
+    expect(active).toMatchObject({ planId: 'plan_profesional', status: 'ACTIVE' });
     expect(active.currentPeriodEnd!.getTime()).toBeGreaterThan(days(30).getTime());
 
     const second = await confirm();

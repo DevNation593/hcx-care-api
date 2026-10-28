@@ -16,6 +16,7 @@ export const PLAN_VALUE_FIELDS = {
   storageGB: 'storageGB',
   monthlyElectronicInvoicesLimit: 'monthlyElectronicInvoicesLimit',
   includedSpecialties: 'includedSpecialties',
+  maxBranches: 'maxBranches',
 } as const satisfies Record<string, keyof Plan>;
 
 export type PlanValueField = keyof typeof PLAN_VALUE_FIELDS;

@@ -32,7 +32,7 @@ export async function createTestTenant(
       masterLastName: String(sequence),
       masterEmail: 'admin+' + sequence + '@tenant.test',
       temporaryPassword: TEST_PASSWORD,
-      planId: 'plan_clinic_basic',
+      planId: 'plan_profesional',
       specialtyCodes: ['PSYCHOLOGY'],
       sections: [...SECTION_KEYS],
     },

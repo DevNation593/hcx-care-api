@@ -19,7 +19,7 @@ import type {
   UserRole,
 } from '@prisma/client';
 import { SECTION_KEYS, SectionKey } from '../src/common/sections/section-catalog';
-import { DEFAULT_PLANS } from '../src/plans/default-plans';
+import { DEFAULT_PLANS, defaultPlanRow } from '../src/plans/default-plans';
 import { planModuleDefaults, subscriptionValuesFromPlan } from '../src/plans/plan-values';
 import {
   assertValidTaxIdentification,
@@ -220,17 +220,18 @@ export interface SeedTenantSpec {
   master: Omit<SeedUserSpec, 'role'>;
 }
 
-/** Creates the default plans with the ids the editable-plans migration gives them. */
+/** Creates the default plans with the ids the plan migrations give them. */
 export async function seedPlans(db: PrismaClient): Promise<Map<string, SeedPlan>> {
   const plans = new Map<string, SeedPlan>();
-  for (const { modules, ...plan } of DEFAULT_PLANS) {
-    const created = await db.plan.create({
-      data: { id: `plan_${plan.code.toLowerCase()}`, ...plan },
-    });
+  for (const plan of DEFAULT_PLANS) {
+    const created = await db.plan.create({ data: defaultPlanRow(plan) });
     await db.planModule.createMany({
-      data: modules.map((moduleKey) => ({ planId: created.id, moduleKey })),
+      data: plan.modules.map((moduleKey) => ({ planId: created.id, moduleKey })),
     });
-    plans.set(created.code, { ...created, modules: modules.map((moduleKey) => ({ moduleKey })) });
+    plans.set(created.code, {
+      ...created,
+      modules: plan.modules.map((moduleKey) => ({ moduleKey })),
+    });
   }
   return plans;
 }
