@@ -644,7 +644,7 @@ Every route with `:tenantId` answers `404` if the clinic does not exist or is th
   "masterLastName": "Lopez",
   "masterEmail": "ana@demo.test",
   "temporaryPassword": "Temporal-2026",
-  "planId": "plan_clinic_basic",
+  "planId": "plan_profesional",
   "trialDays": 14,
   "specialtyCodes": ["PSYCHOLOGY"]
 }

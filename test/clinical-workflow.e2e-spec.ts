@@ -115,6 +115,8 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
         seatsPsychologistsMax: 5,
         maxActivePatients: 100,
         storageGB: 1,
+        // A second branch, and room for a third so a repeated name is what refuses it.
+        maxBranches: 3,
       },
     });
     specialtyId = (await prisma.specialty.findUniqueOrThrow({ where: { code: 'PSYCHOLOGY' } })).id;

@@ -37,7 +37,7 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
     masterLastName: label,
     masterEmail: `MASTER-${label}-${suffix}@example.test`,
     temporaryPassword: password,
-    planId: 'plan_clinic_basic',
+    planId: 'plan_profesional',
     specialtyCodes: [' psychology '],
   });
 
@@ -127,7 +127,7 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
       mustChangePassword: true,
     });
     expect(created.body.subscription).toMatchObject({
-      plan: { code: 'CLINIC_BASIC' },
+      plan: { code: 'PROFESIONAL' },
       status: 'TRIALING',
     });
     // `mustChangePassword` is expected; a password field or a bcrypt hash is not.
@@ -177,12 +177,12 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
       .send(selection)
       .expect(200);
     expect(first.body.pricing).toEqual(second.body.pricing);
-    // Clínica Básico includes 2 specialties at 99 a month.
+    // Profesional includes 2 specialties at 44.90 a month.
     expect(second.body.pricing).toMatchObject({
       selectedSpecialties: 2,
       billableSpecialties: 0,
       specialtyAddonsPrice: 0,
-      totalMonthly: 99,
+      totalMonthly: 44.9,
     });
     expect(second.body.specialties.map((item: { code: string }) => item.code)).toEqual([
       'PSYCHOLOGY',
@@ -190,7 +190,7 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
     ]);
     const subscription = await prisma.tenantSubscription.findUniqueOrThrow({ where: { tenantId } });
     // The plan price stays; extra specialties are added when charging.
-    expect(Number(subscription.basePrice)).toBe(99);
+    expect(Number(subscription.basePrice)).toBe(44.9);
     expect(await prisma.tenantSpecialty.count({ where: { tenantId } })).toBe(2);
     expect(
       await prisma.subscriptionSpecialty.count({
@@ -247,7 +247,10 @@ describe('Specialty onboarding and clinic team (E2E)', () => {
     expect(nutritionOnly.body.specialties.map((item: { code: string }) => item.code)).toEqual([
       'NUTRITION',
     ]);
-    expect(nutritionOnly.body.pricing).toMatchObject({ selectedSpecialties: 1, totalMonthly: 99 });
+    expect(nutritionOnly.body.pricing).toMatchObject({
+      selectedSpecialties: 1,
+      totalMonthly: 44.9,
+    });
     expect(await prisma.tenantSpecialty.count({ where: { tenantId } })).toBe(1);
     expect(
       await prisma.subscriptionSpecialty.count({

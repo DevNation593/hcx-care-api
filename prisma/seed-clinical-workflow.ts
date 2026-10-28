@@ -156,7 +156,7 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     phone: '+593999500001',
     address: 'Av. República E7-123 y Diego de Almagro, Quito',
     tenantType: 'CLINIC',
-    plan: 'CLINIC_PRO',
+    plan: 'CLINICA',
     status: 'ACTIVE',
     specialties: ['psychology', 'nutrition', 'physiotherapy', 'dentistry', 'generalMedicine'],
     fiscal: {

@@ -82,6 +82,7 @@ export interface PlatformTenantDetail {
     storageGB: number;
     monthlyElectronicInvoicesLimit: number;
     includedSpecialties: number;
+    maxBranches: number;
     /** Values set for this clinic apart from its plan. */
     overriddenFields: PlanValueField[];
     /** The plan price plus the specialties beyond the included ones. */
@@ -591,6 +592,7 @@ export class PlatformTenantsService {
         storageGB: subscription.storageGB,
         monthlyElectronicInvoicesLimit: subscription.monthlyElectronicInvoicesLimit,
         includedSpecialties: subscription.includedSpecialties,
+        maxBranches: subscription.maxBranches,
         overriddenFields: subscription.overriddenFields as PlanValueField[],
         monthlyTotal: monthlyTotal(subscription, subscription._count.specialties),
       },

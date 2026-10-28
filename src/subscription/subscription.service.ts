@@ -83,6 +83,7 @@ export class SubscriptionService {
         // Limits
         limits: {
           maxActivePatients: subscription.maxActivePatients,
+          maxBranches: subscription.maxBranches,
           storageGB: subscription.storageGB,
           monthlyNotifications: subscription.monthlyNotificationsLimit,
         },

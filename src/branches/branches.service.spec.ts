@@ -39,7 +39,10 @@ describe('BranchesService', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     prisma.$transaction.mockImplementation((callback: (tx: unknown) => unknown) => callback(db));
-    db.tenant.findUnique.mockResolvedValue({ tenantType: 'CLINIC' });
+    db.tenant.findUnique.mockResolvedValue({
+      tenantType: 'CLINIC',
+      subscription: { maxBranches: 2 },
+    });
     db.branch.create.mockImplementation(({ data }) => Promise.resolve(data));
     db.branch.update.mockImplementation(({ data }) => Promise.resolve(data));
     counts({ active: 1, main: 1 });
@@ -171,8 +174,11 @@ describe('BranchesService', () => {
       expect(db.branch.create.mock.calls[0][0].data.isMain).toBe(true);
     });
 
-    it('keeps a personal practice to a single active branch', async () => {
-      db.tenant.findUnique.mockResolvedValue({ tenantType: 'PERSONAL' });
+    it('keeps a personal practice to a single active branch whatever its plan says', async () => {
+      db.tenant.findUnique.mockResolvedValue({
+        tenantType: 'PERSONAL',
+        subscription: { maxBranches: 5 },
+      });
 
       await expect(service.create('tenant-1', { name: 'Segunda' })).rejects.toMatchObject({
         status: 409,
@@ -182,6 +188,21 @@ describe('BranchesService', () => {
         where: { tenantId: 'tenant-1', isActive: true },
       });
       expect(db.branch.create).not.toHaveBeenCalled();
+    });
+
+    it('lets a clinic open branches up to what its plan includes', async () => {
+      await service.create('tenant-1', { name: 'Segunda' });
+      expect(db.branch.create).toHaveBeenCalled();
+
+      counts({ active: 2, main: 1 });
+      await expect(service.create('tenant-1', { name: 'Tercera' })).rejects.toMatchObject({
+        status: 409,
+        response: {
+          code: 'BRANCH_LIMIT_REACHED',
+          limit: 2,
+          message: 'Tu plan incluye hasta 2 sedes activas.',
+        },
+      });
     });
 
     it('treats a name that differs only in case as taken', async () => {
