@@ -269,6 +269,35 @@ function drawHeader(page: Page, input: RideInput, barcode: Buffer, number: strin
   page.y = Math.max(leftBottom, y) + 8;
 }
 
+function infoRowHeight(
+  page: Page,
+  width: number,
+  labelWidth: number,
+  [label, value]: [string, string],
+): number {
+  return (
+    Math.max(
+      page.height(label, labelWidth - 8, BOLD),
+      page.height(value, width - labelWidth - 8, REGULAR),
+    ) + 5
+  );
+}
+
+/** Height drawInfoBlock will take, from the same measures it draws with. */
+function measureInfoBlock(
+  page: Page,
+  width: number,
+  title: string,
+  rows: [string, string][],
+  labelWidth: number,
+): number {
+  return (
+    page.height(title, width - 8, BOLD, 8) +
+    7 +
+    rows.reduce((sum, row) => sum + infoRowHeight(page, width, labelWidth, row), 0)
+  );
+}
+
 function drawInfoBlock(
   page: Page,
   x: number,
@@ -279,12 +308,9 @@ function drawInfoBlock(
 ): void {
   const { doc } = page;
   page.y += page.band(x, page.y, width, title, NAVY, 'white', BOLD, 8);
-  for (const [label, value] of rows) {
-    const h =
-      Math.max(
-        page.height(label, labelWidth - 8, BOLD),
-        page.height(value, width - labelWidth - 8, REGULAR),
-      ) + 5;
+  for (const row of rows) {
+    const [label, value] = row;
+    const h = infoRowHeight(page, width, labelWidth, row);
     doc.rect(x, page.y, width, h).fill(PALE);
     doc
       .moveTo(x, page.y + h)
@@ -401,11 +427,17 @@ function drawFooter(
   const legal = `Favor remitir sus pagos y retenciones a nombre de "${text(document.issuer.legalName)}"`;
 
   // The closing block moves whole to the next page when it does not fit.
-  const infoH = 15 + info.length * 14;
+  const infoH = measureInfoBlock(
+    page,
+    page.width,
+    'INFORMACIÓN ADICIONAL',
+    info,
+    page.width * 0.18,
+  );
   const paymentsH = 15 + payments.length * 16;
   const legendsH = page.height(legal, page.width) + 4 * 12 + 14;
   const blockH =
-    Math.max((totalRows.length + 1) * 16, 0) + 8 + infoH + 8 + paymentsH + 8 + legendsH;
+    Math.max((totalRows.length + 1) * 16, 0) + 8 + infoH + 8 + paymentsH + 8 + legendsH + 4;
   page.ensure(blockH);
 
   let y = page.y;

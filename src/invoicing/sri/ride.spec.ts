@@ -23,6 +23,15 @@ function pdfText(pdf: Buffer): string {
 
 const pageCount = (pdf: Buffer) => (pdf.toString('latin1').match(/\/Type \/Page\b/g) ?? []).length;
 
+/** Text of each page: the content streams of an uncompressed file, in page order. */
+function pageTexts(pdf: Buffer): string[] {
+  return pdf
+    .toString('latin1')
+    .split('endstream')
+    .filter((chunk) => chunk.includes(' Tj') || chunk.includes(' TJ'))
+    .map((chunk) => pdfText(Buffer.from(chunk, 'latin1')));
+}
+
 async function render(document = sampleDocument(), authorizedAt = AUTHORIZED_AT) {
   return renderRide(
     { document, authorizationNumber: document.accessKey, authorizedAt },
@@ -148,6 +157,35 @@ describe('renderRide', () => {
     const text = pdfText(pdf);
     expect(text).toContain('COD-79');
     expect(text).toContain('3200.00');
+  });
+
+  it('keeps the whole footer on one page wherever it lands', async () => {
+    const base = sampleDocument();
+    const address = 'Calle de los Almendros y Avenida Larga '.repeat(8).slice(0, 300);
+    for (let count = 1; count <= 60; count++) {
+      const lines = Array.from({ length: count }, (_, i) => ({
+        ...base.lines[0],
+        localId: `l${i}`,
+        code: `COD-${i}`,
+      }));
+      const document = sampleDocument({
+        lines,
+        customer: { ...base.customer, address, email: `${'a'.repeat(200)}@example.com` },
+        payments: [{ methodCode: '01', amount: (count * 40).toFixed(2) }],
+      });
+
+      const pdf = await render(document);
+      const pages = pageTexts(pdf);
+
+      // pdfkit never added a page of its own: every page has content and the counts agree.
+      expect(pages).toHaveLength(pageCount(pdf));
+      const footerPages = pages.filter((p) => p.includes('INFORMACIÓN ADICIONAL'));
+      expect(footerPages).toHaveLength(1);
+      expect(footerPages[0]).toContain('FORMA DE PAGO');
+      expect(footerPages[0]).toContain('validezComprobantes.jsf');
+      expect(footerPages[0]).toContain('Cuidemos el medio ambiente.');
+      expect(footerPages[0]).toContain('TOTAL');
+    }
   });
 
   it('compresses by default', async () => {
