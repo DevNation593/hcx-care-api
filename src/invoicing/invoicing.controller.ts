@@ -20,47 +20,22 @@ import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorat
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
-import { ConnectionService } from './connection.service';
 import { InvoiceRequestsService } from './invoice-requests.service';
 import { InvoiceArtifactsService } from './invoice-artifacts.service';
 import { IssuerService } from './issuer.service';
 import { InvoiceWorkerService } from './invoice-worker.service';
-import {
-  ListInvoiceRequestsQuery,
-  SaveConnectionDto,
-  TestConnectionDto,
-} from './dto/invoicing.dto';
+import { ListInvoiceRequestsQuery } from './dto/invoice-requests.dto';
 import { IssuerCertificateDto, IssuerEmissionPointDto, SaveIssuerDto } from './dto/issuer.dto';
 @Controller('tenants/:tenantId')
 @RequireSection('core.billing.invoicing')
 export class InvoicingController {
   private readonly logger = new Logger(InvoicingController.name);
   constructor(
-    private readonly connections: ConnectionService,
     private readonly issuer: IssuerService,
     private readonly requests: InvoiceRequestsService,
     private readonly artifacts: InvoiceArtifactsService,
     private readonly worker: InvoiceWorkerService,
   ) {}
-  @Get('invoicing/connection') @Roles('MASTER') getConnection(@Param('tenantId') t: string) {
-    return this.connections.get(t);
-  }
-  @Put('invoicing/connection') @Roles('MASTER') save(
-    @Param('tenantId') t: string,
-    @CurrentUser() u: AuthUser,
-    @Body() d: SaveConnectionDto,
-  ) {
-    return this.connections.save(t, u.userId, d);
-  }
-  @Post('invoicing/test') @HttpCode(200) @Roles('MASTER') test(
-    @Param('tenantId') t: string,
-    @Body() d: TestConnectionDto,
-  ) {
-    return this.connections.test(t, d);
-  }
-  @Get('invoicing/options') @Roles('MASTER') options(@Param('tenantId') t: string) {
-    return this.connections.options(t);
-  }
   @Get('invoicing/issuer') @Roles('MASTER') getIssuer(@Param('tenantId') t: string) {
     return this.issuer.get(t);
   }
@@ -82,10 +57,7 @@ export class InvoicingController {
   ) {
     return this.issuer.saveCertificate(t, u.userId, file?.buffer ?? Buffer.alloc(0), d.password);
   }
-  // Moves to invoicing/test when the Emite Fácil connection is removed.
-  @Post('invoicing/issuer/test') @HttpCode(200) @Roles('MASTER') testIssuer(
-    @Param('tenantId') t: string,
-  ) {
+  @Post('invoicing/test') @HttpCode(200) @Roles('MASTER') test(@Param('tenantId') t: string) {
     return this.issuer.test(t);
   }
   @Put('branches/:branchId/emission-point') @Roles('MASTER') point(

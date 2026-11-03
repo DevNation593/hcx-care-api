@@ -79,7 +79,7 @@ function toView(issuer: IssuerRow): IssuerView {
       branchId: p.branchId,
       establishmentCode: p.establishmentCode,
       emissionPointCode: p.emissionPointCode,
-      establishmentAddress: p.establishmentAddress ?? '',
+      establishmentAddress: p.establishmentAddress,
       nextSequential:
         issuer.sequences.find(
           (s) =>

@@ -569,10 +569,7 @@ export class TreatmentSessionsService {
             where: {
               tenantId,
               order: { items: { some: { treatmentSessionId: sessionId, releasedAt: null } } },
-              OR: [
-                { status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] } },
-                { requiresReconciliation: true },
-              ],
+              status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] },
             },
             orderBy: { requestedAt: 'desc' },
           })
@@ -583,9 +580,7 @@ export class TreatmentSessionsService {
         await tx.$queryRaw`SELECT "id" FROM "InvoiceRequest" WHERE "id"=${invoice.id} AND "tenantId"=${tenantId} FOR UPDATE`;
       }
       const completed = await this.transition(tx, session, {
-        status: statusAfterClinicalCompletion(
-          invoice?.requiresReconciliation ? 'PROCESSING' : invoice?.status,
-        ),
+        status: statusAfterClinicalCompletion(invoice?.status),
         completedAt: new Date(),
         ...(notes !== session.procedureNotes
           ? { procedureNotes: notes ? this.crypto.encrypt(tenantId, notes) : null }
@@ -712,10 +707,7 @@ export class TreatmentSessionsService {
         where: {
           tenantId,
           order: { items: { some: { treatmentSessionId: sessionId, releasedAt: null } } },
-          OR: [
-            { status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] } },
-            { requiresReconciliation: true },
-          ],
+          status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] },
         },
       }))
     ) {

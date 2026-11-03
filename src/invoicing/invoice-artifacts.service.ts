@@ -70,7 +70,6 @@ export class InvoiceArtifactsService {
             await tx.invoiceRequestEvent.create({
               data: {
                 issuerId: row.issuerId,
-                connectionId: null,
                 invoiceRequestId: row.id,
                 type: 'ARTIFACT_STORED',
                 source: 'DISPATCHER',
@@ -94,7 +93,6 @@ export class InvoiceArtifactsService {
       await this.prisma.invoiceRequestEvent.create({
         data: {
           issuerId: row.issuerId,
-          connectionId: null,
           invoiceRequestId: row.id,
           type: 'ARTIFACT_FAILED',
           source: 'DISPATCHER',

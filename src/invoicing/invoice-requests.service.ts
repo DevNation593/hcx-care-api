@@ -14,12 +14,9 @@ import { invoiceView } from './invoice-view';
 import { FiscalSnapshot, groupedPayments } from './invoice-snapshot';
 import { invoiceError } from './invoice-errors';
 import { SriEnvironment } from './sri/sri-types';
-import { ListInvoiceRequestsQuery } from './dto/invoicing.dto';
+import { ListInvoiceRequestsQuery } from './dto/invoice-requests.dto';
 export const blockingInvoiceWhere: Prisma.InvoiceRequestWhereInput = {
-  OR: [
-    { status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] } },
-    { requiresReconciliation: true },
-  ],
+  status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] },
 };
 /** UTC-5 fiscal month (Ecuador does not observe daylight saving). */
 export function fiscalMonthStart(now = new Date()) {
@@ -84,9 +81,7 @@ export class InvoiceRequestsService {
           throw invoiceError(
             blocking.status === 'AUTHORIZED'
               ? 'ORDER_ALREADY_AUTHORIZED'
-              : blocking.requiresReconciliation
-                ? 'INVOICE_RECONCILIATION_REQUIRED'
-                : 'INVOICE_REQUEST_IN_PROGRESS',
+              : 'INVOICE_REQUEST_IN_PROGRESS',
           );
         if (order.status !== 'PAID') throw invoiceError('ORDER_NOT_BILLABLE', 422);
         const facts = await loadOrderBillingFacts(tx, tenantId, orderId, new Date());

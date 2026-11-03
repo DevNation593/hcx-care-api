@@ -126,27 +126,25 @@ describe('Product inventory: receipt, sale, invoice, cancel, transfer, adjustmen
         .expect(201)
     ).body.id;
 
-    // Invoicing configured for the north branch without calling the provider.
-    const connection = await prisma.invoicingConnection.create({
+    // Invoicing configured for the north branch without a real signing certificate.
+    const issuer = await prisma.invoicingIssuer.create({
       data: {
         tenantId,
-        apiKeyEncrypted: 'fixture-not-used',
-        externalTenantId: 'fixture-tenant',
-        taxpayerId: 'fixture-taxpayer',
-        taxpayerName: 'Fixture',
-        taxpayerRuc: '1790012345001',
+        ruc: '1790012345001',
+        legalName: 'Fixture',
+        headOfficeAddress: 'Fixture',
+        accountingRequired: false,
         environment: '1',
-        validatedAt: new Date(),
+        certificateEncrypted: 'fixture-not-used',
       },
     });
     await prisma.branchEmissionPoint.create({
       data: {
         branchId: northId,
-        connectionId: connection.id,
-        establishmentId: 'fixture-establishment',
-        emissionPointId: 'fixture-point',
+        issuerId: issuer.id,
         establishmentCode: '001',
         emissionPointCode: '001',
+        establishmentAddress: 'Fixture',
       },
     });
 

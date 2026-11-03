@@ -74,13 +74,7 @@ describe('InvoicingController.create', () => {
       view: jest.fn().mockResolvedValue({ id: 'request', status: 'AUTHORIZED' }),
     };
     worker = { processOne: jest.fn().mockResolvedValue(undefined) };
-    controller = new InvoicingController(
-      {} as any,
-      {} as any,
-      requests as any,
-      {} as any,
-      worker as any,
-    );
+    controller = new InvoicingController({} as any, requests as any, {} as any, worker as any);
   });
 
   it('returns the state reached inline', async () => {

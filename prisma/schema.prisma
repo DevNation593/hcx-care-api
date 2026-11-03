@@ -228,9 +228,8 @@ enum SessionMediaPhase {
 // ============================================
 
 model Tenant {
-  invoicingConnection InvoicingConnection?
-  invoicingIssuer     InvoicingIssuer?
-  invoiceRequests     InvoiceRequest[]
+  invoicingIssuer InvoicingIssuer?
+  invoiceRequests InvoiceRequest[]
 
   id                      String     @id @default(cuid())
   name                    String
@@ -2224,28 +2223,6 @@ enum InvoiceRequestStatus {
   FAILED
 }
 
-model InvoicingConnection {
-  id                     String                @id @default(cuid())
-  tenantId               String                @unique
-  tenant                 Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  apiKeyEncrypted        String
-  webhookSecretEncrypted String?
-  externalTenantId       String
-  taxpayerId             String
-  taxpayerName           String
-  taxpayerRuc            String
-  environment            String
-  active                 Boolean               @default(true)
-  revision               Int                   @default(1)
-  validatedAt            DateTime
-  createdAt              DateTime              @default(now())
-  updatedAt              DateTime              @updatedAt
-  points                 BranchEmissionPoint[]
-  refs                   InvoicingRef[]
-  requests               InvoiceRequest[]
-  events                 InvoiceRequestEvent[]
-}
-
 enum RimpeRegime {
   NONE
   EMPRENDEDOR
@@ -2299,35 +2276,17 @@ model InvoiceSequence {
 }
 
 model BranchEmissionPoint {
-  id                   String               @id @default(cuid())
-  branchId             String               @unique
-  branch               Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  connectionId         String?
-  connection           InvoicingConnection? @relation(fields: [connectionId], references: [id], onDelete: Restrict)
-  issuerId             String?
-  issuer               InvoicingIssuer?     @relation(fields: [issuerId], references: [id], onDelete: Restrict)
-  establishmentId      String?
-  emissionPointId      String?
+  id                   String          @id @default(cuid())
+  branchId             String          @unique
+  branch               Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  issuerId             String
+  issuer               InvoicingIssuer @relation(fields: [issuerId], references: [id], onDelete: Restrict)
   establishmentCode    String
   emissionPointCode    String
-  establishmentAddress String?
-  updatedAt            DateTime             @updatedAt
+  establishmentAddress String
+  updatedAt            DateTime        @updatedAt
 
   @@unique([issuerId, establishmentCode, emissionPointCode])
-  @@index([connectionId])
-}
-
-model InvoicingRef {
-  id           String              @id @default(cuid())
-  connectionId String
-  connection   InvoicingConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
-  kind         String
-  localId      String
-  externalId   String
-  syncedHash   String
-  updatedAt    DateTime            @updatedAt
-
-  @@unique([connectionId, kind, localId])
 }
 
 model InvoiceRequest {
@@ -2336,26 +2295,19 @@ model InvoiceRequest {
   tenant                   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   orderId                  String
   order                    Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  connectionId             String?
-  connection               InvoicingConnection?  @relation(fields: [connectionId], references: [id], onDelete: Restrict)
-  issuerId                 String?
-  issuer                   InvoicingIssuer?      @relation(fields: [issuerId], references: [id], onDelete: Restrict)
+  issuerId                 String
+  issuer                   InvoicingIssuer       @relation(fields: [issuerId], references: [id], onDelete: Restrict)
   billingProfileId         String
   billingProfile           BillingProfile        @relation(fields: [billingProfileId], references: [id], onDelete: Restrict)
   requestedById            String
   requestedBy              User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
   status                   InvoiceRequestStatus  @default(REQUESTED)
   clientIdempotencyKey     String
-  providerIdempotencyKey   String?               @unique
   snapshotEncrypted        String
-  providerBodyEncrypted    String?
-  providerBodyHash         String?
-  requiresReconciliation   Boolean               @default(false)
   replacesInvoiceRequestId String?               @unique
   replacesInvoiceRequest   InvoiceRequest?       @relation("InvoiceReplacement", fields: [replacesInvoiceRequestId], references: [id], onDelete: Restrict)
   replacedBy               InvoiceRequest?       @relation("InvoiceReplacement")
   rootRequestId            String
-  externalDocumentId       String?
   externalState            String?
   number                   String?
   accessKey                String?
@@ -2381,7 +2333,6 @@ model InvoiceRequest {
   events                   InvoiceRequestEvent[]
 
   @@unique([tenantId, clientIdempotencyKey])
-  @@unique([connectionId, externalDocumentId])
   @@unique([issuerId, accessKey])
   @@index([tenantId, requestedAt])
   @@index([status, nextAttemptAt, leaseUntil])
@@ -2390,19 +2341,15 @@ model InvoiceRequest {
 }
 
 model InvoiceRequestEvent {
-  id               String               @id @default(cuid())
-  connectionId     String?
-  connection       InvoicingConnection? @relation(fields: [connectionId], references: [id], onDelete: Restrict)
-  issuerId         String?
-  issuer           InvoicingIssuer?     @relation(fields: [issuerId], references: [id], onDelete: Restrict)
+  id               String          @id @default(cuid())
+  issuerId         String
+  issuer           InvoicingIssuer @relation(fields: [issuerId], references: [id], onDelete: Restrict)
   invoiceRequestId String?
-  invoiceRequest   InvoiceRequest?      @relation(fields: [invoiceRequestId], references: [id], onDelete: Restrict)
+  invoiceRequest   InvoiceRequest? @relation(fields: [invoiceRequestId], references: [id], onDelete: Restrict)
   type             String
   source           String
   detail           Json
-  webhookEventId   String?
-  createdAt        DateTime             @default(now())
+  createdAt        DateTime        @default(now())
 
-  @@unique([connectionId, webhookEventId])
   @@index([invoiceRequestId, createdAt])
 }

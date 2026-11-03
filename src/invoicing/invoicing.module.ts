@@ -4,8 +4,6 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ClinicalAccessModule } from '../clinical-access/clinical-access.module';
 import { PatientFilesModule } from '../patient-files/patient-files.module';
 import { MailModule } from '../mail/mail.module';
-import { EmiteFacilProvider } from './provider/emite-facil.provider';
-import { ConnectionService } from './connection.service';
 import { InvoiceRequestsService } from './invoice-requests.service';
 import { InvoiceWorkerService } from './invoice-worker.service';
 import { InvoiceArtifactsService } from './invoice-artifacts.service';
@@ -19,8 +17,6 @@ import { SriClient } from './sri/sri-client';
   imports: [PrismaModule, ClinicalAccessModule, PatientFilesModule, MailModule],
   controllers: [InvoicingController, InvoicingTickController],
   providers: [
-    EmiteFacilProvider,
-    ConnectionService,
     InvoiceRequestsService,
     InvoiceWorkerService,
     InvoiceArtifactsService,

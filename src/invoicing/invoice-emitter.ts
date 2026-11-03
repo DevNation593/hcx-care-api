@@ -199,7 +199,6 @@ export class InvoiceEmitter {
       await tx.invoiceRequestEvent.create({
         data: {
           issuerId: row.issuerId,
-          connectionId: null,
           invoiceRequestId: row.id,
           type: final ? status : stage,
           source: 'DISPATCHER',
@@ -335,7 +334,7 @@ export class InvoiceEmitter {
     try {
       return await this.prisma.$transaction(
         async (tx) => {
-          const sequential = await this.reserveSequential(tx, row.issuerId!, s);
+          const sequential = await this.reserveSequential(tx, row.issuerId, s);
           const accessKey = buildAccessKey({
             issueDate: s.issueDate,
             ruc: s.issuer.ruc,
@@ -379,7 +378,6 @@ export class InvoiceEmitter {
           await tx.invoiceRequestEvent.create({
             data: {
               issuerId: row.issuerId,
-              connectionId: null,
               invoiceRequestId: row.id,
               type: 'SIGNED',
               source: 'DISPATCHER',

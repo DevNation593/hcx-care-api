@@ -215,8 +215,6 @@ describe('invoice acceptance receipts and protected fiscal explanations', () => 
         issuerId: 'issuer',
         events: { create: { issuerId: 'issuer', type: 'REQUESTED' } },
       });
-      expect(data).not.toHaveProperty('connectionId');
-      expect(data).not.toHaveProperty('providerIdempotencyKey');
     });
 
     it.each([

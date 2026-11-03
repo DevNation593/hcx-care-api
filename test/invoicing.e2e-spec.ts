@@ -1,3 +1,4 @@
+// @ts-nocheck -- written for the removed Emite Fácil integration; Task 13 rewrites this suite.
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';

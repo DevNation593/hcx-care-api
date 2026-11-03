@@ -113,7 +113,6 @@ export class InvoiceDeliveryService {
       await tx.invoiceRequestEvent.create({
         data: {
           issuerId: row.issuerId,
-          connectionId: null,
           invoiceRequestId: row.id,
           type,
           source: 'DISPATCHER',

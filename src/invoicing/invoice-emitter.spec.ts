@@ -281,7 +281,6 @@ describe('InvoiceEmitter preflight and signing', () => {
     expect(events).toEqual([
       expect.objectContaining({
         issuerId: 'issuer',
-        connectionId: null,
         invoiceRequestId: 'request',
         type: 'SIGNED',
       }),
@@ -1013,20 +1012,15 @@ describe('InvoiceWorkerService', () => {
     expect(tx.invoiceRequest.updateMany).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    'claims only rows of a local issuer (reconcile: %s)',
-    async (reconcile) => {
-      await worker.claim(reconcile);
-      const sql: string = tx.$queryRaw.mock.calls[0][0].sql;
-      expect(sql).toContain('"issuerId" IS NOT NULL');
-      expect(sql).not.toContain('externalDocumentId');
-      expect(sql).toContain(
-        reconcile
-          ? `("status" = 'PROCESSING' OR ("status" = 'AUTHORIZED' AND ("xmlStorageKey" IS NULL OR "rideStorageKey" IS NULL OR ("emailedAt" IS NULL AND "emailAttempts" < 5))))`
-          : `"status" IN ('REQUESTED','PROCESSING')`,
-      );
-    },
-  );
+  it.each([false, true])('claims the due rows of each pass (reconcile: %s)', async (reconcile) => {
+    await worker.claim(reconcile);
+    const sql: string = tx.$queryRaw.mock.calls[0][0].sql;
+    expect(sql).toContain(
+      reconcile
+        ? `("status" = 'PROCESSING' OR ("status" = 'AUTHORIZED' AND ("xmlStorageKey" IS NULL OR "rideStorageKey" IS NULL OR ("emailedAt" IS NULL AND "emailAttempts" < 5))))`
+        : `"status" IN ('REQUESTED','PROCESSING')`,
+    );
+  });
 
   it('keeps a signed row PROCESSING on a configuration error and does not release the order', async () => {
     const row = leased({ status: 'PROCESSING', signedXmlStorageKey: 'invoices/clinic/request/x' });
@@ -1047,7 +1041,6 @@ describe('InvoiceWorkerService', () => {
     expect(tx.invoiceRequestEvent.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         issuerId: 'issuer',
-        connectionId: null,
         type: 'RETRY_SCHEDULED',
         detail: { code: 'CERTIFICATE_EXPIRED' },
       }),
@@ -1086,7 +1079,7 @@ describe('InvoiceWorkerService', () => {
       expect.objectContaining({ data: { status: 'BILLING_FAILED', version: { increment: 1 } } }),
     );
     expect(tx.invoiceRequestEvent.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ type: 'FAILED', issuerId: 'issuer', connectionId: null }),
+      data: expect.objectContaining({ type: 'FAILED', issuerId: 'issuer' }),
     });
   });
 

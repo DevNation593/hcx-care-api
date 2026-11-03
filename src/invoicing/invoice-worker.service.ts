@@ -32,7 +32,7 @@ export class InvoiceWorkerService {
   async claim(reconcile = false, id?: string): Promise<InvoiceRequest[]> {
     return this.prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<InvoiceRequest[]>(
-        Prisma.sql`SELECT * FROM "InvoiceRequest" WHERE "nextAttemptAt" <= NOW() AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW()) AND "issuerId" IS NOT NULL AND ${id === undefined ? Prisma.empty : Prisma.sql`"id" = ${id} AND `}${reconcile ? Prisma.sql`("status" = 'PROCESSING' OR ("status" = 'AUTHORIZED' AND ("xmlStorageKey" IS NULL OR "rideStorageKey" IS NULL OR ("emailedAt" IS NULL AND "emailAttempts" < 5))))` : Prisma.sql`"status" IN ('REQUESTED','PROCESSING')`} ORDER BY "nextAttemptAt" ASC FOR UPDATE SKIP LOCKED LIMIT ${reconcile ? 50 : 10}`,
+        Prisma.sql`SELECT * FROM "InvoiceRequest" WHERE "nextAttemptAt" <= NOW() AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW()) AND ${id === undefined ? Prisma.empty : Prisma.sql`"id" = ${id} AND `}${reconcile ? Prisma.sql`("status" = 'PROCESSING' OR ("status" = 'AUTHORIZED' AND ("xmlStorageKey" IS NULL OR "rideStorageKey" IS NULL OR ("emailedAt" IS NULL AND "emailAttempts" < 5))))` : Prisma.sql`"status" IN ('REQUESTED','PROCESSING')`} ORDER BY "nextAttemptAt" ASC FOR UPDATE SKIP LOCKED LIMIT ${reconcile ? 50 : 10}`,
       );
       const claimed: InvoiceRequest[] = [];
       for (const row of rows) {
@@ -130,7 +130,6 @@ export class InvoiceWorkerService {
       await tx.invoiceRequestEvent.create({
         data: {
           issuerId: row.issuerId,
-          connectionId: null,
           invoiceRequestId: row.id,
           type: safeFailure ? 'FAILED' : halted ? 'INTEGRITY_HALTED' : 'RETRY_SCHEDULED',
           source: 'DISPATCHER',
