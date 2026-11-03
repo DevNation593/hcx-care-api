@@ -37,58 +37,114 @@ The clinical web change also requires deploying the web. No new schema migration
 needed for this connection fix. See the
 [Supabase Prisma troubleshooting guide](https://supabase.com/docs/guides/database/prisma/prisma-troubleshooting#max-client-connections-reached).
 
-## emite-facil electronic invoicing (B2)
+## Facturación electrónica propia con el SRI
 
-Configure `EMITE_FACIL_API_URL` manually with the real provider host and full `/api/v1`
-path. `.env.example` intentionally leaves it blank. It is global server configuration;
-never accept a provider URL or expose an API key in the web client. No live provider
-host was inferred or tested during implementation.
+La API firma y envía las facturas (código `01`, XSD `1.1.0`) directamente a los servicios web del SRI. Ya no hay proveedor externo ni webhook. Los únicos hosts permitidos son `celcer.sri.gob.ec` (ambiente `1`, pruebas) y `cel.sri.gob.ec` (ambiente `2`, producción); no se siguen redirecciones. Historial: el proveedor anterior (Emite Fácil) se retiró con la migración `20261102000100_drop_emite_facil`.
 
-`CLINICAL_ENCRYPTION_KEYS` is required before saving a connection or invoice intent,
-including development. It encrypts API keys, optional webhook secrets, immutable fiscal
-intent, resolved provider JSON, SRI explanations and downloaded artifacts. Preserve all
-decryption keys during rotation. Use the existing `FILE_STORAGE` driver with persistent,
-backed-up storage; authorized invoices remain authorized while missing artifacts retry.
+### Variables de entorno
 
-Deployment order: back up the intended database, run `npx prisma migrate deploy`, then
-`npm run build` and restart API processes. New migration:
-`20261017000000_emite_facil_b2`. It adds five models and a partial unique index blocking
-duplicate live/authorized/uncertain requests per order; historical Faktur tables remain.
-The migration was validated only on a disposable local PostgreSQL test database. No
-production migration was executed by the implementation session.
+| Variable | Obligatoria | Uso |
+| --- | --- | --- |
+| `CLINICAL_ENCRYPTION_KEYS` | Sí, también en desarrollo | Cifra el `.p12` y su contraseña, los mensajes del SRI y los archivos (XML firmado, XML autorizado, RIDE). Sin ella la facturación responde `INVOICING_ENCRYPTION_REQUIRED`. Conserve todas las claves de descifrado al rotar. |
+| `INVOICING_TICK_SECRET` | Sí en Vercel | Secreto Bearer de `POST /api/v1/internal/invoicing/tick`. Sin la variable la ruta responde 404. Genérelo con `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`. |
+| `INVOICING_INTERNAL_SCHEDULER` | No (por defecto `false`) | `true` ejecuta el mismo trabajo cada 10 s dentro de la API (desarrollo y servidores persistentes). Déjela en `false` en Vercel. Se ignora con `NODE_ENV=test`. |
+| `STORAGE_DRIVER` y relacionadas | Sí | Los XML y RIDE se guardan con el `FILE_STORAGE`/`STORAGE_DRIVER` existente: use un almacenamiento persistente y con respaldo. |
 
-The API scheduler dispatches every10 seconds and reconciles every minute, using durable
-120-second recoverable leases and CAS. Multiple API replicas may run it concurrently.
-Outbound calls occur outside long transactions. Retries use exponential30 seconds to
-30 minutes, honoring Retry-After. After24h a pre-document request may show FAILED;
-an uncertain result remains blocked and keeps recovering its identical body/key.
-Do not manually clear `requiresReconciliation` or generate a new provider key for it.
+La variable del proveedor anterior ya no existe y `BACKEND_PUBLIC_URL` ya no se usa para facturar; quítelas del entorno si siguen configuradas. Pruebas locales: configure `DATABASE_URL` y `DATABASE_URL_TEST` hacia una base desechable y ejecute `npx jest --config test/jest-e2e.json --runInBand test/invoicing.e2e-spec.ts`, que usa un SRI simulado (`SRI_TEST_BASE_URL`, solo con `NODE_ENV=test`). Nunca la apunte a una base de clínicas reales.
 
-MASTER tests/saves the API key in HCX and chooses issuer and branch emission points.
-Company/issuer cannot change after first use. Key rotation is allowed for that identity.
-Switching issuer environment1->2 requires no active/uncertain request and no authorized
-artifacts pending. Save the same issuer again to refresh its provider environment.
-Old rejected documents cannot be replaced across environments. Pending documents keep
-their original environment snapshot and are rechecked before invoice POST.
+### Procedimiento de despliegue de las dos migraciones
 
-Optional webhook: set `BACKEND_PUBLIC_URL` to the absolute public API root without
-`API_PREFIX` (default `api/v1`). Missing/invalid base yields `webhookUrl:null`. Register
-the returned callback URL in emite-facil using an authorized owner/admin session, then
-paste its one-time `whsec_...` secret into HCX. The static API key cannot manage provider
-webhook subscriptions. Raw body preservation is enabled; proxies must preserve bytes
-and signature headers. Reconciliation works without webhook. Callback rate limit300/min;
-protected list/detail polling120/min. No SRI certificates/retry management is added to HCX.
+La base de Supabase es compartida con las demostraciones y con producción. Las migraciones son `20261102000000_own_sri_issuer` (crea emisor, secuenciales y columnas nuevas) y `20261102000100_drop_emite_facil` (elimina el proveedor anterior y sus datos). Haga primero una copia de seguridad de la base. Siga estos pasos en orden.
 
-SIGNATURE_FAILED is recoverable on the same provider document. Correct its signing
-configuration and use emite-facil's retry there; keep HCX PROCESSING and payment/reissue
-locks until the same document reaches a known result. SRI explanations remain encrypted
-and are shown only to authorized billing viewers, never copied into audit events/logs.
+#### 1. Antes de desplegar: auditoría de solo lectura
 
-For local verification set both DATABASE_URL and DATABASE_URL_TEST to a dedicated test
-database, JWT_ACCESS_SECRET/JWT_REFRESH_SECRET to disposable values, REDIS_URL empty,
-and run `npx jest --config test/jest-e2e.json --runInBand test/invoicing.e2e-spec.ts`.
-That suite uses a local HTTP simulator and explicit worker calls; worker cron wrappers
-are disabled when NODE_ENV=test. Never point it at a real clinic database.
+```bash
+npm run prisma:audit-emite-facil-removal
+```
+
+Con `DATABASE_URL` apuntando a producción. El script corre en una transacción `READ ONLY` e imprime solo conteos e identificadores de consultorio (nunca contenido de documentos): solicitudes del proveedor anterior por ambiente y estado, órdenes que volverán a `PAID`, sesiones que pasarán a `BILLING_FAILED`, cadenas SRI que se reinician y lo que se borrará por consultorio. Si las migraciones ya se aplicaron responde `{ "alreadyApplied": true }`.
+
+Termina con código **1** si `productionBlocking` es mayor que 0, es decir, si la migración abortaría. Eso significa que hay documentos del proveedor anterior en el ambiente de producción (`2`) autorizados, en proceso o con `requiresReconciliation`. En ese caso **no despliegue**: son posibles facturas reales. Resuélvalas con el proveedor anterior (confirmar que el SRI las autorizó o rechazó, y conservar sus XML/RIDE fuera de HCX si hacen falta) y repita la auditoría hasta que `productionBlocking` sea 0.
+
+#### 2. Ventana de despliegue
+
+Entre `npx prisma migrate deploy` y el momento en que la nueva compilación de la API recibe tráfico, las rutas de facturación de la compilación anterior fallan (las columnas que usaba ya no existen). Por eso:
+
+1. Elija una hora de poco uso.
+2. Ejecute `npx prisma migrate deploy` y despliegue la API nueva inmediatamente después.
+3. Verifique `GET /api/v1/health` y una consulta de facturas.
+
+El resto de la API no usa esas columnas y no se interrumpe.
+
+#### 3. Si la guarda aborta la migración
+
+La segunda migración comprueba, dentro de su propia transacción, que no queden documentos de producción del proveedor anterior; si los hay, falla con `Former provider requests in the production environment are authorized or pending; resolve them before removing the provider`. Los datos quedan **sin cambios**, pero Prisma marca la migración como fallida y bloquea nuevos despliegues. Después de resolver los documentos, ejecute antes de volver a desplegar:
+
+```bash
+npx prisma migrate resolve --rolled-back 20261102000100_drop_emite_facil
+npx prisma migrate deploy
+```
+
+Si en cambio falló la primera migración, revise el error antes de marcarla; no la edite.
+
+#### 4. Programación del tick (`pg_cron` + `pg_net`)
+
+Las solicitudes pendientes (reintentos, consultas de autorización, artefactos y correos) se reanudan con `POST /api/v1/internal/invoicing/tick`, que Supabase llama cada minuto. Ejecute esto en el editor SQL del proyecto, sustituyendo `<INVOICING_TICK_SECRET>` por el valor configurado en Vercel:
+
+```sql
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+select cron.schedule('hcx-invoicing-tick', '* * * * *', $$
+  select net.http_post(
+    url := 'https://psychology-clinic-saas-api.vercel.app/api/v1/internal/invoicing/tick',
+    headers := jsonb_build_object('Authorization', 'Bearer <INVOICING_TICK_SECRET>', 'Content-Type', 'application/json'),
+    body := '{}'::jsonb,
+    timeout_milliseconds := 55000);
+$$);
+```
+
+El secreto queda guardado en el texto de la tarea; solo quien administra el proyecto de Supabase puede verlo. Para rotarlo, cambie la variable en Vercel, redespliegue y ejecute `select cron.unschedule('hcx-invoicing-tick');` seguido del bloque anterior con el valor nuevo.
+
+La ruta no tiene límite de peticiones: la protege el secreto, comparado en tiempo constante, y los ticks concurrentes son seguros (`FOR UPDATE SKIP LOCKED` y presupuesto acotado de 45 s). Sin `INVOICING_TICK_SECRET` responde 404; con un secreto incorrecto, 401.
+
+Cómo revisar que corre:
+
+```sql
+select * from cron.job_run_details order by start_time desc limit 20;
+```
+
+`status = 'succeeded'` solo indica que se envió la petición. El resultado HTTP está en `net._http_response` (`select id, status_code, content, created from net._http_response order by created desc limit 20;`): debe ser 200 con un resumen del lote; 401 indica un secreto distinto y 404 que falta la variable en Vercel. Si hay filas con `status = 'failed'`, mire `return_message`.
+
+`maxDuration` en Vercel: el tick usa un presupuesto de 45 s y el intento inline al crear una factura hasta 15 s, así que la función necesita **60 s**. En `api/` no hay `vercel.json` ni otra configuración de Vercel (la compilación la detecta Vercel desde `package.json` y el proyecto `hcx-care-api`), de modo que el valor se fija hoy en el panel: Project > Settings > Functions > Function Max Duration = 60 s, y se vuelve a desplegar. Si más adelante se versiona la configuración, sería la clave `functions.<archivo de la función>.maxDuration` de un `vercel.json` en `api/`. Compruebe que el plan de Vercel permite 60 s; con menos, el tick se corta a mitad del lote (es seguro, pero las facturas avanzan más lento).
+
+#### 5. Prueba manual en `celcer` antes de pasar a producción
+
+Ningún emisor debe pasar al ambiente `2` sin esta prueba con un certificado real:
+
+1. En el consultorio, como `MASTER`, guarde el emisor con ambiente `1` y suba el `.p12` real de prueba (el certificado del RUC emisor y su contraseña; máx. 50 KB).
+2. Defina el punto de emisión de la sucursal (establecimiento, punto, dirección y siguiente secuencial) y use `POST /invoicing/test`: debe confirmar que el certificado es válido y del RUC, y que los servicios del SRI responden.
+3. Cree una factura de una orden pagada y espere el resultado (inline o por el tick). Debe llegar a `AUTHORIZED` con número y fecha de autorización, XML y RIDE descargables, y el correo al paciente si tiene email.
+4. Revise una factura rechazada de propósito (por ejemplo, con datos del cliente inválidos) para ver los mensajes del SRI y confirmar la reemisión con secuencial nuevo.
+5. Solo entonces cambie el emisor al ambiente `2`. El cambio exige que no haya solicitudes `REQUESTED`/`PROCESSING` ni `AUTHORIZED` sin artefactos (`INVOICING_ENVIRONMENT_BUSY`). El RUC queda fijo tras la primera solicitud (`INVOICING_IDENTITY_LOCKED`).
+
+El régimen RIMPE `NEGOCIO_POPULAR` se rechaza con `RIMPE_REGIME_UNSUPPORTED` hasta verificar el XSD oficial (el `factura_V1.1.0.xsd` incluido solo acepta «CONTRIBUYENTE RÉGIMEN RIMPE»), así que esos consultorios no pueden facturar aún.
+
+### Operación: solicitudes firmadas y filas detenidas
+
+- **Nunca edite a mano una solicitud firmada** (con `signedXmlStorageKey`) ni su XML firmado. Desde la firma la solicitud no pasa a `FAILED`, conserva su secuencial y su clave de acceso, y todo reenvío usa los bytes guardados, verificados con su SHA-256. No se vuelve a firmar. Termina solo en `AUTHORIZED` o `REJECTED` según el SRI.
+- **Fallos transitorios** (red, timeout, 5xx, `EN PROCESO`, almacenamiento caído): se reintentan con espera de 30 s a 30 min. No requieren intervención.
+- **Fila detenida por integridad.** Si el SHA-256 del XML firmado guardado no coincide, la fila queda en `PROCESSING`, con evento `INTEGRITY_HALTED`, error `INVOICE_SIGNED_XML_INTEGRITY` y `nextAttemptAt` en `9999-12-31`, de modo que ningún tick la toma. Para encontrarlas:
+
+  ```sql
+  select r."id", r."tenantId", r."status", r."accessKey", r."updatedAt"
+  from "InvoiceRequest" r
+  where r."nextAttemptAt" >= '9999-01-01'
+  order by r."updatedAt" desc;
+  ```
+
+  Un fallo al leer el archivo (falta o el almacenamiento no responde) no la detiene: solo se reintenta.
+- **Reanudar una fila detenida:** primero investigue por qué cambió el archivo (restaure el respaldo del almacenamiento o localice la alteración) y confirme con el SRI el estado de la clave de acceso. Solo cuando los bytes guardados vuelvan a coincidir con `signedXmlSha256`, ponga `nextAttemptAt` en la fecha actual (`update "InvoiceRequest" set "nextAttemptAt" = now() at time zone 'utc' where "id" = '<id>';`) y el siguiente tick la retoma. Nunca refirme ni edite el XML firmado ni su hash.
+- Los mensajes del SRI se guardan cifrados y solo los ve quien tiene `billing.view`; no aparecen en logs ni en auditoría.
 
 ## Pre-Deployment Checklist
 
