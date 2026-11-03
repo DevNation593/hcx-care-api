@@ -97,7 +97,12 @@ function extractIdentifiers(cert: forge.pki.Certificate): string[] {
 
 function classifyOpenError(error: unknown): SriError {
   const message = error instanceof Error ? error.message : '';
-  if (/mac|password|decrypt|encrypted/i.test(message)) {
+  // Only the two messages forge raises for a wrong password; every other forge
+  // failure (unsupported MAC/KDF/OID, malformed structure) is a bad file.
+  if (
+    message.startsWith('PKCS#12 MAC could not be verified') ||
+    message === 'Failed to decrypt PKCS#12 SafeContents.'
+  ) {
     return new SriError('configuration', 'CERTIFICATE_PASSWORD_INVALID');
   }
   return new SriError('configuration', 'CERTIFICATE_UNREADABLE');

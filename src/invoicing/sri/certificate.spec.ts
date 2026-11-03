@@ -54,6 +54,54 @@ describe('certificate', () => {
     );
   });
 
+  describe('unreadable files are not reported as a wrong password', () => {
+    const caught = (p12: Buffer, password = 'clave-prueba'): SriError => {
+      try {
+        openCertificate(p12, password);
+      } catch (e) {
+        return e as SriError;
+      }
+      throw new Error('expected openCertificate to throw');
+    };
+
+    it('rejects a structurally valid DER that is not a PFX', () => {
+      const err = caught(Buffer.from([0x30, 0x03, 0x02, 0x01, 0x01]));
+      expect(err).toMatchObject({ kind: 'configuration', code: 'CERTIFICATE_UNREADABLE' });
+    });
+
+    it('rejects a truncated p12', () => {
+      const p12 = createTestP12();
+      const err = caught(p12.subarray(0, Math.floor(p12.length / 2)));
+      expect(err).toMatchObject({ kind: 'configuration', code: 'CERTIFICATE_UNREADABLE' });
+    });
+
+    it('rejects a p12 with an unsupported MAC algorithm', () => {
+      const p12 = Buffer.from(createTestP12());
+      const sha1Oid = Buffer.from([0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a]);
+      const at = p12.lastIndexOf(sha1Oid);
+      expect(at).toBeGreaterThan(0);
+      p12[at + sha1Oid.length - 1] = 0x1b;
+      const err = caught(p12);
+      expect(err).toMatchObject({ kind: 'configuration', code: 'CERTIFICATE_UNREADABLE' });
+    });
+
+    it('never leaks the password or the p12 in the thrown error', () => {
+      const p12 = createTestP12();
+      const secret = 'contrasena-secreta-xyz';
+      const errors = [
+        caught(p12, secret),
+        caught(p12.subarray(0, 100), secret),
+        caught(Buffer.from('nope'), secret),
+      ];
+      for (const err of errors) {
+        const text = `${err.message} ${err.stack ?? ''} ${JSON.stringify(err)}`;
+        expect(text).not.toContain(secret);
+        expect(text).not.toContain(p12.toString('base64').slice(0, 40));
+        expect(text).not.toContain(p12.toString('latin1').slice(0, 20));
+      }
+    });
+  });
+
   it('rejects bytes that are not a p12', () => {
     let error: unknown;
     try {
