@@ -28,11 +28,14 @@ export class InvoiceWorkerService {
   @Cron('0 * * * * *') async scheduledReconcile() {
     if (this.internalSchedulerEnabled()) await this.reconcile();
   }
-  /** Each claim is a short transaction; all SRI work happens after commit. */
+  /**
+   * Each claim is a short transaction; all SRI work happens after commit. Prisma stores DateTime
+   * as UTC in columns without time zone, so the comparison uses UTC whatever the session zone is.
+   */
   async claim(reconcile = false, id?: string): Promise<InvoiceRequest[]> {
     return this.prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<InvoiceRequest[]>(
-        Prisma.sql`SELECT * FROM "InvoiceRequest" WHERE "nextAttemptAt" <= NOW() AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW()) AND ${id === undefined ? Prisma.empty : Prisma.sql`"id" = ${id} AND `}${reconcile ? Prisma.sql`("status" = 'PROCESSING' OR ("status" = 'AUTHORIZED' AND ("xmlStorageKey" IS NULL OR "rideStorageKey" IS NULL OR ("emailedAt" IS NULL AND "emailAttempts" < 5))))` : Prisma.sql`"status" IN ('REQUESTED','PROCESSING')`} ORDER BY "nextAttemptAt" ASC FOR UPDATE SKIP LOCKED LIMIT ${reconcile ? 50 : 10}`,
+        Prisma.sql`SELECT * FROM "InvoiceRequest" WHERE "nextAttemptAt" <= (NOW() AT TIME ZONE 'UTC') AND ("leaseUntil" IS NULL OR "leaseUntil" < (NOW() AT TIME ZONE 'UTC')) AND ${id === undefined ? Prisma.empty : Prisma.sql`"id" = ${id} AND `}${reconcile ? Prisma.sql`("status" = 'PROCESSING' OR ("status" = 'AUTHORIZED' AND ("xmlStorageKey" IS NULL OR "rideStorageKey" IS NULL OR ("emailedAt" IS NULL AND "emailAttempts" < 5))))` : Prisma.sql`"status" IN ('REQUESTED','PROCESSING')`} ORDER BY "nextAttemptAt" ASC FOR UPDATE SKIP LOCKED LIMIT ${reconcile ? 50 : 10}`,
       );
       const claimed: InvoiceRequest[] = [];
       for (const row of rows) {
