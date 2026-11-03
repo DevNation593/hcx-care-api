@@ -4,7 +4,9 @@ import { PrismaClient } from '@prisma/client';
  * Read-only preview of the migration that drops the former external invoicing provider
  * (20261102000100). Run it against the target database before deploying: it prints counts and
  * tenant ids only, never document content, and runs in a READ ONLY transaction. It uses raw SQL
- * because the generated client no longer has the provider's tables and columns.
+ * because the generated client no longer has the provider's tables and columns. It also runs before
+ * the additive migration (20261102000000): a table without "issuerId" yet holds only the former
+ * provider's rows, and no SRI request exists.
  */
 export type ProviderRemovalAudit =
   | { alreadyApplied: true }
@@ -34,17 +36,41 @@ export type ProviderRemovalAudit =
       }[];
     };
 
-const OLD_ONLY_INVOICED_ORDER = `
-  o."status" = 'INVOICED'
-  AND EXISTS (SELECT 1 FROM "InvoiceRequest" r WHERE r."orderId" = o."id" AND r."issuerId" IS NULL)
-  AND NOT EXISTS (
-    SELECT 1 FROM "InvoiceRequest" r
-    WHERE r."orderId" = o."id"
-      AND r."issuerId" IS NOT NULL
-      AND r."status" IN ('REQUESTED', 'PROCESSING', 'AUTHORIZED')
-  )`;
-
 type Raw = { $queryRawUnsafe<T = unknown>(query: string): Promise<T> };
+
+const ISSUER_TABLES = ['InvoiceRequest', 'InvoiceRequestEvent', 'BranchEmissionPoint'] as const;
+type IssuerTable = (typeof ISSUER_TABLES)[number];
+
+/** The tables that already have "issuerId" (all three once the additive migration ran). */
+async function tablesWithIssuer(tx: Raw): Promise<Set<IssuerTable>> {
+  const rows = await tx.$queryRawUnsafe<{ table_name: IssuerTable }[]>(
+    `SELECT table_name FROM information_schema.columns
+     WHERE table_schema = current_schema() AND column_name = 'issuerId'
+       AND table_name IN (${ISSUER_TABLES.map((t) => `'${t}'`).join(', ')})`,
+  );
+  return new Set(rows.map((r) => r.table_name));
+}
+
+/** SQL predicate: `alias` is a former-provider row (no issuer, or no "issuerId" column yet). */
+type FormerProvider = (table: IssuerTable, alias: string) => string;
+
+function oldOnlyInvoicedOrder(former: FormerProvider, sriRequests: boolean) {
+  const noBlockingSriRequest = sriRequests
+    ? `NOT EXISTS (
+         SELECT 1 FROM "InvoiceRequest" r
+         WHERE r."orderId" = o."id"
+           AND r."issuerId" IS NOT NULL
+           AND r."status" IN ('REQUESTED', 'PROCESSING', 'AUTHORIZED')
+       )`
+    : 'TRUE';
+  return `
+    o."status" = 'INVOICED'
+    AND EXISTS (
+      SELECT 1 FROM "InvoiceRequest" r
+      WHERE r."orderId" = o."id" AND ${former('InvoiceRequest', 'r')}
+    )
+    AND ${noBlockingSriRequest}`;
+}
 
 async function count(tx: Raw, sql: string): Promise<number> {
   const [row] = await tx.$queryRawUnsafe<{ count: number }[]>(sql);
@@ -60,6 +86,12 @@ export async function auditFormerProviderRemoval(
       `SELECT to_regclass('"InvoicingConnection"') IS NOT NULL AS present`,
     );
     if (!present) return { alreadyApplied: true as const };
+    const withIssuer = await tablesWithIssuer(tx);
+    const former: FormerProvider = (table, alias) =>
+      withIssuer.has(table) ? `${alias}."issuerId" IS NULL` : 'TRUE';
+    // Before the additive migration no SRI request exists: every request is the former provider's.
+    const sriRequests = withIssuer.has('InvoiceRequest');
+    const OLD_ONLY_INVOICED_ORDER = oldOnlyInvoicedOrder(former, sriRequests);
 
     const requestsByEnvironmentAndStatus = await tx.$queryRawUnsafe<
       {
@@ -73,7 +105,7 @@ export async function auditFormerProviderRemoval(
               count(*)::int AS "count"
        FROM "InvoiceRequest" r
        LEFT JOIN "InvoicingConnection" c ON c."id" = r."connectionId"
-       WHERE r."issuerId" IS NULL
+       WHERE ${former('InvoiceRequest', 'r')}
        GROUP BY 1, 2, 3
        ORDER BY 1, 2, 3`,
     );
@@ -82,7 +114,7 @@ export async function auditFormerProviderRemoval(
       `SELECT count(*)::int AS "count"
        FROM "InvoiceRequest" r
        JOIN "InvoicingConnection" c ON c."id" = r."connectionId"
-       WHERE r."issuerId" IS NULL
+       WHERE ${former('InvoiceRequest', 'r')}
          AND c."environment" = '2'
          AND (r."status" IN ('AUTHORIZED', 'PROCESSING') OR r."requiresReconciliation")`,
     );
@@ -101,13 +133,15 @@ export async function auditFormerProviderRemoval(
              AND ${OLD_ONLY_INVOICED_ORDER}
          )`,
     );
-    const sriChainsRestarted = await count(
-      tx,
-      `SELECT count(*)::int AS "count"
-       FROM "InvoiceRequest" f
-       JOIN "InvoiceRequest" replaced ON replaced."id" = f."replacesInvoiceRequestId"
-       WHERE f."issuerId" IS NOT NULL AND replaced."issuerId" IS NULL`,
-    );
+    const sriChainsRestarted = sriRequests
+      ? await count(
+          tx,
+          `SELECT count(*)::int AS "count"
+           FROM "InvoiceRequest" f
+           JOIN "InvoiceRequest" replaced ON replaced."id" = f."replacesInvoiceRequestId"
+           WHERE f."issuerId" IS NOT NULL AND replaced."issuerId" IS NULL`,
+        )
+      : 0;
     const perTenant = await tx.$queryRawUnsafe<
       { tenantId: string; kind: keyof Omit<DeletedRow, 'tenantId'>; count: number }[]
     >(
@@ -119,16 +153,17 @@ export async function auditFormerProviderRemoval(
        UNION ALL
        SELECT b."tenantId", 'points', count(*)::int
          FROM "BranchEmissionPoint" p JOIN "Branch" b ON b."id" = p."branchId"
-         WHERE p."issuerId" IS NULL GROUP BY 1
+         WHERE ${former('BranchEmissionPoint', 'p')} GROUP BY 1
        UNION ALL
        SELECT "tenantId", 'requests', count(*)::int
-         FROM "InvoiceRequest" WHERE "issuerId" IS NULL GROUP BY 1
+         FROM "InvoiceRequest" r WHERE ${former('InvoiceRequest', 'r')} GROUP BY 1
        UNION ALL
        SELECT COALESCE(r."tenantId", c."tenantId"), 'events', count(*)::int
          FROM "InvoiceRequestEvent" e
          LEFT JOIN "InvoiceRequest" r ON r."id" = e."invoiceRequestId"
          LEFT JOIN "InvoicingConnection" c ON c."id" = e."connectionId"
-         WHERE e."issuerId" IS NULL OR (r."id" IS NOT NULL AND r."issuerId" IS NULL)
+         WHERE ${former('InvoiceRequestEvent', 'e')}
+            OR (r."id" IS NOT NULL AND ${former('InvoiceRequest', 'r')})
          GROUP BY 1`,
     );
     const tenants = new Map<string, DeletedRow>();

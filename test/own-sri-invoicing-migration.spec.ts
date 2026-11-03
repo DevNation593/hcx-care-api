@@ -100,11 +100,8 @@ class Stage {
   }
 }
 
-/**
- * One session per order: A (old authorized), B (old processing), C (old rejected replaced by an
- * authorized SRI request), D (old failed twice, paid again), E (SRI rejected, then old authorized).
- */
-async function seed({ run }: Stage, environment: '1' | '2') {
+/** The clinic with its former provider connection, a customer ref and the provider's point. */
+async function seedFormerProvider({ run }: Stage, environment: '1' | '2') {
   await run(
     `INSERT INTO "Tenant" ("id","name","email","updatedAt") VALUES ('t','T','t@example.test',now())`,
   );
@@ -141,24 +138,13 @@ async function seed({ run }: Stage, environment: '1' | '2') {
      VALUES ('ref','c','CUSTOMER','bp','ext','h',now())`,
   );
   await run(
-    `INSERT INTO "InvoicingIssuer" ("id","tenantId","ruc","legalName","headOfficeAddress","accountingRequired","environment","updatedAt")
-     VALUES ('i','t','1710034065001','T','Quito',false,'1',now())`,
-  );
-  await run(
     `INSERT INTO "BranchEmissionPoint" ("id","branchId","connectionId","establishmentId","emissionPointId","establishmentCode","emissionPointCode","updatedAt")
      VALUES ('pt_old','b1','c','e','ep','001','001',now())`,
   );
-  await run(
-    `INSERT INTO "BranchEmissionPoint" ("id","branchId","issuerId","establishmentCode","emissionPointCode","establishmentAddress","updatedAt")
-     VALUES ('pt_new','b2','i','002','001','Quito',now())`,
-  );
-  const sessions = {
-    A: 'BILLED',
-    B: 'BILLING_PENDING',
-    C: 'BILLED',
-    D: 'BILLING_FAILED',
-    E: 'BILLED',
-  };
+}
+
+/** One completed session billed through one order per key; order D was already paid again. */
+async function seedOrders({ run }: Stage, sessions: Record<string, string>) {
   let number = 1;
   for (const [key, status] of Object.entries(sessions)) {
     await run(
@@ -178,34 +164,87 @@ async function seed({ run }: Stage, environment: '1' | '2') {
        VALUES ('it${key}','t','o${key}','TREATMENT_SESSION','s${key}','p','d',1,10,0,10,0,'u')`,
     );
   }
-  const oldRequest = (id: string, order: string, status: string, root = id, replaces?: string) =>
-    run(
-      `INSERT INTO "InvoiceRequest" ("id","tenantId","orderId","connectionId","billingProfileId","requestedById","status","clientIdempotencyKey","providerIdempotencyKey","snapshotEncrypted","rootRequestId","replacesInvoiceRequestId","externalDocumentId","requiresReconciliation","updatedAt")
-       VALUES ('${id}','t','${order}','c','bp','u','${status}','k-${id}','pk-${id}','enc','${root}',${replaces ? `'${replaces}'` : 'NULL'},'doc-${id}',${status === 'PROCESSING'},now())`,
-    );
-  const sriRequest = (id: string, order: string, status: string, root = id, replaces?: string) =>
-    run(
-      `INSERT INTO "InvoiceRequest" ("id","tenantId","orderId","issuerId","billingProfileId","requestedById","status","clientIdempotencyKey","snapshotEncrypted","rootRequestId","replacesInvoiceRequestId","sequential","updatedAt")
-       VALUES ('${id}','t','${order}','i','bp','u','${status}','k-${id}','enc','${root}',${replaces ? `'${replaces}'` : 'NULL'},'${id.padStart(9, '0')}',now())`,
-    );
-  await oldRequest('rA', 'oA', 'AUTHORIZED');
-  await oldRequest('rB', 'oB', 'PROCESSING');
-  await oldRequest('rC', 'oC', 'REJECTED');
-  await sriRequest('rC2', 'oC', 'AUTHORIZED', 'rC', 'rC');
-  await oldRequest('rD1', 'oD', 'FAILED');
-  await oldRequest('rD2', 'oD', 'FAILED', 'rD1', 'rD1');
-  await sriRequest('rE1', 'oE', 'REJECTED');
-  await oldRequest('rE2', 'oE', 'AUTHORIZED', 'rE1', 'rE1');
-  await run(
+}
+
+const oldRequest = (
+  { run }: Stage,
+  id: string,
+  order: string,
+  status: string,
+  root = id,
+  replaces?: string,
+) =>
+  run(
+    `INSERT INTO "InvoiceRequest" ("id","tenantId","orderId","connectionId","billingProfileId","requestedById","status","clientIdempotencyKey","providerIdempotencyKey","snapshotEncrypted","rootRequestId","replacesInvoiceRequestId","externalDocumentId","requiresReconciliation","updatedAt")
+     VALUES ('${id}','t','${order}','c','bp','u','${status}','k-${id}','pk-${id}','enc','${root}',${replaces ? `'${replaces}'` : 'NULL'},'doc-${id}',${status === 'PROCESSING'},now())`,
+  );
+
+const sriRequest = (
+  { run }: Stage,
+  id: string,
+  order: string,
+  status: string,
+  root = id,
+  replaces?: string,
+) =>
+  run(
+    `INSERT INTO "InvoiceRequest" ("id","tenantId","orderId","issuerId","billingProfileId","requestedById","status","clientIdempotencyKey","snapshotEncrypted","rootRequestId","replacesInvoiceRequestId","sequential","updatedAt")
+     VALUES ('${id}','t','${order}','i','bp','u','${status}','k-${id}','enc','${root}',${replaces ? `'${replaces}'` : 'NULL'},'${id.padStart(9, '0')}',now())`,
+  );
+
+const oldEvents = ({ run }: Stage) =>
+  run(
     `INSERT INTO "InvoiceRequestEvent" ("id","connectionId","invoiceRequestId","type","source","detail","webhookEventId") VALUES
      ('evA','c','rA','AUTHORIZED','WEBHOOK','{}','wh-1'),
      ('evB','c','rB','REQUESTED','API','{}',NULL),
      ('evOrphan','c',NULL,'WEBHOOK_IGNORED','WEBHOOK','{}','wh-2')`,
   );
-  await run(
+
+/**
+ * One session per order: A (old authorized), B (old processing), C (old rejected replaced by an
+ * authorized SRI request), D (old failed twice, paid again), E (SRI rejected, then old authorized).
+ */
+async function seed(stage: Stage, environment: '1' | '2') {
+  await seedFormerProvider(stage, environment);
+  await stage.run(
+    `INSERT INTO "InvoicingIssuer" ("id","tenantId","ruc","legalName","headOfficeAddress","accountingRequired","environment","updatedAt")
+     VALUES ('i','t','1710034065001','T','Quito',false,'1',now())`,
+  );
+  await stage.run(
+    `INSERT INTO "BranchEmissionPoint" ("id","branchId","issuerId","establishmentCode","emissionPointCode","establishmentAddress","updatedAt")
+     VALUES ('pt_new','b2','i','002','001','Quito',now())`,
+  );
+  await seedOrders(stage, {
+    A: 'BILLED',
+    B: 'BILLING_PENDING',
+    C: 'BILLED',
+    D: 'BILLING_FAILED',
+    E: 'BILLED',
+  });
+  await oldRequest(stage, 'rA', 'oA', 'AUTHORIZED');
+  await oldRequest(stage, 'rB', 'oB', 'PROCESSING');
+  await oldRequest(stage, 'rC', 'oC', 'REJECTED');
+  await sriRequest(stage, 'rC2', 'oC', 'AUTHORIZED', 'rC', 'rC');
+  await oldRequest(stage, 'rD1', 'oD', 'FAILED');
+  await oldRequest(stage, 'rD2', 'oD', 'FAILED', 'rD1', 'rD1');
+  await sriRequest(stage, 'rE1', 'oE', 'REJECTED');
+  await oldRequest(stage, 'rE2', 'oE', 'AUTHORIZED', 'rE1', 'rE1');
+  await oldEvents(stage);
+  await stage.run(
     `INSERT INTO "InvoiceRequestEvent" ("id","issuerId","invoiceRequestId","type","source","detail")
      VALUES ('evC2','i','rC2','AUTHORIZED','WORKER','{}')`,
   );
+}
+
+/** Former provider documents on a database that has no SRI issuer columns yet. */
+async function seedBeforeIssuer(stage: Stage) {
+  await seedFormerProvider(stage, '1');
+  await seedOrders(stage, { A: 'BILLED', B: 'BILLING_PENDING', D: 'BILLING_FAILED' });
+  await oldRequest(stage, 'rA', 'oA', 'AUTHORIZED');
+  await oldRequest(stage, 'rB', 'oB', 'PROCESSING');
+  await oldRequest(stage, 'rD1', 'oD', 'FAILED');
+  await oldRequest(stage, 'rD2', 'oD', 'FAILED', 'rD1', 'rD1');
+  await oldEvents(stage);
 }
 
 (disposable ? describe : describe.skip)('own SRI invoicing deletion migration', () => {
@@ -384,6 +423,52 @@ async function seed({ run }: Stage, environment: '1' | '2') {
           `SELECT "finished_at" FROM "_prisma_migrations" WHERE "migration_name"='${TARGET}'`,
         ),
       ).toEqual({ finished_at: null });
+    });
+  });
+  // The audit is run against production before deploying, when neither migration is applied yet.
+  describe('before the additive migration', () => {
+    let stage: Stage;
+    let audit: Awaited<ReturnType<typeof auditFormerProviderRemoval>>;
+
+    beforeAll(async () => {
+      stage = new Stage(ADDITIVE);
+      await stage.create();
+      await seedBeforeIssuer(stage);
+      audit = await auditFormerProviderRemoval(stage.db);
+      stage.apply();
+    });
+    afterAll(() => stage.drop());
+
+    it('treats every request as the former provider one', () => {
+      expect(audit).toEqual({
+        alreadyApplied: false,
+        requestsByEnvironmentAndStatus: [
+          { environment: '1', status: 'AUTHORIZED', requiresReconciliation: false, count: 1 },
+          { environment: '1', status: 'FAILED', requiresReconciliation: false, count: 2 },
+          { environment: '1', status: 'PROCESSING', requiresReconciliation: true, count: 1 },
+        ],
+        productionBlocking: 0,
+        ordersToPaid: 2,
+        sessionsToBillingFailed: 2,
+        sriChainsRestarted: 0,
+        deletedPerTenant: [
+          { tenantId: 't', connections: 1, refs: 1, points: 1, requests: 4, events: 3 },
+        ],
+      });
+    });
+
+    it('previews what both migrations then change', async () => {
+      expect(await stage.ids('InvoiceRequest')).toEqual([]);
+      expect(await stage.ids('InvoiceRequestEvent')).toEqual([]);
+      expect(await stage.ids('BranchEmissionPoint')).toEqual([]);
+      for (const key of ['A', 'B']) {
+        expect(await stage.status('Order', `o${key}`)).toEqual({ status: 'PAID', version: 2 });
+        expect(await stage.status('TreatmentSession', `s${key}`)).toEqual({
+          status: 'BILLING_FAILED',
+          version: 2,
+        });
+      }
+      expect(await stage.status('Order', 'oD')).toEqual({ status: 'PAID', version: 1 });
     });
   });
 });
