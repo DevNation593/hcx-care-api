@@ -20,6 +20,7 @@ import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorat
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
+import { PermissionChecker } from '../common/permissions/permission-checker.service';
 import { InvoiceRequestsService } from './invoice-requests.service';
 import { InvoiceArtifactsService } from './invoice-artifacts.service';
 import { IssuerService } from './issuer.service';
@@ -35,6 +36,7 @@ export class InvoicingController {
     private readonly requests: InvoiceRequestsService,
     private readonly artifacts: InvoiceArtifactsService,
     private readonly worker: InvoiceWorkerService,
+    private readonly permissions: PermissionChecker,
   ) {}
   @Get('invoicing/issuer') @Roles('MASTER') getIssuer(@Param('tenantId') t: string) {
     return this.issuer.get(t);
@@ -92,7 +94,14 @@ export class InvoicingController {
             (error instanceof Error ? error.name : 'UNKNOWN');
       this.logger.warn(`Inline invoice attempt failed for ${r.id}: ${reason}`);
     }
-    return this.requests.view(t, r.id);
+    // SRI explanations stay behind billing.view, which a billing.create-only caller lacks.
+    const includeError = await this.permissions
+      .assertAllowed({ userId: u.userId, tenantId: t, role: u.role }, 'billing.view')
+      .then(
+        () => true,
+        () => false,
+      );
+    return this.requests.view(t, r.id, { includeError });
   }
   @Get('invoice-requests')
   @Throttle({ default: { limit: 120, ttl: 60000 } })

@@ -236,11 +236,14 @@ export class InvoiceRequestsService {
       pageSize: q.pageSize,
     };
   }
-  /** Current state of one request of the tenant (used to answer right after the inline attempt). */
-  view(tenantId: string, id: string) {
-    return this.get(tenantId, id);
+  /**
+   * Current state of one request of the tenant, to answer right after the inline attempt. The
+   * caller may only hold billing.create, so SRI messages are included only when asked for.
+   */
+  view(tenantId: string, id: string, options: { includeError: boolean }) {
+    return this.get(tenantId, id, options);
   }
-  async get(tenantId: string, id: string) {
+  async get(tenantId: string, id: string, options: { includeError?: boolean } = {}) {
     const r = await this.prisma.invoiceRequest.findFirst({
       where: { tenantId, id },
       include: {
@@ -249,6 +252,6 @@ export class InvoiceRequestsService {
       },
     });
     if (!r) throw invoiceError('INVOICE_REQUEST_NOT_FOUND', 404);
-    return invoiceView(r, this.crypto);
+    return invoiceView(r, this.crypto, options);
   }
 }

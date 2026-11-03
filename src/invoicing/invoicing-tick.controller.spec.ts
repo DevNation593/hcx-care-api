@@ -63,9 +63,10 @@ describe('InvoicingTickController', () => {
 });
 
 describe('InvoicingController.create', () => {
-  const user = { userId: 'user' } as any;
+  const user = { userId: 'user', role: 'MASTER' } as any;
   let requests: { create: jest.Mock; view: jest.Mock };
   let worker: { processOne: jest.Mock };
+  let permissions: { assertAllowed: jest.Mock };
   let controller: InvoicingController;
 
   beforeEach(() => {
@@ -74,7 +75,14 @@ describe('InvoicingController.create', () => {
       view: jest.fn().mockResolvedValue({ id: 'request', status: 'AUTHORIZED' }),
     };
     worker = { processOne: jest.fn().mockResolvedValue(undefined) };
-    controller = new InvoicingController({} as any, requests as any, {} as any, worker as any);
+    permissions = { assertAllowed: jest.fn().mockResolvedValue(undefined) };
+    controller = new InvoicingController(
+      {} as any,
+      requests as any,
+      {} as any,
+      worker as any,
+      permissions as any,
+    );
   });
 
   it('returns the state reached inline', async () => {
@@ -84,7 +92,17 @@ describe('InvoicingController.create', () => {
     });
     expect(requests.create).toHaveBeenCalledWith('clinic', 'user', 'order', 'key');
     expect(worker.processOne).toHaveBeenCalledWith('request', 15000);
-    expect(requests.view).toHaveBeenCalledWith('clinic', 'request');
+    expect(permissions.assertAllowed).toHaveBeenCalledWith(
+      { userId: 'user', tenantId: 'clinic', role: 'MASTER' },
+      'billing.view',
+    );
+    expect(requests.view).toHaveBeenCalledWith('clinic', 'request', { includeError: true });
+  });
+
+  it('hides SRI messages from a caller without billing.view', async () => {
+    permissions.assertAllowed.mockRejectedValue(new Error('PERMISSION_DENIED'));
+    await controller.create('clinic', 'order', user, 'key');
+    expect(requests.view).toHaveBeenCalledWith('clinic', 'request', { includeError: false });
   });
 
   it.each([
