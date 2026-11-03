@@ -1,4 +1,5 @@
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { HttpException, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { SriError } from './sri/sri-types';
 import * as nodeCrypto from 'crypto';
 import { InvoicingController } from './invoicing.controller';
 import { InvoicingTickController } from './invoicing-tick.controller';
@@ -49,6 +50,12 @@ describe('InvoicingTickController', () => {
     expect(worker.tick).not.toHaveBeenCalled();
   });
 
+  it('is not throttled', () => {
+    expect(
+      Reflect.getMetadata(`THROTTLER:SKIPdefault`, InvoicingTickController.prototype.tick),
+    ).toBe(true);
+  });
+
   it('runs one tick with the right secret', async () => {
     await expect(controller.tick(`Bearer ${secret}`)).resolves.toEqual({ processed: 2 });
     expect(worker.tick).toHaveBeenCalledWith(45000);
@@ -86,10 +93,21 @@ describe('InvoicingController.create', () => {
     expect(requests.view).toHaveBeenCalledWith('clinic', 'request');
   });
 
-  it('still answers with the current view when the inline attempt throws', async () => {
-    worker.processOne.mockRejectedValue(new Error('boom'));
+  it.each([
+    [new SriError('transient', 'SRI_TIMEOUT'), 'SRI_TIMEOUT'],
+    [new HttpException({ code: 'INVOICE_X', message: 'secret text' }, 409), 'INVOICE_X'],
+    [new TypeError('secret text'), 'TypeError'],
+  ])('answers with the view and warns with id and code only (%#)', async (error, code) => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    worker.processOne.mockRejectedValue(error);
     await expect(controller.create('clinic', 'order', user, 'key')).resolves.toMatchObject({
       id: 'request',
     });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = String(warn.mock.calls[0][0]);
+    expect(message).toContain('request');
+    expect(message).toContain(code);
+    expect(message).not.toContain('secret text');
+    warn.mockRestore();
   });
 });

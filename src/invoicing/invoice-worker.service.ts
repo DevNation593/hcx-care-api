@@ -7,9 +7,9 @@ import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.servic
 import { InvoiceEmitter } from './invoice-emitter';
 import { releaseOrder, retryDelay } from './invoice-state';
 import { SriError } from './sri/sri-types';
-/** No claim reaches a halted row; intervention resets its nextAttemptAt. */
 /** The emitter never starts an SRI call with less than this left, so neither does a tick. */
 const MIN_START_MS = 4000;
+/** No claim reaches a halted row; intervention resets its nextAttemptAt. */
 const HALTED_UNTIL = new Date('9999-12-31T00:00:00Z');
 @Injectable()
 export class InvoiceWorkerService {

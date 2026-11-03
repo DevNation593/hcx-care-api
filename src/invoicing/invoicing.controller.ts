@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  Logger,
   HttpCode,
   Param,
   Post,
@@ -33,6 +34,7 @@ import { IssuerCertificateDto, IssuerEmissionPointDto, SaveIssuerDto } from './d
 @Controller('tenants/:tenantId')
 @RequireSection('core.billing.invoicing')
 export class InvoicingController {
+  private readonly logger = new Logger(InvoicingController.name);
   constructor(
     private readonly connections: ConnectionService,
     private readonly issuer: IssuerService,
@@ -107,8 +109,16 @@ export class InvoicingController {
     const r = await this.requests.create(t, u.userId, id, key);
     try {
       await this.worker.processOne(r.id, 15000);
-    } catch {
+    } catch (error) {
       // The request exists already: the tick resumes it, so the inline attempt never fails the call.
+      // Only the id and a code are traced, never messages or content.
+      const code = (error as { code?: unknown } | null)?.code;
+      const reason =
+        typeof code === 'string'
+          ? code
+          : ((error as { response?: { code?: unknown } } | null)?.response?.code as string) ||
+            (error instanceof Error ? error.name : 'UNKNOWN');
+      this.logger.warn(`Inline invoice attempt failed for ${r.id}: ${reason}`);
     }
     return this.requests.view(t, r.id);
   }

@@ -6,7 +6,7 @@ import {
   Post,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'crypto';
 import { Public } from '../common/decorators/public.decorator';
 import { InvoiceWorkerService } from './invoice-worker.service';
@@ -17,10 +17,12 @@ export class InvoicingTickController {
 
   // @Public(): called by an external scheduler with no user session, so it is authenticated by
   // INVOICING_TICK_SECRET (Bearer) instead of JWT. Without the secret configured the route does not exist.
+  // Not throttled: behind a proxy callers may share one bucket, so bad requests could lock the real
+  // scheduler out. The secret check guards the route and concurrent ticks are safe (SKIP LOCKED leases).
   @Public()
   @Post('tick')
   @HttpCode(200)
-  @Throttle({ default: { limit: 6, ttl: 60000 } })
+  @SkipThrottle()
   tick(@Headers('authorization') authorization?: string) {
     const secret = process.env.INVOICING_TICK_SECRET;
     if (!secret) throw new NotFoundException();
