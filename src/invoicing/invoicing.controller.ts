@@ -23,6 +23,7 @@ import { ConnectionService } from './connection.service';
 import { InvoiceRequestsService } from './invoice-requests.service';
 import { InvoiceArtifactsService } from './invoice-artifacts.service';
 import { IssuerService } from './issuer.service';
+import { InvoiceWorkerService } from './invoice-worker.service';
 import {
   ListInvoiceRequestsQuery,
   SaveConnectionDto,
@@ -37,6 +38,7 @@ export class InvoicingController {
     private readonly issuer: IssuerService,
     private readonly requests: InvoiceRequestsService,
     private readonly artifacts: InvoiceArtifactsService,
+    private readonly worker: InvoiceWorkerService,
   ) {}
   @Get('invoicing/connection') @Roles('MASTER') getConnection(@Param('tenantId') t: string) {
     return this.connections.get(t);
@@ -96,13 +98,19 @@ export class InvoicingController {
   @HttpCode(202)
   @Roles('MASTER')
   @RequirePermission('billing.create')
-  create(
+  async create(
     @Param('tenantId') t: string,
     @Param('id') id: string,
     @CurrentUser() u: AuthUser,
     @Headers('idempotency-key') key: string,
   ) {
-    return this.requests.create(t, u.userId, id, key);
+    const r = await this.requests.create(t, u.userId, id, key);
+    try {
+      await this.worker.processOne(r.id, 15000);
+    } catch {
+      // The request exists already: the tick resumes it, so the inline attempt never fails the call.
+    }
+    return this.requests.view(t, r.id);
   }
   @Get('invoice-requests')
   @Throttle({ default: { limit: 120, ttl: 60000 } })

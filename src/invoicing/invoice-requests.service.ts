@@ -241,6 +241,10 @@ export class InvoiceRequestsService {
       pageSize: q.pageSize,
     };
   }
+  /** Current state of one request of the tenant (used to answer right after the inline attempt). */
+  view(tenantId: string, id: string) {
+    return this.get(tenantId, id);
+  }
   async get(tenantId: string, id: string) {
     const r = await this.prisma.invoiceRequest.findFirst({
       where: { tenantId, id },

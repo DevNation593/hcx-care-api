@@ -12,11 +12,12 @@ import { InvoiceArtifactsService } from './invoice-artifacts.service';
 import { InvoiceDeliveryService } from './invoice-delivery.service';
 import { InvoiceEmitter } from './invoice-emitter';
 import { InvoicingController } from './invoicing.controller';
+import { InvoicingTickController } from './invoicing-tick.controller';
 import { IssuerService } from './issuer.service';
 import { SriClient } from './sri/sri-client';
 @Module({
   imports: [PrismaModule, ClinicalAccessModule, PatientFilesModule, MailModule],
-  controllers: [InvoicingController],
+  controllers: [InvoicingController, InvoicingTickController],
   providers: [
     EmiteFacilProvider,
     ConnectionService,
