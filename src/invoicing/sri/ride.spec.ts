@@ -162,7 +162,11 @@ describe('renderRide', () => {
   it('keeps the whole footer on one page wherever it lands', async () => {
     const base = sampleDocument();
     const address = 'Calle de los Almendros y Avenida Larga '.repeat(8).slice(0, 300);
-    for (let count = 1; count <= 60; count++) {
+    // Line counts on both sides of each page boundary of this document: the footer moves to page
+    // 2 at 7 lines, the lines spill onto page 2 at 33 and the footer moves to page 3 at 57.
+    const counts = [1, 5, 6, 7, 8, 31, 32, 33, 34, 55, 56, 57, 58];
+    const pageCounts = new Set<number>();
+    for (const count of counts) {
       const lines = Array.from({ length: count }, (_, i) => ({
         ...base.lines[0],
         localId: `l${i}`,
@@ -185,8 +189,11 @@ describe('renderRide', () => {
       expect(footerPages[0]).toContain('validezComprobantes.jsf');
       expect(footerPages[0]).toContain('Cuidemos el medio ambiente.');
       expect(footerPages[0]).toContain('TOTAL');
+      pageCounts.add(pages.length);
     }
-  });
+    // If the layout changes, the counts above must be moved to its new boundaries.
+    expect([...pageCounts].sort((a, b) => a - b)).toEqual([1, 2, 3]);
+  }, 60000);
 
   it('compresses by default', async () => {
     const document = sampleDocument();
