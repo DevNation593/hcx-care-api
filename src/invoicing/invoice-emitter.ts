@@ -215,10 +215,29 @@ export class InvoiceEmitter {
    * is still pending (a file, an e-mail to retry) is resumed by the reconcile claim after a backoff.
    */
   private async finish(row: InvoiceRequest, deadline: number): Promise<void> {
-    if (deadline - Date.now() >= MIN_CALL_MS) {
-      await this.artifacts.collect(row);
-      if (deadline - Date.now() >= MIN_CALL_MS) await this.delivery.deliver(row);
+    // Nothing here may throw: the row is already AUTHORIZED and a failure must not be recorded on it.
+    // Whatever stays pending is resumed after the lease expires or the backoff below.
+    try {
+      if (deadline - Date.now() >= MIN_CALL_MS) {
+        await this.guarded(() => this.artifacts.collect(row));
+        if (deadline - Date.now() >= MIN_CALL_MS)
+          await this.guarded(() => this.delivery.deliver(row));
+      }
+      await this.release(row);
+    } catch {
+      /* The lease expires and the reconcile claim retries. */
     }
+  }
+
+  private async guarded(step: () => Promise<void>): Promise<void> {
+    try {
+      await step();
+    } catch {
+      /* Counted as pending by release(). */
+    }
+  }
+
+  private async release(row: InvoiceRequest): Promise<void> {
     const where = { id: row.id, leaseToken: row.leaseToken, leaseUntil: { gt: new Date() } };
     const current = await this.prisma.invoiceRequest.findFirst({ where });
     if (!current) return;

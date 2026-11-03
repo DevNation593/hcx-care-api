@@ -65,6 +65,19 @@ export class InvoiceWorkerService {
       // The emitter may have signed during this pass: decide from the stored row, not the claim.
       const current = await tx.invoiceRequest.findFirst({ where: this.lease(row) });
       if (!current) return;
+      // An authorized invoice never records a failure: it only frees the lease and backs off.
+      if (current.status === 'AUTHORIZED') {
+        await tx.invoiceRequest.updateMany({
+          where: this.lease(row),
+          data: {
+            attempts: { increment: 1 },
+            nextAttemptAt: new Date(Date.now() + retryDelay(current.attempts + 1)),
+            leaseToken: null,
+            leaseUntil: null,
+          },
+        });
+        return;
+      }
       // Signed XML may still reach the SRI, so the request never fails and keeps its order.
       const signed = !!current.signedXmlStorageKey;
       const safeFailure = !signed && (e.kind !== 'transient' || expired);

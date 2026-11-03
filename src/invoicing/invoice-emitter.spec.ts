@@ -726,6 +726,33 @@ describe('InvoiceEmitter preflight and signing', () => {
         expect(stored.leaseToken).toBeNull();
       });
 
+      it.each([
+        ['collect', () => artifacts.collect.mockRejectedValue(new Error('storage down'))],
+        ['deliver', () => delivery.deliver.mockRejectedValue(new Error('db down'))],
+      ])('keeps the row AUTHORIZED, untouched and backed off when %s throws', async (_s, fail) => {
+        sri.authorize.mockResolvedValue(authorized);
+        fail();
+        expect(await run()).toBeUndefined();
+        expect(stored).toMatchObject({
+          status: 'AUTHORIZED',
+          leaseToken: null,
+          leaseUntil: null,
+          finishedAt: expect.any(Date),
+          lastErrorEncrypted: null,
+          attempts: 3,
+        });
+        expect(stored.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+        expect(events.map((e) => e.type)).toEqual(['AUTHORIZED']);
+      });
+
+      it('swallows a failing release: the lease just expires', async () => {
+        sri.authorize.mockResolvedValue(authorized);
+        prisma.invoiceRequest.findFirst.mockRejectedValue(new Error('db down'));
+        expect(await run()).toBeUndefined();
+        expect(stored.status).toBe('AUTHORIZED');
+        expect(stored.lastErrorEncrypted).toBeNull();
+      });
+
       it('does not touch a row whose lease was lost', async () => {
         sri.authorize.mockResolvedValue(authorized);
         artifacts.collect.mockImplementation(async () => {
@@ -1100,6 +1127,25 @@ describe('InvoiceWorkerService', () => {
     expect(tx.invoiceRequestEvent.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ type: 'RETRY_SCHEDULED' }),
     });
+  });
+
+  it('never records a failure on an AUTHORIZED row: it only frees the lease and backs off', async () => {
+    const row = leased({ status: 'AUTHORIZED', signedXmlStorageKey: 'k', attempts: 1 });
+    tx.invoiceRequest.findFirst.mockResolvedValue(row);
+    emitter.advance.mockRejectedValue(new Error('socket hang up'));
+
+    await worker.process(row as any);
+
+    const { data } = tx.invoiceRequest.updateMany.mock.calls[0][0];
+    expect(data).toEqual({
+      attempts: { increment: 1 },
+      nextAttemptAt: expect.any(Date),
+      leaseToken: null,
+      leaseUntil: null,
+    });
+    expect(data.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+    expect(tx.invoiceRequestEvent.create).not.toHaveBeenCalled();
+    expect(tx.order.update).not.toHaveBeenCalled();
   });
 
   it('does nothing when the lease was lost before recording the failure', async () => {

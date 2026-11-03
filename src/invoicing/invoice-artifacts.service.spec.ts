@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
@@ -76,6 +77,7 @@ describe('leased durable invoice artifacts', () => {
       remove: jest.fn(async (key: string) => void stored.delete(key)),
     };
     service = new InvoiceArtifactsService(prisma, crypto, storage);
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -144,6 +146,39 @@ describe('leased durable invoice artifacts', () => {
     expect(render).toHaveBeenCalledTimes(2);
     expect(row.rideStorageKey).toBeTruthy();
     expect(storage.put).toHaveBeenCalledTimes(2);
+  });
+
+  it('traces a failed artifact by code only and keeps the authorization', async () => {
+    const warn = Logger.prototype.warn as jest.Mock;
+    jest.spyOn(rideModule, 'renderRide').mockRejectedValue(new Error('secret detail'));
+
+    await service.collect(row);
+
+    expect(row).toMatchObject({ status: 'AUTHORIZED' });
+    expect(row.rideStorageKey).toBeNull();
+    expect(
+      prisma.invoiceRequest.updateMany.mock.calls.map(([a]: any) => a.data),
+    ).not.toContainEqual(expect.objectContaining({ status: expect.anything() }));
+    expect(events()).toContainEqual(
+      expect.objectContaining({
+        type: 'ARTIFACT_FAILED',
+        invoiceRequestId: 'request',
+        detail: { kind: 'ride', code: 'INVOICING_INTERNAL_ERROR' },
+      }),
+    );
+    expect(JSON.stringify([events(), warn.mock.calls])).not.toContain('secret detail');
+    expect(warn.mock.calls[0][0]).toContain('request');
+  });
+
+  it('reports the code of an altered signed XML', async () => {
+    row.signedXmlSha256 = '0'.repeat(64);
+    await service.collect(row);
+    expect(events()).toContainEqual(
+      expect.objectContaining({
+        type: 'ARTIFACT_FAILED',
+        detail: { kind: 'xml', code: 'INVOICE_SIGNED_XML_INTEGRITY' },
+      }),
+    );
   });
 
   it('stores nothing when the signed XML was altered or cannot be read', async () => {

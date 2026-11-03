@@ -41,15 +41,15 @@ export class InvoiceDeliveryService {
       !current.rideStorageKey
     )
       return;
-    const snapshot = JSON.parse(
-      this.crypto.decrypt(current.tenantId, current.snapshotEncrypted),
-    ) as FiscalSnapshot;
-    const to = snapshot.customer.email?.trim();
-    // No address (final consumer): nothing to send, and the row must not be claimed for it again.
-    if (!to) return this.record(current, 'EMAIL_SKIPPED', { emailAttempts: MAX_EMAIL_ATTEMPTS });
-
     let sent = false;
     try {
+      const snapshot = JSON.parse(
+        this.crypto.decrypt(current.tenantId, current.snapshotEncrypted),
+      ) as FiscalSnapshot;
+      const to = snapshot.customer.email?.trim();
+      // No address (final consumer): nothing to send, and the row must not be claimed for it again.
+      if (!to)
+        return await this.record(current, 'EMAIL_SKIPPED', { emailAttempts: MAX_EMAIL_ATTEMPTS });
       const number = current.number!;
       const content = invoiceMail({
         number,
@@ -71,7 +71,7 @@ export class InvoiceDeliveryService {
       ];
       sent = await this.mail.send(to, content);
     } catch {
-      /* An unreadable file counts as a failed attempt, like a refused send. */
+      /* An unreadable snapshot or file counts as a failed attempt, like a refused send. */
     }
     if (sent) return this.record(current, 'EMAILED', { emailedAt: new Date() });
     await this.record(

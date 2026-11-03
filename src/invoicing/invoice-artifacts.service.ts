@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
 import { InvoiceRequest } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -8,11 +8,23 @@ import { invoiceError } from './invoice-errors';
 import { FiscalSnapshot, toInvoiceDocument } from './invoice-snapshot';
 import { buildAuthorizedXml } from './sri/authorized-xml';
 import { renderRide } from './sri/ride';
+import { SriError } from './sri/sri-types';
 
 const ENVIRONMENT_LABELS = { '1': 'PRUEBAS', '2': 'PRODUCCIÓN' } as const;
 
+function failureCode(error: unknown): string {
+  if (error instanceof SriError) return error.code;
+  if (error instanceof HttpException) {
+    const code = (error.getResponse() as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+  }
+  return 'INVOICING_INTERNAL_ERROR';
+}
+
 @Injectable()
 export class InvoiceArtifactsService {
+  private readonly logger = new Logger(InvoiceArtifactsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly crypto: ClinicalCryptoService,
@@ -68,9 +80,29 @@ export class InvoiceArtifactsService {
           return changed.count;
         });
         if (!kept) await this.storage.remove(key);
-      } catch {
-        /* Authorization survives artifact failures; the next pass retries. */
+      } catch (error) {
+        // The authorization survives; the next pass retries. Only the failure code is traced.
+        await this.traceFailure(row, kind, error);
       }
+    }
+  }
+
+  private async traceFailure(row: InvoiceRequest, kind: 'xml' | 'ride', error: unknown) {
+    const code = failureCode(error);
+    this.logger.warn(`Invoice ${row.id}: ${kind} artifact failed (${code})`);
+    try {
+      await this.prisma.invoiceRequestEvent.create({
+        data: {
+          issuerId: row.issuerId,
+          connectionId: null,
+          invoiceRequestId: row.id,
+          type: 'ARTIFACT_FAILED',
+          source: 'DISPATCHER',
+          detail: { kind, code },
+        },
+      });
+    } catch {
+      /* Tracing must never break the pass. */
     }
   }
 

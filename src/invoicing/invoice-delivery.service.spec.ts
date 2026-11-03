@@ -151,6 +151,14 @@ describe('InvoiceDeliveryService', () => {
     expect(row.emailAttempts).toBe(2);
   });
 
+  it('counts an unreadable snapshot as a failed attempt instead of throwing', async () => {
+    row.snapshotEncrypted = 'not-decryptable';
+    await expect(service.deliver(row)).resolves.toBeUndefined();
+    expect(mail.send).not.toHaveBeenCalled();
+    expect(row.emailAttempts).toBe(1);
+    expect(events()).toEqual([expect.objectContaining({ type: 'EMAIL_FAILED' })]);
+  });
+
   it.each([
     ['already emailed', () => (row.emailedAt = new Date())],
     ['out of attempts', () => (row.emailAttempts = 5)],
