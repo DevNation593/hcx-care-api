@@ -88,7 +88,7 @@ export class InvoiceRequestsService {
         const eligibility = evaluateBillingEligibility(facts);
         if (!eligibility.eligible) throw billingBlocked(eligibility);
         const issuer = await tx.invoicingIssuer.findUnique({ where: { tenantId } });
-        if (!issuer?.active || !issuer.certificateEncrypted)
+        if (!issuer?.active || !issuer.certificateStorageKey)
           throw invoiceError('INVOICING_NOT_CONFIGURED', 422);
         const p = await tx.branchEmissionPoint.findFirst({
           where: { branchId: order.branchId, issuerId: issuer.id },

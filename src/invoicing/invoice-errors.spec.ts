@@ -18,6 +18,12 @@ describe('controlled fiscal error messages', () => {
       'No se pudo completar la operación de facturación. Intenta nuevamente.',
     );
   });
+  it.each(['INVOICING_CERTIFICATE_UNAVAILABLE', 'CERTIFICATE_INTEGRITY'])(
+    'explains the stored certificate code %s in Spanish',
+    (code) => {
+      expect(invoiceMessage(code)).toMatch(/firma electrónica/);
+    },
+  );
   it('uses a controlled fallback for an unknown provider code', () => {
     expect(invoiceError('NEW_PROVIDER_CODE', 503).getResponse()).toMatchObject({
       code: 'NEW_PROVIDER_CODE',

@@ -8,6 +8,7 @@ import { auditFormerProviderRemoval } from '../prisma/audit-emite-facil-removal'
 
 const TARGET = '20261102000100_drop_emite_facil';
 const ADDITIVE = '20261102000000_own_sri_issuer';
+const CERTIFICATE_IN_STORAGE = '20261102000300_issuer_certificate_in_storage';
 const migrationsDir = join(__dirname, '..', 'prisma', 'migrations');
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -469,6 +470,68 @@ async function seedBeforeIssuer(stage: Stage) {
         });
       }
       expect(await stage.status('Order', 'oD')).toEqual({ status: 'PAID', version: 1 });
+    });
+  });
+
+  describe('moving the issuer certificate to file storage', () => {
+    let stage: Stage;
+    const issuer = (id: string) =>
+      stage.one(
+        `SELECT "certificateStorageKey", "certificatePasswordEncrypted", "certificateSubject",
+                "certificateSerial", "certificateValidTo", "certificateSha256",
+                "certificateRucVerified", "revision", "legalName"
+         FROM "InvoicingIssuer" WHERE "id"='${id}'`,
+      );
+
+    beforeAll(async () => {
+      stage = new Stage(CERTIFICATE_IN_STORAGE);
+      await stage.create();
+      await stage.run(
+        `INSERT INTO "Tenant" ("id","name","email","updatedAt")
+         VALUES ('t1','T1','t1@example.test',now()),('t2','T2','t2@example.test',now())`,
+      );
+      // One issuer still holds a certificate in the database, the other never uploaded one.
+      await stage.run(
+        `INSERT INTO "InvoicingIssuer" ("id","tenantId","ruc","legalName","headOfficeAddress","accountingRequired","environment",
+           "certificateEncrypted","certificatePasswordEncrypted","certificateSubject","certificateSerial",
+           "certificateValidTo","certificateSha256","certificateRucVerified","revision","updatedAt")
+         VALUES ('i1','t1','1710034065001','Con firma','Quito',false,'1','enc-p12','enc-pass','CN=Firma','01',
+           now() + interval '1 year','abc',true,3,now()),
+                ('i2','t2','1790012345001','Sin firma','Quito',false,'1',NULL,NULL,NULL,NULL,NULL,NULL,false,1,now())`,
+      );
+      stage.apply();
+    });
+    afterAll(() => stage.drop());
+
+    it('replaces the database column with the storage key', async () => {
+      const columns = await stage.db.$queryRawUnsafe<{ column_name: string }[]>(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema='public' AND table_name='InvoicingIssuer'
+           AND column_name IN ('certificateEncrypted','certificateStorageKey')`,
+      );
+      expect(columns).toEqual([{ column_name: 'certificateStorageKey' }]);
+    });
+
+    it('clears a certificate kept in the database so the clinic uploads it again', async () => {
+      expect(await issuer('i1')).toEqual({
+        certificateStorageKey: null,
+        certificatePasswordEncrypted: null,
+        certificateSubject: null,
+        certificateSerial: null,
+        certificateValidTo: null,
+        certificateSha256: null,
+        certificateRucVerified: false,
+        revision: 4,
+        legalName: 'Con firma',
+      });
+    });
+
+    it('leaves an issuer without certificate untouched', async () => {
+      expect(await issuer('i2')).toMatchObject({
+        certificateStorageKey: null,
+        revision: 1,
+        legalName: 'Sin firma',
+      });
     });
   });
 });

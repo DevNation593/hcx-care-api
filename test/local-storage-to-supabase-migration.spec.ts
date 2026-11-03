@@ -70,6 +70,11 @@ describe('local clinical file migration', () => {
           { tenantId: 'tenant-a', xmlStorageKey: 'invoices/xml', rideStorageKey: null },
         ],
       },
+      invoicingIssuer: {
+        findMany: async () => [
+          { tenantId: 'tenant-a', certificateStorageKey: 'invoicing-issuers/certificate' },
+        ],
+      },
     };
 
     await expect(collectReferencedStorageKeys(database as never)).resolves.toEqual([
@@ -77,6 +82,7 @@ describe('local clinical file migration', () => {
       ref('consents/signature'),
       ref('invoices/ride'),
       ref('invoices/xml'),
+      ref('invoicing-issuers/certificate'),
       ref('patients/live'),
       ref('patients/old'),
     ]);
@@ -88,6 +94,7 @@ describe('local clinical file migration', () => {
       consentDocument: { findMany: async () => [] },
       consentSignature: { findMany: async () => [] },
       invoiceRequest: { findMany: async () => [] },
+      invoicingIssuer: { findMany: async () => [] },
     };
     await expect(collectReferencedStorageKeys(database as never)).rejects.toThrow(
       'Invalid storage key',

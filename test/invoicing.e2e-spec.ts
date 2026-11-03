@@ -1,8 +1,8 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { randomUUID } from 'crypto';
-import { mkdtempSync } from 'fs';
+import { createHash, randomUUID } from 'crypto';
+import { existsSync, mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -11,6 +11,7 @@ const storageRoot = mkdtempSync(join(tmpdir(), 'psic-e2e-invoicing-'));
 process.env.STORAGE_LOCAL_PATH = storageRoot;
 
 import { AppModule } from '../src/app.module';
+import { ClinicalCryptoService } from '../src/clinical-access/clinical-crypto.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { PlatformTenantsService } from '../src/platform/platform-tenants.service';
 import { UsersService } from '../src/users/users.service';
@@ -248,6 +249,26 @@ describe('invoicing against a simulated SRI', () => {
     expect(JSON.stringify(certificate.body)).not.toContain(CERTIFICATE_PASSWORD);
     const stored = await prisma.invoicingIssuer.findUniqueOrThrow({ where: { tenantId } });
     expect(stored.certificatePasswordEncrypted).not.toContain(CERTIFICATE_PASSWORD);
+    // The .p12 lives in file storage, encrypted with the clinic key; the row keeps only its key.
+    const certificateFile = (key: string) => join(storageRoot, ...key.split('/'));
+    expect(stored.certificateStorageKey).toMatch(
+      new RegExp(`^invoicing-issuers/${tenantId}/${stored.id}/certificate-[0-9a-f-]{36}$`),
+    );
+    const encrypted = readFileSync(certificateFile(stored.certificateStorageKey!));
+    const plain = app.get(ClinicalCryptoService).decryptBuffer(tenantId, encrypted);
+    expect(createHash('sha256').update(plain).digest('hex')).toBe(stored.certificateSha256);
+    expect(encrypted.includes(plain.subarray(0, 64))).toBe(false);
+    // Replacing it removes the previous file once the new key is saved.
+    await request(server())
+      .put(`${base()}/invoicing/issuer/certificate`)
+      .set(auth())
+      .attach('file', createTestP12({ password: CERTIFICATE_PASSWORD }), 'firma.p12')
+      .field('password', CERTIFICATE_PASSWORD)
+      .expect(200);
+    const replaced = await prisma.invoicingIssuer.findUniqueOrThrow({ where: { tenantId } });
+    expect(replaced.certificateStorageKey).not.toBe(stored.certificateStorageKey);
+    expect(existsSync(certificateFile(replaced.certificateStorageKey!))).toBe(true);
+    expect(existsSync(certificateFile(stored.certificateStorageKey!))).toBe(false);
     // Still no emission point for the branch.
     expect((await submit(order.id).expect(422)).body.missing).toContain('INVOICING_NOT_CONFIGURED');
 

@@ -47,7 +47,7 @@ Prisma ni Nest, probables por separado.
 | `sri/xades-verifier.ts` | Verificador para pruebas y para comprobar la firma antes de guardarla. Port de `XadesVerifier.java` | igual |
 | `sri/sri-client.ts` | SOAP `validarComprobante` (recepción, XML en base64) y `autorizacionComprobante` (por clave de acceso). URLs oficiales de `celcer.sri.gob.ec` (ambiente 1) y `cel.sri.gob.ec` (ambiente 2), solo esos hosts. Timeout 15 s. Port de `HttpSriGateway.java`, `SriSoapRequests.java` y `SriResponseParser.java` | `fetch`, `@xmldom/xmldom` |
 | `sri/ride.ts` | RIDE PDF. Port de `delivery/RideLayout.java` | `pdfkit`, `bwip-js` |
-| `issuer.service.ts` | Configuración del emisor, certificado, puntos de emisión y secuenciales. Reemplaza a `connection.service.ts` | Prisma, `ClinicalCryptoService`, `sri/certificate` |
+| `issuer.service.ts` | Configuración del emisor, certificado, puntos de emisión y secuenciales. Reemplaza a `connection.service.ts` | Prisma, `ClinicalCryptoService`, `FILE_STORAGE`, `sri/certificate` |
 | `invoice-emitter.ts` | Ejecuta los pasos de una emisión sobre una fila con lease (ver Flujo). Reemplaza a `invoice-resolver.ts` y al adaptador | `sri/*`, Prisma, storage |
 | `invoice-delivery.service.ts` | Envío del correo con XML y RIDE adjuntos | `MailService`, storage |
 | `invoice-worker.service.ts` | Se mantiene: claim con `FOR UPDATE SKIP LOCKED`, leases de 120 s, CAS y backoff. Delega cada fila en `invoice-emitter`. Expone `processOne(id, budgetMs)` y `tick(budgetMs)` | emitter, delivery |
@@ -86,9 +86,9 @@ producción es la misma que usan las demos.
 | `rimpeRegime` | enum `NONE`/`EMPRENDEDOR`/`NEGOCIO_POPULAR` | leyenda RIMPE en `infoTributaria` y RIDE |
 | `environment` | String `'1'`/`'2'` | |
 | `active` | Boolean | |
-| `certificateEncrypted?` | String | bytes del `.p12` cifrados con `ClinicalCryptoService.encryptBuffer` del tenant, en base64 |
+| `certificateStorageKey?` | String | clave en `FILE_STORAGE` (`invoicing-issuers/<tenantId>/<issuerId>/certificate-<uuid>`) de los bytes del `.p12` cifrados con `ClinicalCryptoService.encryptBuffer` del tenant; el archivo no se guarda en la base (migración `20261102000300_issuer_certificate_in_storage`) |
 | `certificatePasswordEncrypted?` | String | |
-| `certificateSubject?`, `certificateSerial?`, `certificateValidTo?`, `certificateSha256?` | | metadatos visibles; nunca el archivo ni la contraseña |
+| `certificateSubject?`, `certificateSerial?`, `certificateValidTo?`, `certificateSha256?` | | metadatos visibles; nunca el archivo, su clave de almacenamiento ni la contraseña. `certificateSha256` es el SHA-256 de los bytes del `.p12` en claro y se verifica en cada lectura |
 | `revision` | Int | CAS de configuración, como hoy |
 | `createdAt`, `updatedAt` | | |
 
@@ -171,9 +171,9 @@ del proveedor y a `requiresReconciliation`. Una solicitud firmada solo termina e
 
 | Tipo | Ejemplos | Efecto |
 |---|---|---|
-| Transitorio | red, timeout, HTTP 5xx, SOAP fault, `EN PROCESO`, sin autorizaciones | Reintento con `retryDelay` actual (30 s a 30 min). Antes de firmar, tras 24 h pasa a `FAILED` |
+| Transitorio | red, timeout, HTTP 5xx, SOAP fault, `EN PROCESO`, sin autorizaciones, archivo del certificado ilegible (`INVOICING_CERTIFICATE_UNAVAILABLE`) | Reintento con `retryDelay` actual (30 s a 30 min). Antes de firmar, tras 24 h pasa a `FAILED` |
 | Datos | `DEVUELTA` (salvo 43/70; incluye 45 «secuencial registrado», que no debería ocurrir con la reserva atómica), `NO AUTORIZADO` | `REJECTED`. Mensajes SRI (`identificador`, `mensaje`, `informacionAdicional`, `tipo`) cifrados en `lastErrorEncrypted`, visibles solo para quien tiene `billing.view`. Nunca en logs ni auditoría. Se permite reemitir con secuencial nuevo |
-| Configuración | sin certificado, contraseña inválida, certificado vencido o de otro RUC, punto inexistente, emisor inactivo | Antes de firmar: `FAILED` y orden liberada. Después de firmar no aplica (el XML ya está firmado) |
+| Configuración | sin certificado, contraseña inválida, certificado vencido o de otro RUC, archivo del certificado alterado (`CERTIFICATE_INTEGRITY`), punto inexistente, emisor inactivo | Antes de firmar: `FAILED` y orden liberada. Después de firmar no aplica (el XML ya está firmado) |
 | Integridad | el SHA-256 del XML guardado no coincide | Se detiene la fila con evento y error `INVOICE_SIGNED_XML_INTEGRITY`; requiere intervención. Nunca se refirma |
 
 `ProviderError` se reemplaza por `SriError(kind, code, { status, retryAfterMs })` con la misma regla:
@@ -233,7 +233,13 @@ configurado, `send` devuelve `false`: cuenta como intento fallido y se registra 
 
 - El `.p12` y su contraseña se cifran con la clave del tenant (`ClinicalCryptoService`); sin cifrado
   configurado la facturación responde `INVOICING_ENCRYPTION_REQUIRED` como hoy. Nunca se devuelven,
-  ni se registran en logs ni en auditoría.
+  ni se registran en logs ni en auditoría (la auditoría guarda solo el SHA-256).
+- Los bytes cifrados del `.p12` van al bucket de `FILE_STORAGE`, como el XML y el RIDE; la
+  contraseña cifrada queda en la base. Cada lectura verifica el SHA-256 contra `certificateSha256`:
+  si no coincide es error de configuración `CERTIFICATE_INTEGRITY`; si el almacenamiento no responde
+  es transitorio `INVOICING_CERTIFICATE_UNAVAILABLE`. Al reemplazar el certificado, el archivo nuevo
+  se guarda antes de la transacción, se borra si la transacción falla (salvo que la fila ya lo
+  referencie) y el anterior se borra solo después del commit.
 - El cliente SOAP solo acepta los dos hosts oficiales y no sigue redirecciones.
 - El parser XML de las respuestas no resuelve entidades externas ni DTD.
 - El tick exige secreto; se valida en tiempo constante y no revela si la ruta existe sin

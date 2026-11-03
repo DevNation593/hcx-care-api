@@ -2229,7 +2229,7 @@ enum RimpeRegime {
   NEGOCIO_POPULAR
 }
 
-// The clinic itself as SRI issuer: tax data, environment and its encrypted signing certificate.
+// The clinic itself as SRI issuer: tax data, environment and its signing certificate.
 model InvoicingIssuer {
   id                           String                @id @default(cuid())
   tenantId                     String                @unique
@@ -2244,12 +2244,13 @@ model InvoicingIssuer {
   rimpeRegime                  RimpeRegime           @default(NONE)
   environment                  String
   active                       Boolean               @default(true)
-  // The .p12 bytes encrypted with the tenant key, in base64; never returned or logged.
-  certificateEncrypted         String?
+  // FILE_STORAGE key of the .p12 bytes, encrypted with the tenant key; never returned or logged.
+  certificateStorageKey        String?
   certificatePasswordEncrypted String?
   certificateSubject           String?
   certificateSerial            String?
   certificateValidTo           DateTime?
+  // SHA-256 of the plaintext .p12 bytes, checked every time the file is read.
   certificateSha256            String?
   // Whether the certificate names the issuer RUC (false when it names none).
   certificateRucVerified       Boolean               @default(false)

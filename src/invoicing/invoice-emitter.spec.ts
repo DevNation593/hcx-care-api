@@ -49,6 +49,8 @@ describe('InvoiceEmitter preflight and signing', () => {
   let validP12: Buffer;
   let expiredP12: Buffer;
   let storage: ReturnType<typeof memoryStorage>;
+  let certificates: Map<string, Buffer>;
+  let certificateStorage: { get: jest.Mock };
   let issuer: any;
   let row: any;
   let sequence: { next: number } | null;
@@ -90,8 +92,23 @@ describe('InvoiceEmitter preflight and signing', () => {
     });
   }, 30000);
 
+  /** Stores the .p12 the way IssuerService.saveCertificate does and points the issuer at it. */
+  const useCertificate = (p12: Buffer) => {
+    const key = `invoicing-issuers/${tenant}/issuer/certificate-${certificates.size}`;
+    certificates.set(key, crypto.encryptBuffer(tenant, p12));
+    issuer.certificateStorageKey = key;
+    issuer.certificateSha256 = sha256(p12);
+  };
+
   beforeEach(() => {
     storage = memoryStorage();
+    certificates = new Map();
+    certificateStorage = {
+      get: jest.fn(async (key: string) => {
+        if (!certificates.has(key)) throw new Error('not found');
+        return certificates.get(key)!;
+      }),
+    };
     issuer = {
       id: 'issuer',
       tenantId: tenant,
@@ -100,9 +117,9 @@ describe('InvoiceEmitter preflight and signing', () => {
       tradeName: 'Clínica Ejemplo',
       environment: '1',
       active: true,
-      certificateEncrypted: crypto.encryptBuffer(tenant, validP12).toString('base64'),
       certificatePasswordEncrypted: crypto.encrypt(tenant, password),
     };
+    useCertificate(validP12);
     row = {
       id: 'request',
       tenantId: tenant,
@@ -200,7 +217,7 @@ describe('InvoiceEmitter preflight and signing', () => {
         return result;
       }),
     };
-    const issuers = new IssuerService(prisma, crypto, {} as any);
+    const issuers = new IssuerService(prisma, crypto, certificateStorage as any, {} as any);
     sri = { send: jest.fn(), authorize: jest.fn() };
     artifacts = { collect: jest.fn() };
     delivery = { deliver: jest.fn() };
@@ -216,7 +233,7 @@ describe('InvoiceEmitter preflight and signing', () => {
   });
 
   it('fails safely before signing when the certificate expired', async () => {
-    issuer.certificateEncrypted = crypto.encryptBuffer(tenant, expiredP12).toString('base64');
+    useCertificate(expiredP12);
     await expect(emitter.advance(row, deadline())).rejects.toMatchObject({
       kind: 'configuration',
       code: 'CERTIFICATE_EXPIRED',
@@ -229,8 +246,14 @@ describe('InvoiceEmitter preflight and signing', () => {
     ['an inactive issuer', () => (issuer.active = false), 'INVOICING_NOT_CONFIGURED'],
     [
       'a missing certificate',
-      () => (issuer.certificateEncrypted = null),
+      () => (issuer.certificateStorageKey = null),
       'INVOICING_CERTIFICATE_REQUIRED',
+    ],
+    [
+      'a certificate file whose bytes changed',
+      () =>
+        certificates.set(issuer.certificateStorageKey, crypto.encryptBuffer(tenant, expiredP12)),
+      'CERTIFICATE_INTEGRITY',
     ],
     ['a changed environment', () => (issuer.environment = '2'), 'INVOICING_ENVIRONMENT_CHANGED'],
     ['a removed emission point', () => (issuer.id = 'other'), 'INVOICING_NOT_CONFIGURED'],
@@ -246,13 +269,24 @@ describe('InvoiceEmitter preflight and signing', () => {
 
   it('refuses a certificate issued to another RUC', async () => {
     const other = createTestP12({ ruc: '0990012345001', password });
-    issuer.certificateEncrypted = crypto.encryptBuffer(tenant, other).toString('base64');
+    useCertificate(other);
     await expect(emitter.advance(row, deadline())).rejects.toMatchObject({
       kind: 'configuration',
       code: 'CERTIFICATE_RUC_MISMATCH',
     });
     expect(storage.keys()).toHaveLength(0);
   }, 30000);
+
+  it('retries before reserving a sequential when the certificate file cannot be read', async () => {
+    certificateStorage.get.mockRejectedValueOnce(new Error('bucket down'));
+    await expect(emitter.advance(row, deadline())).rejects.toMatchObject({
+      kind: 'transient',
+      code: 'INVOICING_CERTIFICATE_UNAVAILABLE',
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(sequence).toEqual({ next: 500 });
+    expect(storage.keys()).toHaveLength(0);
+  });
 
   it('reserves the sequence, signs, verifies and stores the signed XML in one leased transaction', async () => {
     await emitter.advance(row, deadline());

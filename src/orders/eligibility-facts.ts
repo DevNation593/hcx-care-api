@@ -126,7 +126,7 @@ export async function loadOrderBillingFacts(
     invoicingConfigured: !!(await tx.branchEmissionPoint.findFirst({
       where: {
         branchId: order.branchId,
-        issuer: { tenantId, active: true, certificateEncrypted: { not: null } },
+        issuer: { tenantId, active: true, certificateStorageKey: { not: null } },
       },
     })),
   };

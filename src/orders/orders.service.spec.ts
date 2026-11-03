@@ -1029,7 +1029,7 @@ describe('OrdersService', () => {
       expect(prisma.branchEmissionPoint.findFirst).toHaveBeenCalledWith({
         where: {
           branchId: 'branch-1',
-          issuer: { tenantId: 'tenant-1', active: true, certificateEncrypted: { not: null } },
+          issuer: { tenantId: 'tenant-1', active: true, certificateStorageKey: { not: null } },
         },
       });
       expect(result.missing).toEqual(['INVOICING_NOT_CONFIGURED']);

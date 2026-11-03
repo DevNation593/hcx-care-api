@@ -290,7 +290,7 @@ describe('Cash register, orders, payments and billing eligibility (E2E)', () => 
         headOfficeAddress: 'Fixture',
         accountingRequired: false,
         environment: '1',
-        certificateEncrypted: 'fixture-not-used',
+        certificateStorageKey: 'fixture-not-used',
       },
     });
     await prisma.branchEmissionPoint.create({

@@ -35,7 +35,7 @@ describe('invoice acceptance receipts and protected fiscal explanations', () => 
       rimpeRegime: 'EMPRENDEDOR',
       environment: '2',
       active: true,
-      certificateEncrypted: 'encrypted-p12',
+      certificateStorageKey: 'invoicing-issuers/clinic/issuer/certificate-1',
       certificatePasswordEncrypted: 'encrypted-password',
       revision: 3,
     };
@@ -220,7 +220,7 @@ describe('invoice acceptance receipts and protected fiscal explanations', () => 
     it.each([
       ['no issuer', () => tx.invoicingIssuer.findUnique.mockResolvedValue(null)],
       ['an inactive issuer', () => (issuer.active = false)],
-      ['an issuer without certificate', () => (issuer.certificateEncrypted = null)],
+      ['an issuer without certificate', () => (issuer.certificateStorageKey = null)],
       ['no point for the branch', () => tx.branchEmissionPoint.findFirst.mockResolvedValue(null)],
     ])(
       'requires an active issuer with a certificate and a point for the branch (%s)',

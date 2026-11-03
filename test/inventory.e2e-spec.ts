@@ -135,7 +135,7 @@ describe('Product inventory: receipt, sale, invoice, cancel, transfer, adjustmen
         headOfficeAddress: 'Fixture',
         accountingRequired: false,
         environment: '1',
-        certificateEncrypted: 'fixture-not-used',
+        certificateStorageKey: 'fixture-not-used',
       },
     });
     await prisma.branchEmissionPoint.create({

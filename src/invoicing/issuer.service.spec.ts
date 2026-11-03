@@ -1,11 +1,35 @@
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
+import { createHash } from 'crypto';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { ClinicalCipher } from '../clinical-access/clinical-cipher';
 import { IssuerEmissionPointDto, SaveIssuerDto } from './dto/issuer.dto';
 import { IssuerService } from './issuer.service';
 import { createTestP12 } from './sri/testing/test-certificate';
+
+const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+
+function memoryStorage(log: string[] = []) {
+  const files = new Map<string, Buffer>();
+  return {
+    files,
+    put: jest.fn(async (key: string, data: Buffer) => {
+      log.push(`put ${key}`);
+      files.set(key, data);
+    }),
+    get: jest.fn(async (key: string) => {
+      const data = files.get(key);
+      if (!data) throw new Error('not found');
+      return data;
+    }),
+    remove: jest.fn(async (key: string) => {
+      log.push(`remove ${key}`);
+      files.delete(key);
+    }),
+  };
+}
 
 function applyData(row: any, data: any) {
   const next = { ...row };
@@ -30,6 +54,8 @@ describe('IssuerService', () => {
   let saved: any;
   let tx: any;
   let prisma: any;
+  let log: string[];
+  let storage: ReturnType<typeof memoryStorage>;
   let sri: { ping: jest.Mock };
   let service: IssuerService;
   const dto = (overrides: Partial<SaveIssuerDto> = {}): SaveIssuerDto => ({
@@ -67,7 +93,7 @@ describe('IssuerService', () => {
       rimpeRegime: 'NONE',
       environment: '1',
       active: true,
-      certificateEncrypted: null,
+      certificateStorageKey: null,
       certificatePasswordEncrypted: null,
       certificateSubject: null,
       certificateSerial: null,
@@ -81,6 +107,12 @@ describe('IssuerService', () => {
     tx = {
       invoicingIssuer: {
         findUnique: jest.fn(async () => saved),
+        findFirst: jest.fn(async ({ where }) =>
+          saved?.tenantId === where.tenantId &&
+          saved.certificateStorageKey === where.certificateStorageKey
+            ? { id: saved.id }
+            : null,
+        ),
         upsert: jest.fn(async ({ create, update }) => {
           saved = saved
             ? applyData(saved, update)
@@ -134,13 +166,19 @@ describe('IssuerService', () => {
       },
       auditLog: { create: jest.fn() },
     };
+    log = [];
     prisma = {
       invoicingIssuer: tx.invoicingIssuer,
       applyRlsContext: jest.fn(),
-      $transaction: jest.fn(async (fn) => fn(tx)),
+      $transaction: jest.fn(async (fn) => {
+        const result = await fn(tx);
+        log.push('commit');
+        return result;
+      }),
     };
+    storage = memoryStorage(log);
     sri = { ping: jest.fn().mockResolvedValue(true) };
-    service = new IssuerService(prisma, crypto, sri as any);
+    service = new IssuerService(prisma, crypto, storage, sri as any);
   });
 
   it('saves issuer data with an audit entry and bumps the revision', async () => {
@@ -219,23 +257,149 @@ describe('IssuerService', () => {
     });
   });
 
-  it('stores the certificate and password encrypted and returns only metadata', async () => {
+  it('stores the certificate encrypted in file storage, not in the database, and returns only metadata', async () => {
     const view = await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
-    expect(view.certificate).toMatchObject({ rucVerified: true });
+    expect(view.certificate).toMatchObject({ rucVerified: true, sha256: sha256(p12) });
     const data = tx.invoicingIssuer.update.mock.calls[0][0].data;
-    expect(data.certificateEncrypted).not.toContain('MII'); // never in clear
-    expect(crypto.decryptBuffer(tenant, Buffer.from(data.certificateEncrypted, 'base64'))).toEqual(
-      p12,
+    expect(data.certificateStorageKey).toMatch(
+      /^invoicing-issuers\/clinic\/issuer\/certificate-[0-9a-f-]{36}$/,
     );
+    expect(Object.values(data).some((v) => Buffer.isBuffer(v))).toBe(false);
+    expect(JSON.stringify(data)).not.toContain(p12.toString('base64').slice(0, 40));
+    const file = storage.files.get(data.certificateStorageKey)!;
+    expect(file.includes(p12.subarray(0, 64))).toBe(false); // never in clear
+    expect(crypto.decryptBuffer(tenant, file)).toEqual(p12);
+    expect(data.certificateSha256).toBe(sha256(p12));
     expect(data.certificatePasswordEncrypted).not.toContain('clave-prueba');
     expect(data.revision).toEqual({ increment: 1 });
     const audit = JSON.stringify(tx.auditLog.create.mock.calls);
     expect(audit).not.toContain('clave-prueba');
+    expect(audit).not.toContain(data.certificateStorageKey);
     expect(audit).toContain('CERTIFICATE_REPLACED');
     expect(audit).toContain(view.certificate!.sha256);
-    expect(JSON.stringify(view)).not.toContain(data.certificateEncrypted);
+    expect(JSON.stringify(view)).not.toContain(data.certificateStorageKey);
     expect(JSON.stringify(view)).not.toContain('clave-prueba');
-    expect(service.loadSigningMaterial(saved).sha256).toBe(view.certificate!.sha256);
+    expect((await service.loadSigningMaterial(saved)).subject).toBe(view.certificate!.subject);
+  });
+
+  it('removes the previous certificate file only after the replacement commits', async () => {
+    await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
+    const first = saved.certificateStorageKey;
+    log.length = 0;
+    await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
+    const second = saved.certificateStorageKey;
+    expect(second).not.toBe(first);
+    expect(log).toEqual([`put ${second}`, 'commit', `remove ${first}`]);
+    expect([...storage.files.keys()]).toEqual([second]);
+    expect(JSON.stringify(tx.auditLog.create.mock.calls.at(-1))).toContain(
+      `"previousSha256":"${sha256(p12)}"`,
+    );
+  });
+
+  it('keeps the replacement when the previous file cannot be removed', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
+    const first = saved.certificateStorageKey;
+    storage.remove.mockRejectedValueOnce(new Error('bucket down'));
+    const view = await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
+    expect(view.certificate).not.toBeNull();
+    expect(saved.certificateStorageKey).not.toBe(first);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain(first);
+    expect(String(warn.mock.calls[0][0])).not.toContain('bucket down');
+    warn.mockRestore();
+  });
+
+  it('removes the new file when the transaction fails and keeps the current certificate', async () => {
+    await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
+    const first = saved.certificateStorageKey;
+    prisma.$transaction.mockImplementationOnce(async () => {
+      throw new Error('could not serialize');
+    });
+    await expect(service.saveCertificate(tenant, actor, p12, 'clave-prueba')).rejects.toThrow(
+      'could not serialize',
+    );
+    expect(saved.certificateStorageKey).toBe(first);
+    expect([...storage.files.keys()]).toEqual([first]);
+  });
+
+  it('removes the new file when the configuration changed meanwhile', async () => {
+    tx.invoicingIssuer.findUnique.mockImplementationOnce(async () => saved);
+    tx.invoicingIssuer.findUnique.mockImplementationOnce(async () => ({ ...saved, revision: 9 }));
+    await expect(service.saveCertificate(tenant, actor, p12, 'clave-prueba')).rejects.toMatchObject(
+      { response: { code: 'INVOICING_CONFIGURATION_CHANGED' } },
+    );
+    expect(storage.put).toHaveBeenCalledTimes(1);
+    expect(storage.files.size).toBe(0);
+  });
+
+  it('keeps the new file when a failed commit may have committed', async () => {
+    await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
+    const first = saved.certificateStorageKey;
+    prisma.$transaction.mockImplementationOnce(async (fn: any) => {
+      await fn(tx);
+      throw new Error('connection lost during COMMIT');
+    });
+    await expect(service.saveCertificate(tenant, actor, p12, 'clave-prueba')).rejects.toThrow(
+      'connection lost',
+    );
+    const second = saved.certificateStorageKey;
+    expect(second).not.toBe(first);
+    expect(storage.files.has(second)).toBe(true);
+    // Unknown outcome: the lookup that would prove it unused failed too, so nothing is removed.
+    prisma.$transaction.mockImplementationOnce(async () => {
+      throw new Error('connection lost');
+    });
+    tx.invoicingIssuer.findFirst.mockRejectedValueOnce(new Error('connection lost'));
+    await expect(service.saveCertificate(tenant, actor, p12, 'clave-prueba')).rejects.toThrow();
+    expect(storage.files.size).toBe(3);
+  });
+
+  it('answers 503 and keeps the certificate when the file cannot be stored', async () => {
+    storage.put.mockRejectedValueOnce(new Error('bucket down'));
+    await expect(service.saveCertificate(tenant, actor, p12, 'clave-prueba')).rejects.toMatchObject(
+      { status: 503, response: { code: 'INVOICING_CERTIFICATE_UNAVAILABLE' } },
+    );
+    expect(tx.invoicingIssuer.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stored certificate whose bytes changed', async () => {
+    await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
+    const other = createTestP12({ ruc });
+    storage.files.set(saved.certificateStorageKey, crypto.encryptBuffer(tenant, other));
+    await expect(service.loadSigningMaterial(saved)).rejects.toMatchObject({
+      kind: 'configuration',
+      code: 'CERTIFICATE_INTEGRITY',
+    });
+    storage.files.set(saved.certificateStorageKey, Buffer.from('not encrypted'));
+    await expect(service.loadSigningMaterial(saved)).rejects.toMatchObject({
+      kind: 'configuration',
+      code: 'CERTIFICATE_INTEGRITY',
+    });
+  }, 30000);
+
+  it('treats an unreadable certificate file as transient', async () => {
+    await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
+    storage.get.mockRejectedValueOnce(new Error('bucket down'));
+    await expect(service.loadSigningMaterial(saved)).rejects.toMatchObject({
+      kind: 'transient',
+      code: 'INVOICING_CERTIFICATE_UNAVAILABLE',
+    });
+    storage.get.mockRejectedValueOnce(new Error('bucket down'));
+    await expect(service.test(tenant)).resolves.toMatchObject({
+      certificateValid: false,
+      certificateError: 'INVOICING_CERTIFICATE_UNAVAILABLE',
+    });
+  });
+
+  it('refuses a RUC change while the certificate cannot be read to check it', async () => {
+    await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
+    storage.get.mockRejectedValueOnce(new Error('bucket down'));
+    await expect(service.save(tenant, actor, dto({ ruc: '0912345675001' }))).rejects.toMatchObject({
+      status: 503,
+      response: { code: 'INVOICING_CERTIFICATE_UNAVAILABLE' },
+    });
+    expect(tx.invoicingIssuer.upsert).not.toHaveBeenCalled();
   });
 
   it('rejects a certificate of another RUC', async () => {
@@ -244,6 +408,7 @@ describe('IssuerService', () => {
       { status: 422, response: { code: 'CERTIFICATE_RUC_MISMATCH' } },
     );
     expect(tx.invoicingIssuer.update).not.toHaveBeenCalled();
+    expect(storage.put).not.toHaveBeenCalled();
   });
 
   it('answers 422 with the certificate code when the password is wrong', async () => {
@@ -251,6 +416,7 @@ describe('IssuerService', () => {
       status: 422,
       response: { code: 'CERTIFICATE_PASSWORD_INVALID' },
     });
+    expect(storage.put).not.toHaveBeenCalled();
   });
 
   it('requires the issuer data before the certificate', async () => {
@@ -264,6 +430,7 @@ describe('IssuerService', () => {
     const plain = new IssuerService(
       prisma,
       new ClinicalCipher() as ClinicalCryptoService,
+      storage,
       sri as any,
     );
     await expect(plain.saveCertificate(tenant, actor, p12, 'clave-prueba')).rejects.toMatchObject({

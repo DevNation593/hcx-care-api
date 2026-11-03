@@ -318,7 +318,7 @@ export class InvoiceEmitter {
       select: { id: true },
     });
     if (!point) throw new SriError('configuration', 'INVOICING_NOT_CONFIGURED');
-    const material = this.issuers.loadSigningMaterial(issuer);
+    const material = await this.issuers.loadSigningMaterial(issuer);
     assertCertificateFor(material, s.issuer.ruc);
     return material;
   }
