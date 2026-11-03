@@ -7,6 +7,7 @@ import { PrismaClient } from '@prisma/client';
 import { auditFormerProviderRemoval } from '../prisma/audit-emite-facil-removal';
 
 const TARGET = '20261102000100_drop_emite_facil';
+const ADDITIVE = '20261102000000_own_sri_issuer';
 const migrationsDir = join(__dirname, '..', 'prisma', 'migrations');
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -34,7 +35,10 @@ function deploy(root: string, url: string) {
     throw new Error(`Migration deploy failed\n${output.slice(-2000)}`);
 }
 
-/** A fresh database migrated up to, not including, the target; `apply` deploys the target. */
+/**
+ * A fresh database migrated up to, not including, `before`; `apply` deploys `before` and every
+ * later migration.
+ */
 class Stage {
   readonly database = `own_sri_migration_${randomBytes(6).toString('hex')}`;
   readonly root = mkdtempSync(join(tmpdir(), 'own-sri-migration-'));
@@ -42,7 +46,7 @@ class Stage {
   private readonly admin = new PrismaClient({ datasources: { db: { url: baseUrl } } });
   private readonly url: string;
 
-  constructor() {
+  constructor(private readonly before = TARGET) {
     const parsed = new URL(baseUrl!);
     parsed.pathname = `/${this.database}`;
     this.url = parsed.toString();
@@ -61,12 +65,13 @@ class Stage {
       join(this.root, 'prisma', 'migrations', 'migration_lock.toml'),
     );
     for (const name of readdirSync(migrationsDir).filter((n) => /^\d+_/.test(n)))
-      if (name < TARGET) this.copy(name);
+      if (name < this.before) this.copy(name);
     deploy(this.root, this.url);
   }
 
   apply() {
-    this.copy(TARGET);
+    for (const name of readdirSync(migrationsDir).filter((n) => /^\d+_/.test(n)))
+      if (name >= this.before) this.copy(name);
     deploy(this.root, this.url);
   }
 
@@ -302,6 +307,24 @@ async function seed({ run }: Stage, environment: '1' | '2') {
              OR (table_name='BranchEmissionPoint' AND column_name='establishmentAddress'))`,
       );
       expect(nullable).toEqual([]);
+    });
+
+    it('keeps at most one pending or authorized request per order', async () => {
+      expect(
+        await stage.one(
+          `SELECT indexdef FROM pg_indexes WHERE indexname='InvoiceRequest_one_blocking_per_order'`,
+        ),
+      ).toEqual({
+        indexdef: expect.stringMatching(
+          /^CREATE UNIQUE INDEX "InvoiceRequest_one_blocking_per_order" ON public\."InvoiceRequest" USING btree \("orderId"\) WHERE .*'REQUESTED'.*'PROCESSING'.*'AUTHORIZED'/,
+        ),
+      });
+      await expect(
+        stage.run(
+          `INSERT INTO "InvoiceRequest" ("id","tenantId","orderId","issuerId","billingProfileId","requestedById","status","clientIdempotencyKey","snapshotEncrypted","rootRequestId","updatedAt")
+           VALUES ('rC3','t','oC','i','bp','u','REQUESTED','k-rC3','enc','rC3',now())`,
+        ),
+      ).rejects.toThrow(/23505.*Key \(\\?"orderId\\?"\)=\(oC\) already exists/s);
     });
 
     it('reports an already applied removal', async () => {
