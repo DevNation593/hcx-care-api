@@ -216,8 +216,9 @@ export class InvoiceEmitter {
   }
 
   /**
-   * The bytes exactly as signed; a missing, undecryptable or altered file is never sent and halts
-   * the row (the worker stops claiming it until someone intervenes).
+   * The bytes exactly as signed; nothing else is ever sent. A file that cannot be read is retried,
+   * since storage drivers do not tell a missing file from an outage. Only altered bytes (SHA-256
+   * mismatch) halt the row until someone intervenes.
    */
   private async signedBytes(row: InvoiceRequest): Promise<Buffer> {
     let bytes: Buffer;
@@ -227,7 +228,7 @@ export class InvoiceEmitter {
         await this.storage.get(row.signedXmlStorageKey!),
       );
     } catch {
-      throw new SriError('configuration', 'INVOICE_SIGNED_XML_INTEGRITY');
+      throw new SriError('transient', 'INVOICE_SIGNED_XML_UNAVAILABLE');
     }
     if (createHash('sha256').update(bytes).digest('hex') !== row.signedXmlSha256)
       throw new SriError('configuration', 'INVOICE_SIGNED_XML_INTEGRITY');

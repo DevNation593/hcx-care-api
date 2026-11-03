@@ -68,7 +68,7 @@ export class InvoiceWorkerService {
       // Signed XML may still reach the SRI, so the request never fails and keeps its order.
       const signed = !!current.signedXmlStorageKey;
       const safeFailure = !signed && (e.kind !== 'transient' || expired);
-      // Signed XML that is missing or altered can never be sent: stop until someone intervenes.
+      // Signed XML whose bytes were altered can never be sent: stop until someone intervenes.
       const halted = signed && e.code === 'INVOICE_SIGNED_XML_INTEGRITY';
       const status = signed ? current.status : safeFailure ? 'FAILED' : 'REQUESTED';
       const changed = await tx.invoiceRequest.updateMany({

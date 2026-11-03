@@ -89,6 +89,8 @@ const messages: Record<string, string> = {
     'El SRI devolvió una respuesta que no se pudo interpretar. Se volverá a intentar automáticamente.',
   INVOICE_SIGNATURE_INVALID:
     'No se pudo verificar la firma del comprobante. Revisa la firma electrónica del emisor y solicita la factura nuevamente.',
+  INVOICE_SIGNED_XML_UNAVAILABLE:
+    'No se pudo leer el comprobante firmado guardado. Se volverá a intentar automáticamente.',
   INVOICE_SIGNED_XML_INTEGRITY:
     'No se pudo verificar el comprobante firmado guardado. Requiere revisión antes de volver a enviarlo al SRI.',
   UNAUTHENTICATED: 'La API key no es válida o fue revocada. Revisa la conexión con emite-facil.',

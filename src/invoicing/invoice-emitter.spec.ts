@@ -534,23 +534,42 @@ describe('InvoiceEmitter preflight and signing', () => {
       expect(stored.signedXmlSha256).toBe(tampered.signedXmlSha256);
     });
 
-    it('halts the row when the signed file is missing from storage', async () => {
+    it('retries with backoff when the signed file cannot be read from storage', async () => {
+      // Storage drivers throw plain errors: a missing file looks like an outage, so it never halts.
       (storage as any).get = jest.fn().mockRejectedValue(new Error('object not found'));
       sri.authorize.mockResolvedValue(unknown);
       expect(await run()).toMatchObject({
-        kind: 'configuration',
-        code: 'INVOICE_SIGNED_XML_INTEGRITY',
+        kind: 'transient',
+        code: 'INVOICE_SIGNED_XML_UNAVAILABLE',
       });
 
       await worker.process(row);
-      expectHalted();
+
+      expect(sri.send).not.toHaveBeenCalled();
+      expect(stored).toMatchObject({
+        status: 'PROCESSING',
+        externalState: 'SIGNED',
+        signedXmlStorageKey: row.signedXmlStorageKey,
+        leaseToken: null,
+        attempts: 3,
+      });
+      // retryDelay(3) = 2 min: a normal backoff, not the halt sentinel.
+      expect(stored.nextAttemptAt.getTime()).toBe(Date.now() + 120000);
+      expect(JSON.parse(crypto.decrypt(tenant, stored.lastErrorEncrypted))).toEqual({
+        code: 'INVOICE_SIGNED_XML_UNAVAILABLE',
+      });
+      expect(orders).toEqual([]);
+      expect(events.map((e) => e.type)).toEqual(['RETRY_SCHEDULED']);
     });
 
-    it('refuses a stored file that no longer decrypts', async () => {
+    it('retries a stored file that no longer decrypts without sending it', async () => {
       const ciphertext = storage.get(row.signedXmlStorageKey);
       ciphertext[ciphertext.length - 1] ^= 1;
       sri.authorize.mockResolvedValue(unknown);
-      expect(await run()).toMatchObject({ code: 'INVOICE_SIGNED_XML_INTEGRITY' });
+      expect(await run()).toMatchObject({
+        kind: 'transient',
+        code: 'INVOICE_SIGNED_XML_UNAVAILABLE',
+      });
       expect(sri.send).not.toHaveBeenCalled();
     });
 
