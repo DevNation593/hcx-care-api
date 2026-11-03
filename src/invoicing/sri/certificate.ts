@@ -58,7 +58,7 @@ function formatAttribute(attr: forge.pki.CertificateField): string {
 }
 
 /** Attributes in reverse order of the ASN.1 sequence, joined with commas. */
-function formatName(attributes: forge.pki.CertificateField[]): string {
+export function formatName(attributes: forge.pki.CertificateField[]): string {
   return [...attributes].reverse().map(formatAttribute).join(',');
 }
 
