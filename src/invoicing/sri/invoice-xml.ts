@@ -11,7 +11,7 @@ const MAX_CODE = 25;
  * Annex 22 of the SRI technical sheet. NEGOCIO_POPULAR is refused: the 1.1.0 XSD only
  * accepts the EMPRENDEDOR legend in contribuyenteRimpe.
  */
-const RIMPE_LEGENDS: Partial<Record<RimpeRegime, string | null>> = {
+export const RIMPE_LEGENDS: Partial<Record<RimpeRegime, string | null>> = {
   NONE: null,
   EMPRENDEDOR: 'CONTRIBUYENTE RÉGIMEN RIMPE',
 };
@@ -37,7 +37,7 @@ const LINE_BREAK_OR_TAB = /[\t\n\r\u0085\u2028\u2029]/;
  * Replaces characters XML 1.0 forbids, line breaks and tabs with a space and trims to `max`
  * code points.
  */
-function clean(value: string, max: number): string {
+export function clean(value: string, max: number): string {
   const chars = Array.from(value, (ch) =>
     allowedInXml(ch.codePointAt(0) as number) && !LINE_BREAK_OR_TAB.test(ch) ? ch : ' ',
   );
