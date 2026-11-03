@@ -1,346 +1,152 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { createServer, Server } from 'http';
-import { AddressInfo } from 'net';
-import { createHash, createHmac, randomUUID } from 'crypto';
-import { mkdtempSync } from 'fs';
+import { createHash, randomUUID } from 'crypto';
+import { existsSync, mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+
+const storageRoot = mkdtempSync(join(tmpdir(), 'psic-e2e-invoicing-'));
+// Read by the storage driver when the application starts.
+process.env.STORAGE_LOCAL_PATH = storageRoot;
+
 import { AppModule } from '../src/app.module';
+import { ClinicalCryptoService } from '../src/clinical-access/clinical-crypto.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { PlatformTenantsService } from '../src/platform/platform-tenants.service';
 import { UsersService } from '../src/users/users.service';
-import { Prisma } from '@prisma/client';
-import { InvoiceWorkerService } from '../src/invoicing/invoice-worker.service';
-import { TreatmentSessionsService } from '../src/treatment-sessions/treatment-sessions.service';
+import { createTestP12 } from '../src/invoicing/sri/testing/test-certificate';
 import { createTestTenant, TEST_PASSWORD } from './helpers/create-test-tenant';
+import { SIMULATED_SRI_MESSAGE, SriSimulator, startSriSimulator } from './helpers/sri-simulator';
 
 jest.setTimeout(120000);
-const tid = '11111111-1111-4111-8111-111111111111';
-const eid = '22222222-2222-4222-8222-222222222222';
-const pid = '33333333-3333-4333-8333-333333333333';
-const customerId = '44444444-4444-4444-8444-444444444444';
-const secret = 'whsec_' + Buffer.alloc(32, 3).toString('base64');
-const taxpayer = {
-  id: tid,
+
+const TICK_SECRET = 'e2e-secret';
+const CERTIFICATE_PASSWORD = 'clave-prueba';
+const ISSUER = {
   ruc: '1790012345001',
-  legalName: 'Issuer',
-  tradeName: null,
-  headOfficeAddress: 'Quito',
-  defaultEnvironment: '1',
+  legalName: 'Consultorio Emisor de Prueba',
+  tradeName: 'Consultorio Prueba',
+  headOfficeAddress: 'Av. Amazonas N1-23, Quito',
   accountingRequired: false,
-  specialTaxpayerCode: null,
-  withholdingAgentCode: null,
   rimpeRegime: 'NONE',
-  productionEnabledAt: null,
+  environment: '1',
 };
 
-describe('durable invoicing HTTP / PostgreSQL / provider simulator', () => {
+describe('invoicing against a simulated SRI', () => {
   let app: INestApplication;
   let prisma: PrismaService;
-  let upstream: Server;
+  let sri: SriSimulator;
   let tenantId: string;
   let actorId: string;
   let branchId: string;
+  let registerId: string;
+  /** Customer with an e-mail address: the authorized invoice is mailed to it. */
+  let mailedProfileId: string;
+  /** Customer without an e-mail address: the e-mail step is skipped. */
   let profileId: string;
   let token: string;
-  let connectionId: string;
-  let seq = 0;
-  let posts: { key: string; body: any }[] = [];
-  let mode = 'normal';
-  let customerName = 'Fiscal buyer';
-  let invoiceGate: { entered: () => void; release?: () => void } | null = null;
-  const docs = new Map<string, any>();
-  const products: any[] = [];
-  const base = () => `/api/v1/tenants/${tenantId}`;
-  const auth = () => ({ Authorization: `Bearer ${token}` });
+  let foreignTenantId: string;
+  let foreignToken: string;
+  let assistantToken: string;
+  let orderNumber = 0;
+
   const server = () => app.getHttpServer();
-  async function order() {
-    const o = await prisma.order.create({
+  const base = () => `/api/v1/tenants/${tenantId}`;
+  const auth = (t = token) => ({ Authorization: `Bearer ${t}` });
+
+  async function login(email: string) {
+    const res = await request(server())
+      .post('/api/v1/auth/login')
+      .send({ email, password: TEST_PASSWORD })
+      .expect(200);
+    return res.body.accessToken as string;
+  }
+
+  async function paidOrder(total = 40, billingProfileId = profileId) {
+    const order = await prisma.order.create({
       data: {
         tenantId,
         branchId,
-        number: ++seq,
+        number: ++orderNumber,
         status: 'PAID',
-        billingProfileId: profileId,
+        billingProfileId,
         createdById: actorId,
-        subtotal: 40,
-        total: 40,
-        paidTotal: 40,
+        subtotal: total,
+        total,
+        paidTotal: total,
         items: {
           create: {
             tenantId,
             kind: 'FREE',
-            description: 'Service',
+            description: 'Consulta psicológica',
             quantity: 1,
-            unitPrice: 40,
+            unitPrice: total,
             taxRatePercent: 0,
-            lineSubtotal: 40,
+            lineSubtotal: total,
             lineTax: 0,
             createdById: actorId,
           },
         },
       },
     });
-    const register = await prisma.cashRegisterSession.findFirst({ where: { tenantId } });
     await prisma.payment.create({
       data: {
         tenantId,
-        orderId: o.id,
-        cashRegisterSessionId: register!.id,
+        orderId: order.id,
+        cashRegisterSessionId: registerId,
         method: 'CASH',
-        amount: 40,
+        amount: total,
         receivedById: actorId,
       },
     });
-    return o;
+    return order;
   }
-  async function sessionOrder(treatmentVersionId: string, completed = true) {
-    const patient = await prisma.patient.create({
-      data: {
-        tenantId,
-        firstName: 'PRIVATE_PATIENT_NAME',
-        lastName: 'PRIVATE_SURNAME',
-        notes: 'PRIVATE_NOTES',
-      },
-    });
-    const specialty = await prisma.specialty.findUniqueOrThrow({ where: { code: 'PSYCHOLOGY' } });
-    const encounter = await prisma.encounter.create({
-      data: {
-        tenantId,
-        patientId: patient.id,
-        professionalId: actorId,
-        specialtyId: specialty.id,
-        branchId,
-        encounterType: 'PROCEDURE',
-        reason: 'PRIVATE_REASON',
-      },
-    });
-    const session = await prisma.treatmentSession.create({
-      data: {
-        tenantId,
-        patientId: patient.id,
-        professionalId: actorId,
-        branchId,
-        encounterId: encounter.id,
-        treatmentVersionId,
-        status: completed ? 'CLINICAL_COMPLETE' : 'IN_PROGRESS',
-        startedAt: new Date(),
-        completedAt: completed ? new Date() : null,
-        procedureNotes: 'PRIVATE_CLINICAL_NOTES',
-      },
-    });
-    const o = await order();
-    await prisma.orderItem.updateMany({
-      where: { orderId: o.id },
-      data: { kind: 'TREATMENT_SESSION', treatmentSessionId: session.id, patientId: patient.id },
-    });
-    return { order: o, session };
-  }
-  async function treatment(early = false) {
-    return prisma.treatment.create({
-      data: {
-        tenantId,
-        name: 'Service ' + randomUUID(),
-        code: 'SRV-' + randomUUID().slice(0, 8).toUpperCase(),
-        versions: {
-          create: {
-            tenantId,
-            version: 1,
-            price: 40,
-            taxRatePercent: 0,
-            durationMinutes: 30,
-            createdById: actorId,
-            requirements: {
-              medicalForm: { required: false },
-              informedConsent: { required: false, validityDays: null },
-              photos: { minimumBefore: 0, minimumAfter: 0 },
-              clinicalNotes: { requiredForCompletion: false },
-              billingGate: { requireClinicalCompletion: !early },
-            },
-          },
-        },
-      },
-      include: { versions: true },
-    });
-  }
-  async function concurrentCompletionFixture(outcome: string) {
-    const t = await treatment(true);
-    const fixture = await sessionOrder(t.versions[0].id, false);
-    const receipt = (await submit(fixture.order.id).expect(202)).body;
-    const worker = app.get(InvoiceWorkerService);
-    let finalize: () => Promise<void>;
-    if (outcome === 'FAILED') {
-      const claimed = (await worker.claim()).find((row) => row.id === receipt.id)!;
-      // A definitive pre-POST customer mismatch safely releases this order.
-      finalize = async () => {
-        customerName = 'Outdated';
-        try {
-          await worker.process(claimed);
-        } finally {
-          customerName = 'Fiscal buyer';
-        }
-      };
-    } else {
-      await dispatch();
-      const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: receipt.id } });
-      const document = {
-        ...docs.get(row.externalDocumentId!),
-        state: outcome === 'REJECTED' ? 'NOT_AUTHORIZED' : 'AUTHORIZED',
-      };
-      finalize = () => worker.applyDocument(row.id, document, 'RECONCILER');
-    }
-    return { ...fixture, receipt, finalize };
-  }
-  const submit = (id: string, key = randomUUID()) =>
+
+  const submit = (orderId: string, key: string = randomUUID(), t = token) =>
     request(server())
-      .post(`${base()}/orders/${id}/invoice-requests`)
-      .set(auth())
+      .post(`${base()}/orders/${orderId}/invoice-requests`)
+      .set(auth(t))
       .set('Idempotency-Key', key);
-  async function dispatch() {
-    const { InvoiceWorkerService } = await import('../src/invoicing/invoice-worker.service');
-    await app.get(InvoiceWorkerService).dispatch();
+
+  /** Downloads an artifact as raw bytes. */
+  const download = (id: string, kind: 'xml' | 'ride') =>
+    request(server())
+      .get(`${base()}/invoice-requests/${id}/${kind}`)
+      .set(auth())
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+
+  async function detail(id: string) {
+    return (await request(server()).get(`${base()}/invoice-requests/${id}`).set(auth()).expect(200))
+      .body;
   }
-  async function reconcile() {
-    const { InvoiceWorkerService } = await import('../src/invoicing/invoice-worker.service');
-    await prisma.invoiceRequest.updateMany({ data: { nextAttemptAt: new Date(0) } });
-    await app.get(InvoiceWorkerService).reconcile();
-  }
-  beforeAll(async () => {
-    process.env.CLINICAL_ENCRYPTION_KEYS = 'b2:' + Buffer.alloc(32, 7).toString('base64');
-    process.env.STORAGE_LOCAL_PATH = mkdtempSync(join(tmpdir(), 'hcx-b2-'));
-    upstream = createServer((req, res) => {
-      let text = '';
-      req.on('data', (c) => (text += c));
-      req.on('end', () => {
-        const url = new URL(req.url!, 'http://localhost');
-        const path = url.pathname;
-        const json = (v: unknown, status = 200) => {
-          res.writeHead(status, { 'content-type': 'application/json' });
-          res.end(JSON.stringify(v));
-        };
-        if (req.headers['x-api-key'] !== 'test-key') return json({ code: 'UNAUTHENTICATED' }, 401);
-        if (path.endsWith('/tenants/current'))
-          return json({ id: tid, name: 'Company', status: 'ACTIVE', role: 'BILLER' });
-        if (path.endsWith('/taxpayers')) return json([taxpayer]);
-        if (path.endsWith('/establishments'))
-          return json([{ id: eid, taxpayerId: tid, code: '001', address: 'Quito' }]);
-        if (path.endsWith('/emission-points'))
-          return json([{ id: pid, establishmentId: eid, code: '002', enabled: true }]);
-        if (path.endsWith('/tax-rates'))
-          return json([{ taxCode: '2', rateCode: '0', description: '0%', rate: '0.00' }]);
-        if (path.endsWith('/customers'))
-          return json({
-            items: [
-              {
-                id: customerId,
-                idType: '06',
-                idNumber: 'FISCAL1',
-                name: customerName,
-                email: null,
-                address: null,
-                phone: null,
-              },
-            ],
-            page: 0,
-            size: 20,
-            total: 1,
-          });
-        if (path.endsWith('/products')) {
-          if (req.method === 'POST') {
-            const p = { ...JSON.parse(text), id: randomUUID() };
-            products.push(p);
-            return json(p, 201);
-          }
-          return json({ items: products, page: 0, size: 20, total: products.length });
-        }
-        if (path.endsWith('/invoices')) {
-          const body = JSON.parse(text);
-          const key = req.headers['idempotency-key'] as string;
-          posts.push({ key, body });
-          if (mode === '429') return json({ code: 'RATE_LIMITED' }, 429);
-          if (mode === 'reserved') return json({ errorCode: 'IDEMPOTENCY_KEY_REUSED' }, 409);
-          let d = [...docs.values()].find((d) => d.key === key);
-          if (!d) {
-            d = {
-              id: randomUUID(),
-              key,
-              documentType: '01',
-              state: 'RESERVED',
-              environment: '1',
-              taxpayerId: tid,
-              number: '001-002-' + String(docs.size + 1).padStart(9, '0'),
-              sequence: String(docs.size + 1).padStart(9, '0'),
-              accessKey: '1'.repeat(49),
-              issueDate: body.issueDate,
-              currency: 'USD',
-              customer: { idType: '06', idNumber: 'FISCAL1', name: 'Fiscal buyer' },
-              subtotal: '40.00',
-              totalDiscount: '0.00',
-              taxes: [],
-              totalTax: '0.00',
-              total: '40.00',
-              lines: [],
-              payments: body.payments,
-              authorizationNumber: null,
-              authorizedAt: null,
-              customerId,
-              replacesDocumentId: body.replacesDocumentId ?? null,
-              replacedByDocumentId: null,
-            };
-            docs.set(d.id, d);
-          }
-          if (mode === 'timeout') {
-            req.socket.destroy();
-            return;
-          }
-          if (invoiceGate) {
-            const gate = invoiceGate;
-            invoiceGate = null;
-            gate.release = () =>
-              json({ id: d.id, state: d.state, statusUrl: '/api/v1/documents/' + d.id }, 202);
-            gate.entered();
-            return;
-          }
-          return json({ id: d.id, state: d.state, statusUrl: '/api/v1/documents/' + d.id }, 202);
-        }
-        const id = path.split('/')[4];
-        const d = docs.get(id);
-        if (d && path.includes('/artifacts/')) {
-          const bytes = Buffer.from(path.endsWith('/ride') ? '%PDF-test' : '<invoice/>');
-          res.writeHead(200, {
-            'content-type': path.endsWith('/ride') ? 'application/pdf' : 'application/xml',
-            etag: '"' + createHash('sha256').update(bytes).digest('hex') + '"',
-          });
-          return res.end(bytes);
-        }
-        if (d && path.endsWith('/sri-attempts'))
-          return json([
-            {
-              id: randomUUID(),
-              operation: 'RECEPTION',
-              outcome: 'RETURNED',
-              sriStatus: 'DEVUELTA',
-              httpStatus: 200,
-              startedAt: new Date().toISOString(),
-              completedAt: new Date().toISOString(),
-              messages: [
-                {
-                  identifier: '999',
-                  message: 'EXPLICACION_FISCAL_REAL',
-                  additionalInfo: null,
-                  type: 'ERROR',
-                },
-              ],
-            },
-          ]);
-        if (d) return json(d);
-        return json({ code: 'NOT_FOUND' }, 404);
-      });
+
+  /** Makes the given requests due and runs one scheduler tick through HTTP. */
+  async function tick(...ids: string[]) {
+    await prisma.invoiceRequest.updateMany({
+      where: { id: { in: ids } },
+      data: { nextAttemptAt: new Date(0) },
     });
-    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
-    process.env.EMITE_FACIL_API_URL = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/api/v1`;
+    return request(server())
+      .post('/api/v1/internal/invoicing/tick')
+      .set('Authorization', `Bearer ${TICK_SECRET}`)
+      .expect(200);
+  }
+
+  async function orderStatus(id: string) {
+    return (await prisma.order.findUniqueOrThrow({ where: { id } })).status;
+  }
+
+  beforeAll(async () => {
+    sri = await startSriSimulator();
+    process.env.SRI_TEST_BASE_URL = sri.baseUrl;
+    process.env.INVOICING_TICK_SECRET = TICK_SECRET;
     const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = module.createNestApplication({ rawBody: true });
     app.setGlobalPrefix('api/v1');
@@ -350,695 +156,409 @@ describe('durable invoicing HTTP / PostgreSQL / provider simulator', () => {
     await app.init();
     prisma = app.get(PrismaService);
     await prisma.cleanDatabase();
-    const t = await createTestTenant({ prisma, tenants: app.get(PlatformTenantsService) }, 901);
-    tenantId = t.id;
-    actorId = t.master!.id;
-    branchId = (await prisma.branch.findFirst({ where: { tenantId } }))!.id;
+
+    const tenants = app.get(PlatformTenantsService);
+    const tenant = await createTestTenant({ prisma, tenants }, 901);
+    tenantId = tenant.id;
+    actorId = tenant.master!.id;
+    branchId = (await prisma.branch.findFirstOrThrow({ where: { tenantId } })).id;
+    registerId = (
+      await prisma.cashRegisterSession.create({
+        data: { tenantId, branchId, openedById: actorId, openingCash: 0 },
+      })
+    ).id;
     profileId = (
       await prisma.billingProfile.create({
         data: {
           tenantId,
           kind: 'PERSON',
           idType: '06',
-          idNumber: 'FISCAL1',
-          legalName: 'Fiscal buyer',
+          idNumber: 'PAS-FISCAL-1',
+          legalName: 'Cliente Fiscal',
           createdById: actorId,
         },
       })
     ).id;
-    await prisma.professionalProfile.create({
-      data: {
-        userId: actorId,
-        specialtyId: (await prisma.specialty.findUniqueOrThrow({ where: { code: 'PSYCHOLOGY' } }))
-          .id,
-      },
-    });
-    await prisma.cashRegisterSession.create({
-      data: { tenantId, branchId, openedById: actorId, openingCash: 0 },
-    });
-    token = (
-      await request(server())
-        .post('/api/v1/auth/login')
-        .send({ email: 'admin+901@tenant.test', password: TEST_PASSWORD })
-        .expect(200)
-    ).body.accessToken;
-  });
-  afterAll(async () => {
-    if (app) await app.close();
-    if (upstream) await new Promise<void>((r) => upstream.close(() => r()));
-  });
-  it('requires configuration, tests an unsaved key, stores secrets encrypted and validates points', async () => {
-    const o = await order();
-    const blocked = await submit(o.id).expect(422);
-    expect(blocked.body.missing).toContain('INVOICING_NOT_CONFIGURED');
-    await request(server())
-      .post(`${base()}/invoicing/test`)
-      .set(auth())
-      .send({ apiKey: 'test-key' })
-      .expect(200);
-    expect(await prisma.invoicingConnection.count()).toBe(0);
-    const saved = await request(server())
-      .put(`${base()}/invoicing/connection`)
-      .set(auth())
-      .send({ apiKey: 'test-key', taxpayerId: tid, webhookSecret: secret })
-      .expect(200);
-    connectionId = saved.body.id;
-    expect(JSON.stringify(saved.body)).not.toContain('test-key');
-    expect(saved.body.hasApiKey).toBe(true);
-    expect(
-      (await prisma.invoicingConnection.findUnique({ where: { id: connectionId } }))!
-        .apiKeyEncrypted,
-    ).toMatch(/^enc:v1:/);
-    await request(server())
-      .put(`${base()}/invoicing/connection`)
-      .set(auth())
-      .send({ taxpayerId: tid })
-      .expect(200);
-    await request(server())
-      .put(`${base()}/branches/${branchId}/emission-point`)
-      .set(auth())
-      .send({ establishmentId: randomUUID(), emissionPointId: pid })
-      .expect(422);
-    await request(server())
-      .put(`${base()}/branches/${branchId}/emission-point`)
-      .set(auth())
-      .send({ establishmentId: eid, emissionPointId: pid })
-      .expect(200);
-  });
-  it('creates without HTTP, replays same key, blocks parallel requests and refunds', async () => {
-    const o = await order();
-    const key = randomUUID();
-    const before = posts.length;
-    const a = await submit(o.id, key).expect(202);
-    expect(a.body.status).toBe('REQUESTED');
-    expect(posts.length).toBe(before);
-    expect((await submit(o.id, key).expect(202)).body.id).toBe(a.body.id);
-    await submit((await order()).id, key).expect(409);
-    await submit(o.id).expect(409);
-    const payment = await prisma.payment.findFirst({ where: { orderId: o.id } });
-    await request(server())
-      .post(`${base()}/payments/${payment!.id}/refund`)
-      .set(auth())
-      .send({ reason: 'test refund' })
-      .expect(409);
-    expect((await prisma.order.findUnique({ where: { id: o.id } }))!.status).toBe('INVOICED');
-  });
-  it('persists exact body before POST; timeout retry ignores changed profile/catalog and blocks replacement', async () => {
-    const o = await order();
-    const a = (await submit(o.id).expect(202)).body;
-    mode = 'timeout';
-    await dispatch();
-    const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: a.id } });
-    expect(row.requiresReconciliation).toBe(true);
-    expect(row.providerBodyEncrypted).toMatch(/^enc:v1:/);
-    const original = posts.find((p) => p.key === row.providerIdempotencyKey)!;
-    customerName = 'Changed upstream';
-    mode = 'normal';
-    await prisma.invoiceRequest.update({
-      where: { id: a.id },
-      data: { nextAttemptAt: new Date(0) },
-    });
-    await dispatch();
-    expect(posts.filter((p) => p.key === row.providerIdempotencyKey).at(-1)).toEqual(original);
-    await submit(o.id).expect(409);
-    customerName = 'Fiscal buyer';
-  });
-  it('authorizes monotonically, deduplicates signed callbacks and stores hashed encrypted artifacts', async () => {
-    mode = 'normal';
-    await prisma.invoiceRequest.updateMany({ data: { nextAttemptAt: new Date(0) } });
-    await dispatch();
-    const row = await prisma.invoiceRequest.findFirstOrThrow({
-      where: { externalDocumentId: { not: null } },
-    });
-    const d = docs.get(row.externalDocumentId!);
-    d.state = 'AUTHORIZED';
-    d.authorizationNumber = '2'.repeat(49);
-    d.authorizedAt = new Date().toISOString();
-    const event = {
-      eventId: randomUUID(),
-      eventType: 'document.authorized',
-      occurredAt: new Date().toISOString(),
-      tenantId: tid,
-      document: d,
-    };
-    const raw = JSON.stringify(event);
-    const stamp = String(Math.floor(Date.now() / 1000));
-    const sig = createHmac('sha256', Buffer.alloc(32, 3))
-      .update(`${event.eventId}.${stamp}.${raw}`)
-      .digest('base64');
-    const hook = () =>
-      request(server())
-        .post(`/api/v1/integrations/emite-facil/webhook/${connectionId}`)
-        .set({
-          'content-type': 'application/json',
-          'webhook-id': event.eventId,
-          'webhook-timestamp': stamp,
-          'webhook-signature': 'v1,' + sig,
-        })
-        .send(raw);
-    await hook().expect(204);
-    await hook().expect(204);
-    expect(
-      await prisma.invoiceRequestEvent.count({ where: { webhookEventId: event.eventId } }),
-    ).toBe(1);
-    await reconcile();
-    const result = await request(server())
-      .get(`${base()}/invoice-requests/${row.id}`)
-      .set(auth())
-      .expect(200);
-    expect(result.body.status).toBe('AUTHORIZED');
-    expect(result.body.artifacts.xml).toBe(true);
-    const lateEvent = {
-      ...event,
-      eventId: randomUUID(),
-      eventType: 'document.returned',
-      document: { ...d, state: 'RETURNED' },
-    };
-    const lateRaw = JSON.stringify(lateEvent);
-    const lateSignature = createHmac('sha256', Buffer.alloc(32, 3))
-      .update(`${lateEvent.eventId}.${stamp}.${lateRaw}`)
-      .digest('base64');
-    await request(server())
-      .post(`/api/v1/integrations/emite-facil/webhook/${connectionId}`)
-      .set({
-        'content-type': 'application/json',
-        'webhook-id': lateEvent.eventId,
-        'webhook-timestamp': stamp,
-        'webhook-signature': 'v1,' + lateSignature,
+    mailedProfileId = (
+      await prisma.billingProfile.create({
+        data: {
+          tenantId,
+          kind: 'PERSON',
+          idType: '06',
+          idNumber: 'PAS-FISCAL-2',
+          legalName: 'Cliente Con Correo',
+          email: 'cliente@tenant.test',
+          createdById: actorId,
+        },
       })
-      .send(lateRaw)
-      .expect(204);
-    expect((await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: row.id } })).status).toBe(
-      'AUTHORIZED',
-    );
-    await request(server()).get(`${base()}/invoice-requests/${row.id}/xml`).set(auth()).expect(200);
-    await request(server())
-      .get(`${base()}/invoice-requests/${row.id}/ride`)
-      .set(auth())
-      .expect(200);
-    await submit(row.orderId).expect(409);
-  });
-  it('treats signature failure as recoverable and locks refunds until the SAME document authorizes', async () => {
-    const o = await order();
-    const r = (await submit(o.id).expect(202)).body;
-    await dispatch();
-    let row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    const doc = docs.get(row.externalDocumentId!);
-    doc.state = 'SIGNATURE_FAILED';
-    await reconcile();
-    row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    expect(row.status).toBe('PROCESSING');
-    expect(row.lastErrorEncrypted).toMatch(/^enc:v1:/);
-    await submit(o.id).expect(409);
-    const pay = await prisma.payment.findFirstOrThrow({ where: { orderId: o.id } });
-    await request(server())
-      .post(`${base()}/payments/${pay.id}/refund`)
-      .set(auth())
-      .send({ reason: 'blocked refund' })
-      .expect(409);
-    doc.state = 'SIGNED';
-    await reconcile();
-    expect((await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } })).status).toBe(
-      'PROCESSING',
-    );
-    doc.state = 'AUTHORIZED';
-    doc.authorizationNumber = '3'.repeat(49);
-    doc.authorizedAt = new Date().toISOString();
-    await reconcile();
-    expect((await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } })).status).toBe(
-      'AUTHORIZED',
-    );
-  });
-  it('releases safe rejections without changing payments and links the replacement', async () => {
-    const o = await order();
-    const r = (await submit(o.id).expect(202)).body;
-    await dispatch();
-    let row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    docs.get(row.externalDocumentId!).state = 'RETURNED';
-    const before = await prisma.payment.findMany({ where: { orderId: o.id } });
-    await reconcile();
-    expect((await prisma.order.findUniqueOrThrow({ where: { id: o.id } })).status).toBe('PAID');
-    expect(await prisma.payment.findMany({ where: { orderId: o.id } })).toEqual(before);
-    const rejection = (
-      await request(server()).get(`${base()}/invoice-requests/${r.id}`).set(auth()).expect(200)
-    ).body;
-    expect(rejection.lastError.attempts[0].messages[0].message).toBe('EXPLICACION_FISCAL_REAL');
-    expect(JSON.stringify(rejection.events)).not.toContain('EXPLICACION_FISCAL_REAL');
-    const replacement = (await submit(o.id).expect(202)).body;
-    expect(replacement.replacesInvoiceRequestId).toBe(r.id);
-    await dispatch();
-    const latest = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: replacement.id } });
-    expect(
-      posts.find((p) => p.key === latest.providerIdempotencyKey)!.body.replacesDocumentId,
-    ).toBe(row.externalDocumentId);
-  });
-  it('fails changed fiscal customers safely before invoice POST and permits correction', async () => {
-    const o = await order();
-    const r = (await submit(o.id).expect(202)).body;
-    customerName = 'Other name';
-    const count = posts.length;
-    await dispatch();
-    customerName = 'Fiscal buyer';
-    const result = (
-      await request(server()).get(`${base()}/invoice-requests/${r.id}`).set(auth()).expect(200)
-    ).body;
-    expect(result.status).toBe('FAILED');
-    expect(result.lastError.code).toBe('CUSTOMER_SYNC_REQUIRED');
-    expect(result.requiresReconciliation).toBe(false);
-    expect(posts.length).toBe(count);
-    expect((await prisma.order.findUniqueOrThrow({ where: { id: o.id } })).status).toBe('PAID');
-  });
-  it('keeps SRI explanations behind billing.view when a create-only assistant replays a rejected request', async () => {
+    ).id;
+    token = await login('admin+901@tenant.test');
+
+    foreignTenantId = (await createTestTenant({ prisma, tenants }, 902)).id;
+    foreignToken = await login('admin+902@tenant.test');
+
     await app.get(UsersService).create(
       {
         tenantId,
-        email: 'b2-create-only@tenant.test',
+        email: 'invoicing-assistant@tenant.test',
         password: TEST_PASSWORD,
-        firstName: 'Assistant',
-        lastName: 'Billing',
+        firstName: 'Asistente',
+        lastName: 'Caja',
         role: 'ASISTENTE',
       },
       actorId,
     );
+    assistantToken = await login('invoicing-assistant@tenant.test');
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+    if (sri) await sri.close();
+  });
+
+  beforeEach(() => sri.mode('authorize'));
+
+  it('requires issuer, certificate and point before invoicing', async () => {
+    const order = await paidOrder();
+    const blocked = await submit(order.id).expect(422);
+    expect(blocked.body.missing).toContain('INVOICING_NOT_CONFIGURED');
+
+    const issuer = await request(server())
+      .put(`${base()}/invoicing/issuer`)
+      .set(auth())
+      .send(ISSUER)
+      .expect(200);
+    expect(issuer.body.ruc).toBe(ISSUER.ruc);
+    expect(issuer.body.certificate).toBeNull();
+    // Without a certificate the issuer still cannot invoice.
+    expect((await submit(order.id).expect(422)).body.missing).toContain('INVOICING_NOT_CONFIGURED');
+
+    await request(server())
+      .put(`${base()}/invoicing/issuer/certificate`)
+      .set(auth())
+      .attach('file', Buffer.alloc(51 * 1024, 1), 'grande.p12')
+      .field('password', CERTIFICATE_PASSWORD)
+      .expect(413);
+    const certificate = await request(server())
+      .put(`${base()}/invoicing/issuer/certificate`)
+      .set(auth())
+      .attach('file', createTestP12({ password: CERTIFICATE_PASSWORD }), 'firma.p12')
+      .field('password', CERTIFICATE_PASSWORD)
+      .expect(200);
+    expect(certificate.body.certificate.rucVerified).toBe(true);
+    expect(JSON.stringify(certificate.body)).not.toContain(CERTIFICATE_PASSWORD);
+    const stored = await prisma.invoicingIssuer.findUniqueOrThrow({ where: { tenantId } });
+    expect(stored.certificatePasswordEncrypted).not.toContain(CERTIFICATE_PASSWORD);
+    // The .p12 lives in file storage, encrypted with the clinic key; the row keeps only its key.
+    const certificateFile = (key: string) => join(storageRoot, ...key.split('/'));
+    expect(stored.certificateStorageKey).toMatch(
+      new RegExp(`^invoicing-issuers/${tenantId}/${stored.id}/certificate-[0-9a-f-]{36}$`),
+    );
+    const encrypted = readFileSync(certificateFile(stored.certificateStorageKey!));
+    const plain = app.get(ClinicalCryptoService).decryptBuffer(tenantId, encrypted);
+    expect(createHash('sha256').update(plain).digest('hex')).toBe(stored.certificateSha256);
+    expect(encrypted.includes(plain.subarray(0, 64))).toBe(false);
+    // Replacing it removes the previous file once the new key is saved.
+    await request(server())
+      .put(`${base()}/invoicing/issuer/certificate`)
+      .set(auth())
+      .attach('file', createTestP12({ password: CERTIFICATE_PASSWORD }), 'firma.p12')
+      .field('password', CERTIFICATE_PASSWORD)
+      .expect(200);
+    const replaced = await prisma.invoicingIssuer.findUniqueOrThrow({ where: { tenantId } });
+    expect(replaced.certificateStorageKey).not.toBe(stored.certificateStorageKey);
+    expect(existsSync(certificateFile(replaced.certificateStorageKey!))).toBe(true);
+    expect(existsSync(certificateFile(stored.certificateStorageKey!))).toBe(false);
+    // Still no emission point for the branch.
+    expect((await submit(order.id).expect(422)).body.missing).toContain('INVOICING_NOT_CONFIGURED');
+
+    const point = await request(server())
+      .put(`${base()}/branches/${branchId}/emission-point`)
+      .set(auth())
+      .send({
+        establishmentCode: '001',
+        emissionPointCode: '002',
+        establishmentAddress: 'Av. Amazonas N1-23, Quito',
+        nextSequential: 500,
+      })
+      .expect(200);
+    expect(point.body).toMatchObject({ establishmentCode: '001', nextSequential: 500 });
+
+    const check = await request(server()).post(`${base()}/invoicing/test`).set(auth()).expect(200);
+    expect(check.body).toEqual({
+      certificateValid: true,
+      certificateError: null,
+      rucVerified: true,
+      sriReachable: true,
+    });
+    sri.mode('down');
+    expect(
+      (await request(server()).post(`${base()}/invoicing/test`).set(auth()).expect(200)).body
+        .sriReachable,
+    ).toBe(false);
+
+    // The refused attempts created nothing and left the order invoiceable.
+    expect(await prisma.invoiceRequest.count({ where: { orderId: order.id } })).toBe(0);
+    expect(await orderStatus(order.id)).toBe('PAID');
+  });
+
+  it('authorizes inline and serves XML and RIDE', async () => {
+    const order = await paidOrder(40, mailedProfileId);
+    const result = (await submit(order.id).expect(202)).body;
+    expect(result.status).toBe('AUTHORIZED');
+    expect(result.number).toBe('001-002-000000500');
+    expect(result.accessKey).toMatch(/^\d{49}$/);
+    expect(result.authorizationNumber).toBe(result.accessKey);
+    expect(result.artifacts).toEqual({ xml: true, ride: true });
+    expect(await orderStatus(order.id)).toBe('INVOICED');
+    expect(sri.received.filter((r) => r.accessKey === result.accessKey)).toHaveLength(1);
+
+    const xml = await download(result.id, 'xml');
+    expect(xml.headers['content-type']).toContain('application/xml');
+    const text = (xml.body as Buffer).toString('utf8');
+    expect(text).toContain('<estado>AUTORIZADO</estado>');
+    expect(text).toContain(`<claveAcceso>${result.accessKey}</claveAcceso>`);
+    const ride = await download(result.id, 'ride');
+    expect(ride.headers['content-type']).toContain('application/pdf');
+    expect((ride.body as Buffer).subarray(0, 5).toString('latin1')).toBe('%PDF-');
+
+    // No mail provider runs in the e2e (setup-e2e.ts), so the send is refused and recorded.
+    const types = (await detail(result.id)).events.map((e: { type: string }) => e.type);
+    expect(types).toEqual(expect.arrayContaining(['REQUESTED', 'SIGNED', 'AUTHORIZED']));
+    expect(types.some((t: string) => t === 'EMAILED' || t === 'EMAIL_FAILED')).toBe(true);
+    await submit(order.id).expect(409);
+  });
+
+  it('keeps the issuer and invoice requests inside their tenant and role', async () => {
+    const row = await prisma.invoiceRequest.findFirstOrThrow({
+      where: { tenantId, status: 'AUTHORIZED' },
+    });
+    const foreign = `/api/v1/tenants/${foreignTenantId}`;
+    await request(server()).get(`${foreign}/invoicing/issuer`).set(auth()).expect(403);
+    await request(server()).put(`${foreign}/invoicing/issuer`).set(auth()).send(ISSUER).expect(403);
+    await request(server()).get(`${base()}/invoicing/issuer`).set(auth(foreignToken)).expect(403);
+    await request(server())
+      .get(`${base()}/invoice-requests/${row.id}`)
+      .set(auth(foreignToken))
+      .expect(403);
+    // Through its own tenant, the other clinic cannot reach this clinic's request either.
+    await request(server())
+      .get(`${foreign}/invoice-requests/${row.id}`)
+      .set(auth(foreignToken))
+      .expect(404);
+    await request(server())
+      .get(`${foreign}/invoice-requests/${row.id}/xml`)
+      .set(auth(foreignToken))
+      .expect(404);
+    const foreignIssuer = await request(server())
+      .get(`${foreign}/invoicing/issuer`)
+      .set(auth(foreignToken))
+      .expect(200);
+    expect(foreignIssuer.body).not.toHaveProperty('ruc');
+
+    // Only the MASTER configures the issuer.
+    await request(server())
+      .put(`${base()}/invoicing/issuer`)
+      .set(auth(assistantToken))
+      .send(ISSUER)
+      .expect(403);
+    await request(server())
+      .put(`${base()}/invoicing/issuer/certificate`)
+      .set(auth(assistantToken))
+      .attach('file', createTestP12({ password: CERTIFICATE_PASSWORD }), 'firma.p12')
+      .field('password', CERTIFICATE_PASSWORD)
+      .expect(403);
+    expect(
+      (await prisma.invoicingIssuer.findUniqueOrThrow({ where: { tenantId } })).legalName,
+    ).toBe(ISSUER.legalName);
+  });
+
+  it('guards the scheduler tick with its secret', async () => {
+    const tickRoute = '/api/v1/internal/invoicing/tick';
+    delete process.env.INVOICING_TICK_SECRET;
+    try {
+      await request(server())
+        .post(tickRoute)
+        .set('Authorization', `Bearer ${TICK_SECRET}`)
+        .expect(404);
+    } finally {
+      process.env.INVOICING_TICK_SECRET = TICK_SECRET;
+    }
+    await request(server()).post(tickRoute).set('Authorization', 'Bearer wrong-secret').expect(401);
+    await request(server()).post(tickRoute).expect(401);
+    await request(server()).post(tickRoute).set(auth()).expect(401);
+    const ok = await request(server())
+      .post(tickRoute)
+      .set('Authorization', `Bearer ${TICK_SECRET}`)
+      .expect(200);
+    expect(ok.body).toEqual({ processed: expect.any(Number) });
+  });
+
+  it('leaves PENDING inline and authorizes from the tick', async () => {
+    sri.mode('pending');
+    const order = await paidOrder();
+    const pending = (await submit(order.id).expect(202)).body;
+    expect(pending.status).toBe('PROCESSING');
+    expect(pending.externalState).toBe('RECEIVED');
+    expect(pending.number).toBe('001-002-000000501');
+
+    sri.mode('authorize');
+    await tick(pending.id);
+    const done = await detail(pending.id);
+    expect(done.status).toBe('AUTHORIZED');
+    expect(done.accessKey).toBe(pending.accessKey);
+    expect(done.authorizationNumber).toBe(pending.accessKey);
+    expect(done.artifacts).toEqual({ xml: true, ride: true });
+    // This customer has no e-mail address.
+    expect(done.events.map((e: { type: string }) => e.type)).toContain('EMAIL_SKIPPED');
+    expect(sri.received.filter((r) => r.accessKey === pending.accessKey)).toHaveLength(1);
+  });
+
+  it('recovers a reception timeout through the access key', async () => {
+    const before = sri.received.length;
+    sri.mode('reception-timeout');
+    const order = await paidOrder();
+    const uncertain = (await submit(order.id).expect(202)).body;
+    expect(uncertain.status).toBe('PROCESSING');
+    expect(uncertain.lastError.code).toBe('SRI_TIMEOUT');
+    expect(await orderStatus(order.id)).toBe('INVOICED');
+
+    sri.mode('authorize');
+    await tick(uncertain.id);
+    const done = await detail(uncertain.id);
+    expect(done.status).toBe('AUTHORIZED');
+    expect(done.accessKey).toBe(uncertain.accessKey);
+    expect(done.sequential).toBe(uncertain.sequential);
+    // The voucher reached the SRI once; the tick found it by its key instead of sending another.
+    const arrived = sri.received.slice(before);
+    expect(arrived).toHaveLength(1);
+    expect(arrived[0].accessKey).toBe(uncertain.accessKey);
+  });
+
+  it('rejects, releases the order and reissues with a new sequential', async () => {
+    const order = await paidOrder();
+    const payments = await prisma.payment.findMany({ where: { orderId: order.id } });
+    sri.mode('return');
+    const rejected = (await submit(order.id).expect(202)).body;
+    expect(rejected.status).toBe('REJECTED');
+    expect(rejected.lastError.code).toBe('SRI_REJECTED');
+    expect(rejected.lastError.messages[0].message).toBe(SIMULATED_SRI_MESSAGE);
+    expect(JSON.stringify(rejected.events)).not.toContain(SIMULATED_SRI_MESSAGE);
+    expect(await orderStatus(order.id)).toBe('PAID');
+    expect(await prisma.payment.findMany({ where: { orderId: order.id } })).toEqual(payments);
+
+    sri.mode('authorize');
+    const reissued = (await submit(order.id).expect(202)).body;
+    expect(reissued.status).toBe('AUTHORIZED');
+    expect(reissued.replacesInvoiceRequestId).toBe(rejected.id);
+    expect(Number(reissued.sequential)).toBeGreaterThan(Number(rejected.sequential));
+    expect(reissued.accessKey).not.toBe(rejected.accessKey);
+    expect(await orderStatus(order.id)).toBe('INVOICED');
+  });
+
+  it('gives distinct sequentials to concurrent invoices of one point', async () => {
+    const [a, b] = await Promise.all([paidOrder(), paidOrder()]);
+    const results = await Promise.all([submit(a.id), submit(b.id)]);
+    const bodies = results.map((r) => {
+      expect(r.status).toBe(202);
+      expect(r.body.status).toBe('AUTHORIZED');
+      return r.body;
+    });
+    const sequentials = bodies.map((r) => Number(r.sequential)).sort((x, y) => x - y);
+    expect(sequentials[1]).toBe(sequentials[0] + 1);
+    expect(new Set(bodies.map((r) => r.accessKey)).size).toBe(2);
+  });
+
+  it('keeps SRI messages behind billing.view', async () => {
     await prisma.tenantRolePermission.create({
       data: { tenantId, role: 'ASISTENTE', permission: 'billing.create', granted: true },
     });
-    const assistantToken = (
-      await request(server())
-        .post('/api/v1/auth/login')
-        .send({ email: 'b2-create-only@tenant.test', password: TEST_PASSWORD })
-        .expect(200)
-    ).body.accessToken;
-    const asAssistant = { Authorization: `Bearer ${assistantToken}` };
-    const o = await order();
+    const order = await paidOrder();
     const key = randomUUID();
-    const post = () =>
-      request(server())
-        .post(`${base()}/orders/${o.id}/invoice-requests`)
-        .set(asAssistant)
-        .set('Idempotency-Key', key);
-    const accepted = (await post().expect(202)).body;
+    sri.mode('not-authorized');
+    const accepted = (await submit(order.id, key, assistantToken).expect(202)).body;
+    expect(accepted.status).toBe('REJECTED');
     expect(accepted.lastError).toBeNull();
-    await dispatch();
-    const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: accepted.id } });
-    docs.get(row.externalDocumentId!).state = 'RETURNED';
-    await reconcile();
+    expect(JSON.stringify(accepted)).not.toContain(SIMULATED_SRI_MESSAGE);
     await request(server())
-      .get(`${base()}/invoice-requests/${row.id}`)
-      .set(asAssistant)
+      .get(`${base()}/invoice-requests/${accepted.id}`)
+      .set(auth(assistantToken))
       .expect(403);
-    await request(server()).get(`${base()}/invoice-requests`).set(asAssistant).expect(403);
-    const replay = (await post().expect(202)).body;
+    await request(server()).get(`${base()}/invoice-requests`).set(auth(assistantToken)).expect(403);
+    const replay = (await submit(order.id, key, assistantToken).expect(202)).body;
+    expect(replay.id).toBe(accepted.id);
     expect(replay.status).toBe('REJECTED');
     expect(replay.lastError).toBeNull();
-    expect(JSON.stringify(replay)).not.toContain('EXPLICACION_FISCAL_REAL');
-    const detail = (
-      await request(server()).get(`${base()}/invoice-requests/${row.id}`).set(auth()).expect(200)
-    ).body;
-    expect(detail.lastError.attempts[0].messages[0].message).toBe('EXPLICACION_FISCAL_REAL');
+    expect(JSON.stringify(replay)).not.toContain(SIMULATED_SRI_MESSAGE);
+    const full = await detail(accepted.id);
+    expect(full.lastError.messages[0].message).toBe(SIMULATED_SRI_MESSAGE);
   });
-  it('preserves the rejected provider document across a safe preflight failure in its replacement chain', async () => {
-    const o = await order();
-    const original = (await submit(o.id).expect(202)).body;
-    await dispatch();
-    const initial = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: original.id } });
-    docs.get(initial.externalDocumentId!).state = 'RETURNED';
-    await reconcile();
-    const failed = (await submit(o.id).expect(202)).body;
-    customerName = 'Outdated';
-    await dispatch();
-    customerName = 'Fiscal buyer';
-    expect(
-      (await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: failed.id } })).status,
-    ).toBe('FAILED');
-    const replacement = (await submit(o.id).expect(202)).body;
-    await dispatch();
-    const latest = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: replacement.id } });
-    expect(
-      posts.find((p) => p.key === latest.providerIdempotencyKey)!.body.replacesDocumentId,
-    ).toBe(initial.externalDocumentId);
-  });
-  it('reclaims expired leases and ignores stale workers before POST and CAS writes', async () => {
-    const { InvoiceWorkerService } = await import('../src/invoicing/invoice-worker.service');
-    const worker = app.get(InvoiceWorkerService);
-    const o = await order();
-    const r = (await submit(o.id).expect(202)).body;
-    const claimed = (await worker.claim()).find((x) => x.id === r.id)!;
-    expect(claimed).toBeDefined();
-    await prisma.invoiceRequest.update({ where: { id: r.id }, data: { leaseUntil: new Date(0) } });
-    const newer = (await worker.claim()).find((x) => x.id === r.id)!;
-    expect(newer.leaseToken).not.toBe(claimed.leaseToken);
-    const count = posts.length;
-    await worker.process(claimed);
-    expect(posts.length).toBe(count);
-    expect(
-      (await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } })).leaseToken,
-    ).toBe(newer.leaseToken);
-    await worker.process(newer);
-    expect((await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } })).status).toBe(
-      'PROCESSING',
-    );
-  });
-  it('retains uncertainty across 24h expiry and later configuration failure', async () => {
-    const o = await order();
-    const r = (await submit(o.id).expect(202)).body;
-    mode = 'timeout';
-    await dispatch();
-    mode = 'normal';
-    await prisma.invoiceRequest.update({
-      where: { id: r.id },
-      data: { requestedAt: new Date(Date.now() - 90000000), nextAttemptAt: new Date(0) },
-    });
-    taxpayer.defaultEnvironment = '2';
-    await dispatch();
-    taxpayer.defaultEnvironment = '1';
-    const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    expect(row.status).toBe('FAILED');
-    expect(row.requiresReconciliation).toBe(true);
-    expect((await prisma.order.findUniqueOrThrow({ where: { id: o.id } })).status).toBe('INVOICED');
-    await submit(o.id).expect(409);
-    await prisma.invoiceRequest.update({
-      where: { id: r.id },
-      data: { nextAttemptAt: new Date(0) },
-    });
-    await dispatch();
-    expect((await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } })).status).toBe(
-      'PROCESSING',
-    );
-  });
-  it('ignores a late POST response after lease takeover and recovers the same body and key', async () => {
-    const { InvoiceWorkerService } = await import('../src/invoicing/invoice-worker.service');
-    const worker = app.get(InvoiceWorkerService);
-    const o = await order();
-    const r = (await submit(o.id).expect(202)).body;
-    const claimed = (await worker.claim()).find((x) => x.id === r.id)!;
-    let entered!: () => void;
-    const reached = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const gate = { entered, release: undefined as (() => void) | undefined };
-    invoiceGate = gate;
-    const pending = worker.process(claimed);
-    await reached;
-    await prisma.invoiceRequest.update({ where: { id: r.id }, data: { leaseUntil: new Date(0) } });
-    const newer = (await worker.claim()).find((x) => x.id === r.id)!;
-    expect(newer.requiresReconciliation).toBe(true);
-    gate.release!();
-    await pending;
-    const after = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    expect(after.externalDocumentId).toBeNull();
-    expect(after.requiresReconciliation).toBe(true);
-    expect(after.leaseToken).toBe(newer.leaseToken);
-    await worker.process(newer);
-    const recovered = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    expect(recovered.externalDocumentId).not.toBeNull();
-    const replays = posts.filter((p) => p.key === claimed.providerIdempotencyKey);
-    expect(replays).toHaveLength(2);
-    expect(replays[0]).toEqual(replays[1]);
-  });
-  it('keeps 429 retries durable and respects a future retry time', async () => {
-    const o = await order();
-    const r = (await submit(o.id).expect(202)).body;
-    mode = '429';
-    await dispatch();
-    mode = 'normal';
-    const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    expect(row.requiresReconciliation).toBe(true);
-    expect(row.nextAttemptAt.getTime()).toBeGreaterThan(Date.now() + 20000);
-    const count = posts.length;
-    await dispatch();
-    expect(posts.length).toBe(count);
-  });
-  it('never releases a provider-reserved idempotency key without a known document', async () => {
-    const o = await order();
-    const r = (await submit(o.id).expect(202)).body;
-    mode = 'reserved';
-    await dispatch();
-    mode = 'normal';
-    const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    expect(row.externalDocumentId).toBeNull();
-    expect(row.requiresReconciliation).toBe(true);
-    expect(row.lastErrorEncrypted).toMatch(/^enc:v1:/);
-    await submit(o.id).expect(409);
-    await prisma.invoiceRequest.update({
-      where: { id: r.id },
-      data: { nextAttemptAt: new Date(0) },
-    });
-    await dispatch();
-    const recovered = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    expect(recovered.externalDocumentId).not.toBeNull();
-    expect(posts.filter((p) => p.key === row.providerIdempotencyKey)).toHaveLength(2);
-  });
-  it('reuses one product for two sessions of the same pinned treatment version and sends no clinical data', async () => {
-    const t = await treatment();
-    const version = t.versions[0].id;
-    const one = await sessionOrder(version);
-    const two = await sessionOrder(version);
-    const before = products.length;
-    const a = (await submit(one.order.id).expect(202)).body;
-    const b = (await submit(two.order.id).expect(202)).body;
-    await dispatch();
-    expect(products.length - before).toBe(1);
-    const rows = await prisma.invoiceRequest.findMany({ where: { id: { in: [a.id, b.id] } } });
-    const bodies = rows.map((r) => posts.find((p) => p.key === r.providerIdempotencyKey)!.body);
-    expect(bodies[0].lines[0].productId).toBe(bodies[1].lines[0].productId);
-    const { ClinicalCryptoService } =
-      await import('../src/clinical-access/clinical-crypto.service');
-    const crypto = app.get(ClinicalCryptoService);
-    for (const r of rows) {
-      const fiscal = crypto.decrypt(tenantId, r.snapshotEncrypted);
-      expect(JSON.parse(fiscal).lines[0].localId).toBe(version);
-      expect(fiscal).not.toContain('PRIVATE_');
-    }
-    expect(JSON.stringify(bodies)).not.toContain('PRIVATE_');
-    expect(
-      (await prisma.treatmentSession.findUniqueOrThrow({ where: { id: one.session.id } })).status,
-    ).toBe('BILLING_PENDING');
-  });
-  it('allows clinical completion after early authorization and preserves payment records', async () => {
-    const t = await treatment(true);
-    const fixture = await sessionOrder(t.versions[0].id, false);
-    const payments = await prisma.payment.findMany({ where: { orderId: fixture.order.id } });
-    const r = (await submit(fixture.order.id).expect(202)).body;
-    expect(
-      (await prisma.treatmentSession.findUniqueOrThrow({ where: { id: fixture.session.id } }))
-        .status,
-    ).toBe('IN_PROGRESS');
-    await dispatch();
-    const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: r.id } });
-    const d = docs.get(row.externalDocumentId!);
-    d.state = 'AUTHORIZED';
-    d.authorizationNumber = '4'.repeat(49);
-    d.authorizedAt = new Date().toISOString();
-    await reconcile();
-    expect(
-      (await prisma.treatmentSession.findUniqueOrThrow({ where: { id: fixture.session.id } }))
-        .status,
-    ).toBe('IN_PROGRESS');
-    await request(server())
-      .post(`${base()}/treatment-sessions/${fixture.session.id}/complete`)
-      .set(auth())
-      .send({ procedureNotes: 'Completed private care' })
-      .expect(201);
-    expect(
-      (await prisma.treatmentSession.findUniqueOrThrow({ where: { id: fixture.session.id } }))
-        .status,
-    ).toBe('BILLED');
-    expect(await prisma.payment.findMany({ where: { orderId: fixture.order.id } })).toEqual(
-      payments,
-    );
-  });
-  it.each([
-    ['AUTHORIZED', 'BILLED'],
-    ['REJECTED', 'CLINICAL_COMPLETE'],
-    ['FAILED', 'CLINICAL_COMPLETE'],
-  ])(
-    'serializes early invoice %s committed after the clinical invoice read',
-    async (outcome, expectedStatus) => {
-      const fixture = await concurrentCompletionFixture(outcome);
-      const { receipt, finalize } = fixture;
 
-      let reached!: () => void;
-      const invoiceRead = new Promise<void>((resolve) => (reached = resolve));
-      let release!: () => void;
-      const resumeCompletion = new Promise<void>((resolve) => (release = resolve));
-      let pause = true;
-      const transaction = prisma.$transaction.bind(prisma);
-      // Keep every query and transaction real; pause only after the first invoice read.
-      const transactionSpy = jest.spyOn(prisma, '$transaction').mockImplementation(((
-        operation: any,
-        options: any,
-      ) => {
-        if (options?.isolationLevel !== Prisma.TransactionIsolationLevel.Serializable)
-          return transaction(operation, options);
-        return transaction(async (tx) => {
-          const invoiceRequest = new Proxy(tx.invoiceRequest, {
-            get(target, property) {
-              if (property !== 'findFirst') return Reflect.get(target, property);
-              return async (args: Prisma.InvoiceRequestFindFirstArgs) => {
-                const row = await target.findFirst(args);
-                if (pause && row?.id === receipt.id) {
-                  pause = false;
-                  reached();
-                  await resumeCompletion;
-                }
-                return row;
-              };
-            },
-          });
-          return operation(
-            new Proxy(tx, {
-              get(target, property) {
-                return property === 'invoiceRequest'
-                  ? invoiceRequest
-                  : Reflect.get(target, property);
-              },
-            }),
-          );
-        }, options);
-      }) as typeof prisma.$transaction);
-      const completion = request(server())
-        .post(`${base()}/treatment-sessions/${fixture.session.id}/complete`)
-        .set(auth())
-        .send({ procedureNotes: 'Completed concurrent care' })
-        .then((response) => response);
-      try {
-        await invoiceRead;
-        await finalize();
-        expect(
-          (await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: receipt.id } })).status,
-        ).toBe(outcome);
-        expect(
-          (await prisma.treatmentSession.findUniqueOrThrow({ where: { id: fixture.session.id } }))
-            .completedAt,
-        ).toBeNull();
-      } finally {
-        release();
-        transactionSpy.mockRestore();
-        await completion;
-      }
-      expect((await completion).status).toBe(201);
-      const completed = await prisma.treatmentSession.findUniqueOrThrow({
-        where: { id: fixture.session.id },
-      });
-      expect(completed.completedAt).not.toBeNull();
-      expect(completed.status).toBe(expectedStatus);
-    },
-  );
-  it.each([
-    ['AUTHORIZED', 'BILLED'],
-    ['REJECTED', 'BILLING_FAILED'],
-    ['FAILED', 'BILLING_FAILED'],
-  ])(
-    'waits for clinical completion holding the invoice lock before applying %s',
-    async (outcome, expectedStatus) => {
-      const fixture = await concurrentCompletionFixture(outcome);
-      const sessions = app.get(TreatmentSessionsService);
-      const transition = sessions.transition.bind(sessions);
-      let reached!: (pid: number) => void;
-      const beforeTransition = new Promise<number>((resolve) => (reached = resolve));
-      let release!: () => void;
-      const resumeCompletion = new Promise<void>((resolve) => (release = resolve));
-      const transitionSpy = jest
-        .spyOn(sessions, 'transition')
-        .mockImplementation(async (tx, session, data) => {
-          if (session.id === fixture.session.id) {
-            const [{ pid }] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
-            reached(pid);
-            await resumeCompletion;
-          }
-          return transition(tx, session, data);
-        });
-      const completion = request(server())
-        .post(`${base()}/treatment-sessions/${fixture.session.id}/complete`)
-        .set(auth())
-        .send({ procedureNotes: 'Completed while fiscal worker waits' })
-        .then((response) => response);
-      let finalization: Promise<void> | undefined;
-      try {
-        const completionPid = await beforeTransition;
-        finalization = fixture.finalize();
-        // Observe an actual PostgreSQL lock wait, rather than assuming one after a delay.
-        const deadline = Date.now() + 2000;
-        let waiting = false;
-        do {
-          [{ waiting }] = await prisma.$queryRaw<{ waiting: boolean }[]>`
-            SELECT EXISTS (
-              SELECT 1 FROM pg_stat_activity
-              WHERE ${completionPid} = ANY(pg_blocking_pids(pid))
-            ) AS waiting`;
-          if (!waiting) await new Promise((resolve) => setTimeout(resolve, 10));
-        } while (!waiting && Date.now() < deadline);
-        expect(waiting).toBe(true);
-      } finally {
-        release();
-        transitionSpy.mockRestore();
-        await Promise.all([completion, finalization]);
-      }
-      expect((await completion).status).toBe(201);
-      const completed = await prisma.treatmentSession.findUniqueOrThrow({
-        where: { id: fixture.session.id },
-      });
-      expect(completed.completedAt).not.toBeNull();
-      expect(completed.status).toBe(expectedStatus);
-      expect(
-        (await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: fixture.receipt.id } }))
-          .status,
-      ).toBe(outcome);
-    },
-  );
-  it('serializes concurrent identical submissions into one request', async () => {
-    const o = await order();
-    const key = randomUUID();
-    const [a, b] = await Promise.all([submit(o.id, key), submit(o.id, key)]);
-    expect(a.status).toBe(202);
-    expect(b.status).toBe(202);
-    expect(a.body.id).toBe(b.body.id);
-    expect(await prisma.invoiceRequest.count({ where: { orderId: o.id } })).toBe(1);
-  });
-  it('enforces monthly capacity, tenant isolation and signed webhook isolation', async () => {
-    await prisma.tenantSubscription.update({
-      where: { tenantId },
-      data: { monthlyElectronicInvoicesLimit: 0 },
-    });
-    expect((await submit((await order()).id).expect(409)).body.code).toBe('INVOICE_LIMIT_REACHED');
-    await prisma.tenantSubscription.update({
-      where: { tenantId },
-      data: { monthlyElectronicInvoicesLimit: 50 },
-    });
-    const foreign = await createTestTenant(
-      { prisma, tenants: app.get(PlatformTenantsService) },
-      902,
-    );
-    const row = await prisma.invoiceRequest.findFirstOrThrow();
-    await request(server())
-      .get(`/api/v1/tenants/${foreign.id}/invoice-requests/${row.id}`)
+  it('blocks refunds while an invoice is PROCESSING', async () => {
+    sri.mode('pending');
+    const order = await paidOrder();
+    const pending = (await submit(order.id).expect(202)).body;
+    expect(pending.status).toBe('PROCESSING');
+    const payment = await prisma.payment.findFirstOrThrow({ where: { orderId: order.id } });
+    const refused = await request(server())
+      .post(`${base()}/payments/${payment.id}/refund`)
       .set(auth())
-      .expect(403);
-    await request(server())
-      .post(`/api/v1/integrations/emite-facil/webhook/${connectionId}`)
-      .send({})
-      .expect(401);
-    const e = {
-      eventId: randomUUID(),
-      tenantId: randomUUID(),
-      eventType: 'document.authorized',
-      document: { id: row.externalDocumentId },
-    };
-    const raw = JSON.stringify(e);
-    const stamp = String(Math.floor(Date.now() / 1000));
-    const sig = createHmac('sha256', Buffer.alloc(32, 3))
-      .update(`${e.eventId}.${stamp}.${raw}`)
-      .digest('base64');
-    await request(server())
-      .post(`/api/v1/integrations/emite-facil/webhook/${connectionId}`)
-      .set({
-        'content-type': 'application/json',
-        'webhook-id': e.eventId,
-        'webhook-timestamp': stamp,
-        'webhook-signature': 'v1,' + sig,
-      })
-      .send(raw)
-      .expect(401);
+      .send({ reason: 'Devolución de prueba' })
+      .expect(409);
+    expect(refused.body.code).toBe('PAYMENT_NOT_REFUNDABLE');
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).status).toBe(
+      'RECORDED',
+    );
+    expect(await orderStatus(order.id)).toBe('INVOICED');
+
+    // Settle it so later ticks find nothing pending.
+    sri.mode('authorize');
+    await tick(pending.id);
+    expect((await detail(pending.id)).status).toBe('AUTHORIZED');
+  });
+
+  it('enforces the monthly limit', async () => {
+    const subscription = await prisma.tenantSubscription.findUniqueOrThrow({ where: { tenantId } });
+    const used = await prisma.invoiceRequest.count({
+      where: { tenantId, status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] } },
+    });
+    await prisma.tenantSubscription.update({
+      where: { tenantId },
+      data: { monthlyElectronicInvoicesLimit: used },
+    });
+    try {
+      const order = await paidOrder();
+      const refused = await submit(order.id).expect(409);
+      expect(refused.body.code).toBe('INVOICE_LIMIT_REACHED');
+      expect(await prisma.invoiceRequest.count({ where: { orderId: order.id } })).toBe(0);
+      expect(await orderStatus(order.id)).toBe('PAID');
+    } finally {
+      await prisma.tenantSubscription.update({
+        where: { tenantId },
+        data: { monthlyElectronicInvoicesLimit: subscription.monthlyElectronicInvoicesLimit },
+      });
+    }
+  });
+
+  it('refuses a final consumer invoice above USD 50', async () => {
+    const finalConsumer = await prisma.billingProfile.create({
+      data: {
+        tenantId,
+        kind: 'PERSON',
+        idType: '07',
+        idNumber: '9999999999999',
+        legalName: 'CONSUMIDOR FINAL',
+        createdById: actorId,
+      },
+    });
+    const order = await paidOrder(60, finalConsumer.id);
+    const sent = sri.received.length;
+    const refused = await submit(order.id).expect(422);
+    // The billing eligibility refuses it first, naming the billing profile (ruling R9).
+    expect(refused.body.code).toBe('ORDER_NOT_BILLABLE');
+    expect(refused.body.missing).toContain('BILLING_PROFILE');
+    expect(await prisma.invoiceRequest.count({ where: { orderId: order.id } })).toBe(0);
+    expect(await orderStatus(order.id)).toBe('PAID');
+    expect(sri.received.length).toBe(sent);
   });
 });

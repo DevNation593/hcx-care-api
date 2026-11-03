@@ -164,10 +164,7 @@ export class PaymentsService {
           where: {
             tenantId,
             orderId: order.id,
-            OR: [
-              { status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] } },
-              { requiresReconciliation: true },
-            ],
+            status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] },
           },
         })
       )

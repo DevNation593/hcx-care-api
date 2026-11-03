@@ -16,6 +16,9 @@ process.env.AUTH_THROTTLE_LIMIT = '10000';
 // `.env`. The ones that check mail point EMAIL_API_URL at a fake endpoint.
 process.env.SMTP_HOST = '';
 process.env.EMAIL_API_URL = '';
+// Nor the real SRI: an invoice attempted by any suite hits a closed local port. The suite that
+// checks invoicing points SRI_TEST_BASE_URL at its simulator before building the app.
+process.env.SRI_TEST_BASE_URL ??= 'http://127.0.0.1:9';
 // Nor the bucket of `.env`: the files of the suites stay on the local disk.
 process.env.STORAGE_DRIVER = 'local';
 // A throwaway key so the suites exercise the same encrypted path as production.

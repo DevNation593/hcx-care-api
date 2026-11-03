@@ -1,25 +1,45 @@
 import { Prisma, PaymentMethod } from '@prisma/client';
-import { CustomerProfile, Payment } from './provider/invoicing-provider';
 import { invoiceError } from './invoice-errors';
+import {
+  CustomerProfile,
+  DocumentLineInput,
+  InvoiceDocument,
+  IssuerSnapshot,
+  Payment,
+  SriEnvironment,
+} from './sri/sri-types';
+/** Fiscal data frozen when the invoice is requested; the XML is built only from it. */
 export interface FiscalSnapshot {
   customer: CustomerProfile;
-  taxpayerId: string;
-  environment: string;
+  issuerId: string;
+  issuer: IssuerSnapshot;
+  environment: SriEnvironment;
   establishmentCode: string;
   emissionPointCode: string;
+  establishmentAddress: string;
+  /** YYYY-MM-DD in Ecuador (UTC-5). */
   issueDate: string;
-  replacesDocumentId?: string;
-  lines: {
-    localId: string;
-    /** The treatment's code, sent as the main code. Missing on free items and older snapshots. */
-    code?: string;
-    name: string;
-    quantity: string;
-    unitPrice: string;
-    discount: string;
-    taxRatePercent: string;
-  }[];
+  lines: DocumentLineInput[];
   payments: Payment[];
+}
+export function toInvoiceDocument(
+  s: FiscalSnapshot,
+  sequential: number,
+  accessKey: string,
+): InvoiceDocument {
+  return {
+    environment: s.environment,
+    issuer: s.issuer,
+    establishmentCode: s.establishmentCode,
+    emissionPointCode: s.emissionPointCode,
+    establishmentAddress: s.establishmentAddress,
+    sequential,
+    accessKey,
+    issueDate: s.issueDate,
+    customer: s.customer,
+    lines: s.lines,
+    payments: s.payments,
+  };
 }
 export function groupedPayments(
   payments: { method: PaymentMethod; amount: Prisma.Decimal | string }[],

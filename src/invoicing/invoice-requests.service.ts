@@ -5,16 +5,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
 import { loadOrderBillingFacts } from '../orders/eligibility-facts';
-import { billingBlocked, evaluateBillingEligibility } from '../orders/billing-eligibility';
+import {
+  billingBlocked,
+  evaluateBillingEligibility,
+  FINAL_CONSUMER_LIMIT,
+} from '../orders/billing-eligibility';
 import { invoiceView } from './invoice-view';
 import { FiscalSnapshot, groupedPayments } from './invoice-snapshot';
 import { invoiceError } from './invoice-errors';
-import { ListInvoiceRequestsQuery } from './dto/invoicing.dto';
+import { SriEnvironment } from './sri/sri-types';
+import { ListInvoiceRequestsQuery } from './dto/invoice-requests.dto';
 export const blockingInvoiceWhere: Prisma.InvoiceRequestWhereInput = {
-  OR: [
-    { status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] } },
-    { requiresReconciliation: true },
-  ],
+  status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] },
 };
 /** UTC-5 fiscal month (Ecuador does not observe daylight saving). */
 export function fiscalMonthStart(now = new Date()) {
@@ -79,40 +81,30 @@ export class InvoiceRequestsService {
           throw invoiceError(
             blocking.status === 'AUTHORIZED'
               ? 'ORDER_ALREADY_AUTHORIZED'
-              : blocking.requiresReconciliation
-                ? 'INVOICE_RECONCILIATION_REQUIRED'
-                : 'INVOICE_REQUEST_IN_PROGRESS',
+              : 'INVOICE_REQUEST_IN_PROGRESS',
           );
         if (order.status !== 'PAID') throw invoiceError('ORDER_NOT_BILLABLE', 422);
         const facts = await loadOrderBillingFacts(tx, tenantId, orderId, new Date());
         const eligibility = evaluateBillingEligibility(facts);
         if (!eligibility.eligible) throw billingBlocked(eligibility);
-        const c = await tx.invoicingConnection.findUniqueOrThrow({ where: { tenantId } });
-        const p = await tx.branchEmissionPoint.findUniqueOrThrow({
-          where: { branchId: order.branchId },
+        const issuer = await tx.invoicingIssuer.findUnique({ where: { tenantId } });
+        if (!issuer?.active || !issuer.certificateStorageKey)
+          throw invoiceError('INVOICING_NOT_CONFIGURED', 422);
+        const p = await tx.branchEmissionPoint.findFirst({
+          where: { branchId: order.branchId, issuerId: issuer.id },
         });
+        if (!p?.establishmentAddress) throw invoiceError('INVOICING_NOT_CONFIGURED', 422);
+        const profile = order.billingProfile!;
+        if (profile.idType === '07' && new Prisma.Decimal(order.total).gt(FINAL_CONSUMER_LIMIT))
+          throw invoiceError('FINAL_CONSUMER_LIMIT', 422);
         const previous = await tx.invoiceRequest.findFirst({
           where: { tenantId, orderId },
           orderBy: { requestedAt: 'desc' },
         });
-        // A local preflight failure may sit between the rejected document and its
-        // next attempt. Preserve that provider replacement link across the chain.
-        const rejected = await tx.invoiceRequest.findFirst({
-          where: { tenantId, orderId, status: 'REJECTED', externalDocumentId: { not: null } },
-          orderBy: { requestedAt: 'desc' },
-        });
-        if (rejected) {
-          const old = JSON.parse(
-            this.crypto.decrypt(tenantId, rejected.snapshotEncrypted),
-          ) as FiscalSnapshot;
-          if (old.environment !== c.environment)
-            throw invoiceError('INVOICE_REPLACEMENT_ENVIRONMENT_MISMATCH');
-        }
         const sub = await tx.tenantSubscription.findUnique({ where: { tenantId } });
         const usage = await invoiceMonthlyUsage(tx, tenantId);
         if (!sub || usage >= sub.monthlyElectronicInvoicesLimit)
           throw invoiceError('INVOICE_LIMIT_REACHED');
-        const profile = order.billingProfile!;
         const id = randomUUID();
         const snapshot: FiscalSnapshot = {
           customer: {
@@ -123,10 +115,21 @@ export class InvoiceRequestsService {
             address: profile.address,
             phone: profile.phone,
           },
-          taxpayerId: c.taxpayerId,
-          environment: c.environment,
+          issuerId: issuer.id,
+          issuer: {
+            ruc: issuer.ruc,
+            legalName: issuer.legalName,
+            tradeName: issuer.tradeName,
+            headOfficeAddress: issuer.headOfficeAddress,
+            accountingRequired: issuer.accountingRequired,
+            specialTaxpayerCode: issuer.specialTaxpayerCode,
+            withholdingAgentCode: issuer.withholdingAgentCode,
+            rimpeRegime: issuer.rimpeRegime,
+          },
+          environment: issuer.environment as SriEnvironment,
           establishmentCode: p.establishmentCode,
           emissionPointCode: p.emissionPointCode,
+          establishmentAddress: p.establishmentAddress,
           issueDate: new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10),
           lines: order.items.map((i) => ({
             localId:
@@ -147,25 +150,21 @@ export class InvoiceRequestsService {
             taxRatePercent: i.taxRatePercent.toFixed(2),
           })),
           payments: groupedPayments(order.payments, order.total),
-          ...(rejected?.externalDocumentId
-            ? { replacesDocumentId: rejected.externalDocumentId }
-            : {}),
         };
         const row = await tx.invoiceRequest.create({
           data: {
             id,
             tenantId,
             orderId,
-            connectionId: c.id,
+            issuerId: issuer.id,
             billingProfileId: profile.id,
             requestedById: userId,
             clientIdempotencyKey: key,
-            providerIdempotencyKey: 'hcx-' + id,
             snapshotEncrypted: this.crypto.encrypt(tenantId, JSON.stringify(snapshot)),
             rootRequestId: previous?.rootRequestId ?? id,
             replacesInvoiceRequestId: previous?.id,
             events: {
-              create: { connectionId: c.id, type: 'REQUESTED', source: 'API', detail: {} },
+              create: { issuerId: issuer.id, type: 'REQUESTED', source: 'API', detail: {} },
             },
           },
         });
@@ -237,7 +236,14 @@ export class InvoiceRequestsService {
       pageSize: q.pageSize,
     };
   }
-  async get(tenantId: string, id: string) {
+  /**
+   * Current state of one request of the tenant, to answer right after the inline attempt. The
+   * caller may only hold billing.create, so SRI messages are included only when asked for.
+   */
+  view(tenantId: string, id: string, options: { includeError: boolean }) {
+    return this.get(tenantId, id, options);
+  }
+  async get(tenantId: string, id: string, options: { includeError?: boolean } = {}) {
     const r = await this.prisma.invoiceRequest.findFirst({
       where: { tenantId, id },
       include: {
@@ -246,6 +252,6 @@ export class InvoiceRequestsService {
       },
     });
     if (!r) throw invoiceError('INVOICE_REQUEST_NOT_FOUND', 404);
-    return invoiceView(r, this.crypto);
+    return invoiceView(r, this.crypto, options);
   }
 }

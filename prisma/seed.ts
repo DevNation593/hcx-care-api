@@ -162,9 +162,9 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   // Electronic invoicing: events and replacements before their requests.
   await db.invoiceRequestEvent.deleteMany();
   await db.invoiceRequest.deleteMany();
-  await db.invoicingRef.deleteMany();
   await db.branchEmissionPoint.deleteMany();
-  await db.invoicingConnection.deleteMany();
+  await db.invoiceSequence.deleteMany();
+  await db.invoicingIssuer.deleteMany();
   // Payments restrict deleting their order and cash register; items restrict their session.
   await db.payment.deleteMany();
   await db.orderItemLot.deleteMany();

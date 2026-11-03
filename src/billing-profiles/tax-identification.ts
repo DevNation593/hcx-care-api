@@ -36,7 +36,7 @@ function invalid(message: string): UnprocessableEntityException {
   });
 }
 
-function isValidRuc(value: string): boolean {
+export function isValidRuc(value: string): boolean {
   if (!/^\d{13}$/.test(value) || !value.endsWith('001')) return false;
   const third = Number(value[2]);
   if (third <= 5) return isValidCedula(value.slice(0, 10));

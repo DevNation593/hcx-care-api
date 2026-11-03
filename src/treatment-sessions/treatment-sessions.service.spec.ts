@@ -42,6 +42,16 @@ describe('TreatmentSessionsService', () => {
     clinicalNotes: { requiredForCompletion: false },
     billingGate: { requireClinicalCompletion: true },
   };
+  const earlyBilling: TreatmentRequirements = {
+    ...fullPolicy,
+    billingGate: { requireClinicalCompletion: false },
+  };
+  // An invoice blocks the session only while it is pending or authorized.
+  const blockingInvoiceWhere = {
+    tenantId: 'tenant-1',
+    order: { items: { some: { treatmentSessionId: 'session-1', releasedAt: null } } },
+    status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] },
+  };
   const formSchema = {
     sections: [
       {
@@ -151,6 +161,8 @@ describe('TreatmentSessionsService', () => {
     tenant: { findUnique: jest.fn() },
     patientFile: { findMany: jest.fn(), count: jest.fn() },
     auditLog: { createMany: jest.fn() },
+    invoiceRequest: { findFirst: jest.fn() },
+    $queryRaw: jest.fn(),
   };
   const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
   const prismaService = prisma as unknown as PrismaService;
@@ -930,6 +942,27 @@ describe('TreatmentSessionsService', () => {
         );
       });
 
+      it('leaves an early-billed session pending while its invoice is in progress', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(
+          loaded(earlyBilling, {
+            status: 'IN_PROGRESS',
+            formRecordId: 'record-1',
+            consentDocumentId: 'consent-doc-1',
+            startedAt: new Date('2026-10-15T14:30:00Z'),
+          }),
+        );
+        photos(1, 1);
+        writes({ status: 'IN_PROGRESS', formRecordId: 'record-1' });
+        db.invoiceRequest.findFirst.mockResolvedValue({ id: 'invoice-1', status: 'PROCESSING' });
+
+        await sessions.complete('tenant-1', 'session-1', professional, {
+          procedureNotes: 'Sin incidencias.',
+        });
+
+        expect(db.invoiceRequest.findFirst.mock.calls[0][0].where).toEqual(blockingInvoiceWhere);
+        expect(updateData().status).toBe('BILLING_PENDING');
+      });
+
       it('completes with the notes already stored when the body brings none', async () => {
         db.treatmentSession.findFirst.mockResolvedValue(
           inProgress({ procedureNotes: cipher.encrypt('tenant-1', 'Notas guardadas.') }),
@@ -972,6 +1005,21 @@ describe('TreatmentSessionsService', () => {
     });
 
     describe('cancel', () => {
+      it('is refused while an early-billed invoice is pending or authorized', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(
+          loaded(earlyBilling, { status: 'IN_PROGRESS', startedAt: new Date() }),
+        );
+        db.invoiceRequest.findFirst.mockResolvedValue({ id: 'invoice-1', status: 'REQUESTED' });
+
+        const error = await failure(
+          sessions.cancel('tenant-1', 'session-1', professional, { reason: 'Reacción' }),
+        );
+
+        expect(error.getStatus()).toBe(409);
+        expect(db.invoiceRequest.findFirst.mock.calls[0][0].where).toEqual(blockingInvoiceWhere);
+        expect(db.treatmentSession.update).not.toHaveBeenCalled();
+      });
+
       it('cancels a session in progress with an encrypted reason and closes its encounter', async () => {
         db.treatmentSession.findFirst.mockResolvedValue(
           loaded(fullPolicy, { status: 'IN_PROGRESS', startedAt: new Date() }),

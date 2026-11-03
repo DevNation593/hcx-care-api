@@ -79,7 +79,10 @@ export class MailService {
     };
     try {
       if (this.config.get<string>('SMTP_HOST')) {
-        await this.smtpTransport().sendMail(message);
+        await this.smtpTransport().sendMail({
+          ...message,
+          ...(content.attachments?.length ? { attachments: content.attachments } : {}),
+        });
         return true;
       }
 
@@ -90,7 +93,17 @@ export class MailService {
           'Content-Type': 'application/json',
           ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
-        body: JSON.stringify(message),
+        body: JSON.stringify({
+          ...message,
+          ...(content.attachments?.length
+            ? {
+                attachments: content.attachments.map((file) => ({
+                  filename: file.filename,
+                  content: file.content.toString('base64'),
+                })),
+              }
+            : {}),
+        }),
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
 
