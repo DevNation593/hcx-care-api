@@ -29,6 +29,18 @@ describe('buildInvoiceXml', () => {
     expect((await validateInvoiceXsd(xml)).valid).toBe(true);
   });
 
+  it('turns line breaks and tabs into spaces, since the XSD patterns are [^\\n]*', async () => {
+    const base = sampleDocument();
+    const xml = buildInvoiceXml({
+      ...base,
+      customer: { ...base.customer, name: 'Ana\nLuz\r\nMora\u2028S.\u0085A.\u2029\tX' },
+      lines: [{ ...base.lines[0], name: 'Sesión\r\nindividual' }, base.lines[1]],
+    });
+    expect(xml).toContain('<razonSocialComprador>Ana Luz  Mora S. A.  X</razonSocialComprador>');
+    expect(xml).toContain('<descripcion>Sesión  individual</descripcion>');
+    expect(await validateInvoiceXsd(xml)).toEqual({ valid: true, errors: [] });
+  });
+
   it('omits optional fields and infoAdicional when empty', () => {
     const xml = buildInvoiceXml(
       sampleDocument({

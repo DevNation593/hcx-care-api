@@ -57,9 +57,19 @@ export function canonicalizeEnveloped(element: Element, signature: Element): str
   }
 }
 
+/**
+ * XML 1.0 end-of-line handling (section 2.11): only CR LF and lone CR become LF. xmldom's default
+ * also applies the XML 1.1 rules (U+0085, U+2028, U+2029), which would rewrite invoice text and
+ * make our digests differ from what Java and the SRI compute.
+ */
+export function normalizeXml10LineEndings(xml: string): string {
+  return xml.replace(/\r\n?/g, '\n');
+}
+
 /** Parses XML strictly: any parse error throws, and DOCTYPE (entities) is refused. */
 export function parseXml(xml: string): Document {
   const doc = new DOMParser({
+    normalizeLineEndings: normalizeXml10LineEndings,
     onError: (level, message) => {
       if (level !== 'warning') throw new Error(message);
     },

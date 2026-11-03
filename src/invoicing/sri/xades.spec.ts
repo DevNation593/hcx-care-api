@@ -2,7 +2,7 @@ import { createHash, generateKeyPairSync } from 'crypto';
 import { DOMParser } from '@xmldom/xmldom';
 import * as forge from 'node-forge';
 import { SignedXml } from 'xml-crypto';
-import { canonicalize } from './c14n';
+import { canonicalize, normalizeXml10LineEndings } from './c14n';
 import { openCertificate, SigningMaterial } from './certificate';
 import { buildInvoiceXml } from './invoice-xml';
 import { createTestP12 } from './testing/test-certificate';
@@ -19,9 +19,21 @@ const SIGNING_TIME = new Date('2026-10-07T15:15:30.456Z');
 const unsigned = () => buildInvoiceXml(sampleDocument());
 const signed = () => signInvoiceXml(unsigned(), material, SIGNING_TIME);
 
-/** Independent check: xml-crypto verifies with the certificate we give it, never KeyInfo. */
-function checkWithXmlCrypto(xml: string, m: SigningMaterial): boolean {
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+/**
+ * Independent check: xml-crypto verifies with the certificate we give it, never KeyInfo.
+ * checkSignature() re-parses with its bundled xmldom 0.8, which rewrites U+0085 and U+2028 to
+ * LF (XML 1.1 line endings) with no option to turn it off; it gets the same XML 1.0 document
+ * with those characters as character references, which no parser rewrites.
+ */
+function checkWithXmlCrypto(signedXml: string, m: SigningMaterial): boolean {
+  const xml = signedXml.replace(
+    /[\u0085\u2028\u2029]/g,
+    (c) => `&#x${c.charCodeAt(0).toString(16)};`,
+  );
+  const doc = new DOMParser({ normalizeLineEndings: normalizeXml10LineEndings }).parseFromString(
+    xml,
+    'text/xml',
+  );
   const signature = doc.getElementsByTagNameNS(DS, 'Signature').item(0);
   const verifier = new SignedXml({
     publicCert: forge.pki.certificateToPem(m.certificate),
@@ -220,6 +232,20 @@ describe('XAdES-BES signature', () => {
       material,
       SIGNING_TIME,
     );
+    expect(verifyInvoiceSignature(xml).valid).toBe(true);
+    expect(checkWithXmlCrypto(xml, material)).toBe(true);
+  });
+
+  it('keeps U+0085 and U+2028 as they are: XML 1.0 line endings only', async () => {
+    // buildInvoiceXml turns them into spaces, so they are injected into its output directly.
+    const raw = unsigned().replace(
+      '<razonSocialComprador>Juan Pérez &amp; Hijos<',
+      '<razonSocialComprador>Café\u0085 Hnos\u2028S.A.\u2029<',
+    );
+    const xml = signInvoiceXml(raw, material, SIGNING_TIME);
+    expect(xml).toContain('<razonSocialComprador>Café\u0085 Hnos\u2028S.A.\u2029<');
+    expect(xml.replace(/<ds:Signature [\s\S]*<\/ds:Signature>/, '')).toBe(raw);
+    expect(await validateInvoiceXsd(xml)).toEqual({ valid: true, errors: [] });
     expect(verifyInvoiceSignature(xml).valid).toBe(true);
     expect(checkWithXmlCrypto(xml, material)).toBe(true);
   });

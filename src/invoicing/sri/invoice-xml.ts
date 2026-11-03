@@ -27,9 +27,20 @@ function allowedInXml(c: number): boolean {
   );
 }
 
-/** Replaces characters XML 1.0 forbids with a space and trims to `max` code points. */
+/**
+ * Line breaks (including U+0085, U+2028, U+2029, which XML 1.1 parsers turn into LF) and tabs:
+ * many XSD text fields have pattern="[^\n]*".
+ */
+const LINE_BREAK_OR_TAB = /[\t\n\r\u0085\u2028\u2029]/;
+
+/**
+ * Replaces characters XML 1.0 forbids, line breaks and tabs with a space and trims to `max`
+ * code points.
+ */
 function clean(value: string, max: number): string {
-  const chars = Array.from(value, (ch) => (allowedInXml(ch.codePointAt(0) as number) ? ch : ' '));
+  const chars = Array.from(value, (ch) =>
+    allowedInXml(ch.codePointAt(0) as number) && !LINE_BREAK_OR_TAB.test(ch) ? ch : ' ',
+  );
   return chars.slice(0, max).join('');
 }
 
