@@ -72,7 +72,7 @@ Entre `npx prisma migrate deploy` y el momento en que la nueva compilación de l
 
 1. Elija una hora de poco uso.
 2. Ejecute `npx prisma migrate deploy` y despliegue la API nueva inmediatamente después.
-3. Verifique `GET /api/v1/health` y una consulta de facturas.
+3. Verifique `GET /health` (queda fuera del prefijo `/api/v1`) y una consulta de facturas.
 
 El resto de la API no usa esas columnas y no se interrumpe.
 
@@ -143,7 +143,7 @@ El régimen RIMPE `NEGOCIO_POPULAR` se rechaza con `RIMPE_REGIME_UNSUPPORTED` ha
   ```
 
   Un fallo al leer el archivo (falta o el almacenamiento no responde) no la detiene: solo se reintenta.
-- **Reanudar una fila detenida:** primero investigue por qué cambió el archivo (restaure el respaldo del almacenamiento o localice la alteración) y confirme con el SRI el estado de la clave de acceso. Solo cuando los bytes guardados vuelvan a coincidir con `signedXmlSha256`, ponga `nextAttemptAt` en la fecha actual (`update "InvoiceRequest" set "nextAttemptAt" = now() at time zone 'utc' where "id" = '<id>';`) y el siguiente tick la retoma. Nunca refirme ni edite el XML firmado ni su hash.
+- **Reanudar una fila detenida:** primero investigue por qué cambió el archivo (restaure el respaldo del almacenamiento o localice la alteración) y confirme con el SRI el estado de la clave de acceso. Solo cuando los bytes guardados vuelvan a coincidir con `signedXmlSha256`, ponga `nextAttemptAt` en la fecha actual (`update "InvoiceRequest" set "nextAttemptAt" = now() at time zone 'utc' where "id" = '<id>' and "tenantId" = '<tenantId>' and "status" = 'PROCESSING' and "nextAttemptAt" >= '9999-01-01';`); confirme que se actualizó exactamente 1 fila (`UPDATE 1`), si no, revise el id antes de repetir y el siguiente tick la retoma. Nunca refirme ni edite el XML firmado ni su hash.
 - Los mensajes del SRI se guardan cifrados y solo los ve quien tiene `billing.view`; no aparecen en logs ni en auditoría.
 
 ## Pre-Deployment Checklist

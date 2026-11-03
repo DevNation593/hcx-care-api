@@ -12,7 +12,7 @@ Las rutas `/billing/invoices` conservan el historial de solo lectura de las fact
 
 ### Facturación electrónica (SRI)
 
-Todas las rutas de tenant exigen JWT y la sección `core.billing.invoicing`, y el rol `MASTER` (titular). La configuración del emisor es solo del titular. Crear una solicitud exige además el permiso `billing.create`; listar, ver el detalle y descargar exigen `billing.view`. Esos permisos se otorgan a través del `PermissionGuard` existente.
+Todas las rutas de tenant exigen JWT y la sección `core.billing.invoicing`. Acceso por ruta: `GET/PUT /invoicing/issuer`, `PUT /invoicing/issuer/certificate`, `POST /invoicing/test` y `PUT /branches/:branchId/emission-point` son solo del titular (`MASTER`). `POST /orders/:id/invoice-requests` exige el permiso `billing.create`; `GET /invoice-requests`, `/:id`, `/:id/xml` y `/:id/ride` exigen `billing.view`. Esos permisos los tienen por defecto `MASTER` y `CAJERO`, y `PROFESIONAL` y `ASISTENTE` solo si la plataforma se los concede (`RolesGuard` + `PermissionGuard`).
 
 | Método | Ruta tras `/api/v1/tenants/:tenantId` | Cuerpo / respuesta |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ Las rutas `GET/PUT /invoicing/connection`, `GET /invoicing/options` y el webhook
 
 **Listado.** Acepta `status=REQUESTED|PROCESSING|AUTHORIZED|REJECTED|FAILED`, `branchId`, `orderId`, `patientId`, `page` (desde 1, por defecto 1) y `pageSize` (1 a 100, por defecto 20). Listado y detalle admiten 120 peticiones por minuto por usuario.
 
-**Solicitud.** La respuesta expone `{id, orderId, orderNumber, branchId, billingProfileId, status, replacesInvoiceRequestId, externalState, number, sequential, accessKey, authorizationNumber, authorizedAt, artifacts: {xml, ride}, emailedAt, attempts, lastError, requestedAt, finishedAt}`; el detalle añade `events` con `{id, type, source, detail, createdAt}`. Los valores fiscales son `null` hasta conocerse. `lastError` es `null` o `{code, message}` y contiene la explicación del SRI solo para quien tiene `billing.view`; la respuesta del POST la omite si el usuario solo tiene `billing.create`. No se exponen credenciales, claves de almacenamiento ni leases.
+**Solicitud.** La respuesta expone `{id, orderId, orderNumber, branchId, billingProfileId, status, replacesInvoiceRequestId, externalState, number, sequential, accessKey, authorizationNumber, authorizedAt, artifacts: {xml, ride}, emailedAt, attempts, lastError, requestedAt, finishedAt}`; el detalle añade `events` con `{id, type, source, detail, createdAt}`. Los valores fiscales son `null` hasta conocerse. `lastError` es `null` o `{code, message}` y contiene la explicación del SRI solo para quien tiene `billing.view`; la respuesta del POST la omite (`lastError: null`) si el usuario no tiene `billing.view`. No se exponen credenciales, claves de almacenamiento ni leases.
 
 **Creación.** `POST .../invoice-requests` crea la solicitud `REQUESTED`, confirma y, en la misma petición, intenta avanzar hasta 15 s (firma, recepción, autorización y artefactos). Si el intento falla o el SRI aún no responde, la solicitud sigue existiendo y la reanuda el tick; la respuesta trae el estado alcanzado. Repetir la misma clave para la misma orden devuelve la misma solicitud; para otra orden, 409. Solo una solicitud `FAILED` o `REJECTED` permite corregir y emitir de nuevo (con secuencial nuevo). Una solicitud firmada nunca pasa a `FAILED`: termina en `AUTHORIZED` o `REJECTED` según el SRI.
 
