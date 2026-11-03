@@ -280,7 +280,6 @@ describe('role matrix', () => {
       'DocumentVerificationController.verify',
       'HealthController.checkHealth',
       'InvoicingController.download',
-      'InvoicingWebhookController.receive',
       'NotificationsController.getPreferences',
       'NotificationsController.getUserNotifications',
       'NotificationsController.getWebPushKey',

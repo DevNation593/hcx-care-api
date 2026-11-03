@@ -8,24 +8,20 @@ import {
   Post,
   Put,
   Query,
-  RawBodyRequest,
-  Req,
   Res,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
-import { Public } from '../common/decorators/public.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
 import { ConnectionService } from './connection.service';
 import { InvoiceRequestsService } from './invoice-requests.service';
 import { InvoiceArtifactsService } from './invoice-artifacts.service';
-import { InvoiceWebhookService } from './invoice-webhook.service';
 import { IssuerService } from './issuer.service';
 import {
   ListInvoiceRequestsQuery,
@@ -148,16 +144,5 @@ export class InvoicingController {
         'Cache-Control': 'private, no-store',
       })
       .send(f.bytes);
-  }
-}
-@Controller('integrations/emite-facil')
-export class InvoicingWebhookController {
-  constructor(private readonly service: InvoiceWebhookService) {}
-  @Public()
-  @Post('webhook/:connectionId')
-  @HttpCode(204)
-  @Throttle({ default: { limit: 300, ttl: 60000 } })
-  receive(@Param('connectionId') id: string, @Req() req: RawBodyRequest<Request>) {
-    return this.service.receive(id, req.rawBody!, req.headers);
   }
 }

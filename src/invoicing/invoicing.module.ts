@@ -8,22 +8,20 @@ import { ConnectionService } from './connection.service';
 import { InvoiceRequestsService } from './invoice-requests.service';
 import { InvoiceWorkerService } from './invoice-worker.service';
 import { InvoiceArtifactsService } from './invoice-artifacts.service';
-import { InvoiceResolver } from './invoice-resolver';
-import { InvoiceWebhookService } from './invoice-webhook.service';
-import { InvoicingController, InvoicingWebhookController } from './invoicing.controller';
+import { InvoiceEmitter } from './invoice-emitter';
+import { InvoicingController } from './invoicing.controller';
 import { IssuerService } from './issuer.service';
 import { SriClient } from './sri/sri-client';
 @Module({
   imports: [PrismaModule, ClinicalAccessModule, PatientFilesModule],
-  controllers: [InvoicingController, InvoicingWebhookController],
+  controllers: [InvoicingController],
   providers: [
     EmiteFacilProvider,
     ConnectionService,
     InvoiceRequestsService,
     InvoiceWorkerService,
     InvoiceArtifactsService,
-    InvoiceResolver,
-    InvoiceWebhookService,
+    InvoiceEmitter,
     IssuerService,
     {
       provide: SriClient,

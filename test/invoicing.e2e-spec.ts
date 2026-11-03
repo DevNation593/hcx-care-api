@@ -189,7 +189,8 @@ describe('durable invoicing HTTP / PostgreSQL / provider simulator', () => {
         ...docs.get(row.externalDocumentId!),
         state: outcome === 'REJECTED' ? 'NOT_AUTHORIZED' : 'AUTHORIZED',
       };
-      finalize = () => worker.applyDocument(row.id, document, 'RECONCILER');
+      // applyDocument was removed with the Emite Fácil webhook; Task 13 rewrites this suite.
+      finalize = () => (worker as any).applyDocument(row.id, document, 'RECONCILER');
     }
     return { ...fixture, receipt, finalize };
   }

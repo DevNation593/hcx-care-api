@@ -12,7 +12,7 @@ const messages: Record<string, string> = {
   INVOICING_ENVIRONMENT_BUSY:
     'Espera a que terminen las facturas en proceso y la descarga de sus archivos antes de cambiar el ambiente del emisor.',
   INVOICING_ENVIRONMENT_CHANGED:
-    'El ambiente del emisor cambió en emite-facil. Revisa la configuración antes de continuar.',
+    'El ambiente del emisor cambió después de solicitar la factura. Revisa la configuración y solicítala nuevamente.',
   INVOICING_POINT_INVALID:
     'El establecimiento o punto de emisión no pertenece al emisor seleccionado o está deshabilitado.',
   INVOICING_DISABLED: 'La conexión de facturación está desactivada.',
@@ -87,6 +87,8 @@ const messages: Record<string, string> = {
     'El SRI no respondió a tiempo. Se volverá a consultar el mismo comprobante automáticamente.',
   SRI_INVALID_RESPONSE:
     'El SRI devolvió una respuesta que no se pudo interpretar. Se volverá a intentar automáticamente.',
+  INVOICE_SIGNATURE_INVALID:
+    'No se pudo verificar la firma del comprobante. Revisa la firma electrónica del emisor y solicita la factura nuevamente.',
   INVOICE_SIGNED_XML_INTEGRITY:
     'No se pudo verificar el comprobante firmado guardado. Requiere revisión antes de volver a enviarlo al SRI.',
   UNAUTHENTICATED: 'La API key no es válida o fue revocada. Revisa la conexión con emite-facil.',
