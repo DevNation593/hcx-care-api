@@ -27,6 +27,7 @@
     "prisma:migrate-billing-profiles": "ts-node prisma/migrate-billing-profiles.ts",
     "prisma:verify-patient-team-migration": "ts-node prisma/verify-patient-team-migration.ts",
     "prisma:audit-master-roles": "ts-node prisma/audit-master-roles.ts",
+    "prisma:audit-emite-facil-removal": "ts-node prisma/audit-emite-facil-removal.ts",
     "prisma:verify-master-role-migration": "ts-node prisma/verify-master-role-migration.ts",
     "prisma:verify-platform-role-permissions": "ts-node prisma/verify-platform-role-permissions.ts",
     "platform:create-admin": "ts-node prisma/create-platform-admin.ts",

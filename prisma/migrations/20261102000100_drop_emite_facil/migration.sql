@@ -1,7 +1,24 @@
 -- The documents of the former external invoicing provider were test data only (production shares
 -- its database with the demos). Requests without "issuerId" are that provider's: they are removed,
 -- and an order invoiced only through them becomes billable again, as a failed request leaves it.
--- Requests with an "issuerId" (and orders that have one) are not touched.
+-- Requests with an "issuerId" are not touched, nor is an order with a pending or authorized one.
+-- Run the read-only removal audit (prisma/audit-*-removal.ts) against the target database first.
+
+-- Nothing is changed if the provider may hold a real fiscal document: an authorized or pending
+-- request in the production environment ('2') must be resolved by hand before this deploys.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM "InvoiceRequest" r
+    JOIN "InvoicingConnection" c ON c."id" = r."connectionId"
+    WHERE r."issuerId" IS NULL
+      AND c."environment" = '2'
+      AND (r."status" IN ('AUTHORIZED', 'PROCESSING') OR r."requiresReconciliation")
+  ) THEN
+    RAISE EXCEPTION 'Former provider requests in the production environment are authorized or pending; resolve them before removing the provider';
+  END IF;
+END $$;
 
 -- Sessions first: they are found through the orders still INVOICED.
 UPDATE "TreatmentSession" s
@@ -15,14 +32,24 @@ WHERE s."status" IN ('BILLING_PENDING', 'BILLED')
       AND i."releasedAt" IS NULL
       AND o."status" = 'INVOICED'
       AND EXISTS (SELECT 1 FROM "InvoiceRequest" r WHERE r."orderId" = o."id" AND r."issuerId" IS NULL)
-      AND NOT EXISTS (SELECT 1 FROM "InvoiceRequest" r WHERE r."orderId" = o."id" AND r."issuerId" IS NOT NULL)
+      AND NOT EXISTS (
+        SELECT 1 FROM "InvoiceRequest" r
+        WHERE r."orderId" = o."id"
+          AND r."issuerId" IS NOT NULL
+          AND r."status" IN ('REQUESTED', 'PROCESSING', 'AUTHORIZED')
+      )
   );
 
 UPDATE "Order" o
 SET "status" = 'PAID', "version" = o."version" + 1, "updatedAt" = CURRENT_TIMESTAMP
 WHERE o."status" = 'INVOICED'
   AND EXISTS (SELECT 1 FROM "InvoiceRequest" r WHERE r."orderId" = o."id" AND r."issuerId" IS NULL)
-  AND NOT EXISTS (SELECT 1 FROM "InvoiceRequest" r WHERE r."orderId" = o."id" AND r."issuerId" IS NOT NULL);
+  AND NOT EXISTS (
+    SELECT 1 FROM "InvoiceRequest" r
+    WHERE r."orderId" = o."id"
+      AND r."issuerId" IS NOT NULL
+      AND r."status" IN ('REQUESTED', 'PROCESSING', 'AUTHORIZED')
+  );
 
 -- An SRI request that replaced one of the provider's now starts its own chain.
 UPDATE "InvoiceRequest" r
