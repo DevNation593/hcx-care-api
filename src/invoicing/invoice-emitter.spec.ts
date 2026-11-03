@@ -53,6 +53,8 @@ describe('InvoiceEmitter preflight and signing', () => {
   let row: any;
   let sequence: { next: number } | null;
   let leaseLost: boolean;
+  let commitFails: boolean;
+  let stored: any;
   let events: any[];
   let prisma: any;
   let emitter: InvoiceEmitter;
@@ -97,9 +99,18 @@ describe('InvoiceEmitter preflight and signing', () => {
     };
     sequence = { next: 500 };
     leaseLost = false;
+    commitFails = false;
+    stored = { ...row };
     events = [];
     prisma = {
       updates: [] as any[],
+      invoiceRequest: {
+        findFirst: jest.fn(async ({ where }: any) =>
+          stored.id === where.id && stored.signedXmlStorageKey === where.signedXmlStorageKey
+            ? { id: stored.id }
+            : null,
+        ),
+      },
       invoicingIssuer: { findUnique: jest.fn(async () => issuer) },
       branchEmissionPoint: {
         findFirst: jest.fn(async ({ where }: any) =>
@@ -112,7 +123,11 @@ describe('InvoiceEmitter preflight and signing', () => {
       },
       // Writes are staged and only kept when the callback resolves, like a real rollback.
       $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) => {
-        const staged = { sequence: sequence ? { ...sequence } : null, events: [] as any[] };
+        const staged = {
+          sequence: sequence ? { ...sequence } : null,
+          events: [] as any[],
+          row: { ...stored },
+        };
         const tx = {
           $queryRaw: jest.fn(async () => {
             if (!staged.sequence) return [];
@@ -125,7 +140,9 @@ describe('InvoiceEmitter preflight and signing', () => {
           invoiceRequest: {
             updateMany: jest.fn(async (args: any) => {
               prisma.updates.push(args);
-              return { count: leaseLost ? 0 : 1 };
+              if (leaseLost) return { count: 0 };
+              Object.assign(staged.row, args.data);
+              return { count: 1 };
             }),
           },
           invoiceRequestEvent: {
@@ -135,6 +152,9 @@ describe('InvoiceEmitter preflight and signing', () => {
         const result = await fn(tx);
         sequence = staged.sequence;
         events.push(...staged.events);
+        stored = staged.row;
+        // The connection drops while COMMIT is in flight: PostgreSQL committed, Prisma rejects.
+        if (commitFails) throw new Error('connection lost during commit');
         return result;
       }),
     };
@@ -247,6 +267,43 @@ describe('InvoiceEmitter preflight and signing', () => {
     });
     await expect(emitter.advance(row, deadline())).rejects.toThrow('connection reset');
     expect(storage.keys()).toHaveLength(0);
+  });
+
+  it('keeps the signed file when the commit may have succeeded', async () => {
+    commitFails = true;
+    await expect(emitter.advance(row, deadline())).rejects.toThrow('connection lost');
+    expect(stored.signedXmlStorageKey).toMatch(/^invoices\/clinic\/request\/signed-/);
+    expect(storage.remove).not.toHaveBeenCalled();
+    const xml = decrypt(storage.get(stored.signedXmlStorageKey));
+    expect(sha256(xml)).toBe(stored.signedXmlSha256);
+  });
+
+  it('keeps the signed file when it cannot confirm that the row does not reference it', async () => {
+    prisma.$transaction.mockImplementationOnce(async (fn: any) => {
+      await fn({
+        $queryRaw: async () => [{ sequential: 500 }],
+        invoiceSequence: { create: jest.fn() },
+        invoiceRequest: { updateMany: async () => ({ count: 1 }) },
+        invoiceRequestEvent: { create: jest.fn() },
+      });
+      throw new Error('connection lost during commit');
+    });
+    prisma.invoiceRequest.findFirst.mockRejectedValue(new Error('database unreachable'));
+    await expect(emitter.advance(row, deadline())).rejects.toThrow('connection lost');
+    expect(storage.remove).not.toHaveBeenCalled();
+    expect(storage.keys()).toHaveLength(1);
+  });
+
+  it('refuses an issuer of another tenant without signing or touching the sequence', async () => {
+    issuer.tenantId = 'other-clinic';
+    await expect(emitter.advance(row, deadline())).rejects.toMatchObject({
+      kind: 'configuration',
+      code: 'INVOICING_NOT_CONFIGURED',
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(storage.put).not.toHaveBeenCalled();
+    expect(sequence).toEqual({ next: 500 });
+    expect(stored.signedXmlStorageKey).toBeNull();
   });
 
   it('never re-signs a row that already has signed XML', async () => {
@@ -407,6 +464,30 @@ describe('InvoiceWorkerService', () => {
     await worker.process(old as any);
     expect(tx.invoiceRequest.updateMany.mock.calls[1][0].data.status).toBe('FAILED');
     expect(tx.order.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a signed row PROCESSING on a transient error after 24 hours', async () => {
+    const row = leased({
+      status: 'PROCESSING',
+      signedXmlStorageKey: 'invoices/clinic/request/x',
+      sequential: '000000500',
+      requestedAt: new Date(Date.now() - 2 * 86400000),
+    });
+    tx.invoiceRequest.findFirst.mockResolvedValue(row);
+    emitter.advance.mockRejectedValue(new SriError('transient', 'SRI_UNAVAILABLE'));
+
+    await worker.process(row as any);
+
+    const { data } = tx.invoiceRequest.updateMany.mock.calls[0][0];
+    expect(data).toMatchObject({ status: 'PROCESSING', finishedAt: null });
+    expect(data).not.toHaveProperty('signedXmlStorageKey');
+    expect(data).not.toHaveProperty('sequential');
+    expect(data).not.toHaveProperty('accessKey');
+    expect(tx.order.update).not.toHaveBeenCalled();
+    expect(tx.treatmentSession.updateMany).not.toHaveBeenCalled();
+    expect(tx.invoiceRequestEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ type: 'RETRY_SCHEDULED' }),
+    });
   });
 
   it('does nothing when the lease was lost before recording the failure', async () => {

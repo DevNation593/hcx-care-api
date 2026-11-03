@@ -122,9 +122,25 @@ export class InvoiceEmitter {
         { timeout: 20000 },
       );
     } catch (error) {
-      if (stored.key) await this.storage.remove(stored.key).catch(() => undefined);
+      if (stored.key && (error instanceof LeaseLost || !(await this.referenced(row, stored.key))))
+        await this.storage.remove(stored.key).catch(() => undefined);
       if (error instanceof LeaseLost) return;
       throw error;
+    }
+  }
+
+  /**
+   * A failed COMMIT may still have committed. The file is kept unless the row provably does not
+   * point at it: an orphaned encrypted file is harmless, a signed row without its XML is stuck.
+   */
+  private async referenced(row: InvoiceRequest, key: string): Promise<boolean> {
+    try {
+      return !!(await this.prisma.invoiceRequest.findFirst({
+        where: { id: row.id, signedXmlStorageKey: key },
+        select: { id: true },
+      }));
+    } catch {
+      return true;
     }
   }
 
