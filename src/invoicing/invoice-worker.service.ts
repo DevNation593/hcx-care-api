@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { InvoiceEmitter } from './invoice-emitter';
-import { retryDelay } from './invoice-state';
+import { releaseOrder, retryDelay } from './invoice-state';
 import { SriError } from './sri/sri-types';
 @Injectable()
 export class InvoiceWorkerService {
@@ -24,7 +24,7 @@ export class InvoiceWorkerService {
   async claim(reconcile = false): Promise<InvoiceRequest[]> {
     return this.prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<InvoiceRequest[]>(
-        Prisma.sql`SELECT * FROM "InvoiceRequest" WHERE "nextAttemptAt" <= NOW() AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW()) AND "issuerId" IS NOT NULL AND ${reconcile ? Prisma.sql`"status" = 'PROCESSING'` : Prisma.sql`"status" IN ('REQUESTED','PROCESSING')`} ORDER BY "nextAttemptAt" ASC FOR UPDATE SKIP LOCKED LIMIT ${reconcile ? 50 : 10}`,
+        Prisma.sql`SELECT * FROM "InvoiceRequest" WHERE "nextAttemptAt" <= NOW() AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW()) AND "issuerId" IS NOT NULL AND ${reconcile ? Prisma.sql`("status" = 'PROCESSING' OR ("status" = 'AUTHORIZED' AND ("xmlStorageKey" IS NULL OR "rideStorageKey" IS NULL OR ("emailedAt" IS NULL AND "emailAttempts" < 5))))` : Prisma.sql`"status" IN ('REQUESTED','PROCESSING')`} ORDER BY "nextAttemptAt" ASC FOR UPDATE SKIP LOCKED LIMIT ${reconcile ? 50 : 10}`,
       );
       const claimed: InvoiceRequest[] = [];
       for (const row of rows) {
@@ -80,7 +80,7 @@ export class InvoiceWorkerService {
         },
       });
       if (!changed.count) return;
-      if (safeFailure) await this.releaseOrder(tx, row);
+      if (safeFailure) await releaseOrder(tx, row);
       await tx.invoiceRequestEvent.create({
         data: {
           issuerId: row.issuerId,
@@ -91,20 +91,6 @@ export class InvoiceWorkerService {
           detail: { code: e.code },
         },
       });
-    });
-  }
-  private async releaseOrder(tx: Prisma.TransactionClient, row: InvoiceRequest) {
-    await tx.order.update({
-      where: { id: row.orderId },
-      data: { status: 'PAID', version: { increment: 1 } },
-    });
-    await tx.treatmentSession.updateMany({
-      where: {
-        tenantId: row.tenantId,
-        completedAt: { not: null },
-        orderItems: { some: { orderId: row.orderId, releasedAt: null } },
-      },
-      data: { status: 'BILLING_FAILED', version: { increment: 1 } },
     });
   }
 }

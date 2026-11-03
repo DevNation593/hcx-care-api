@@ -21,12 +21,14 @@ describe('durable invoice rules', () => {
   it('refuses a payment total different from the invoice', () => {
     expect(() => groupedPayments([{ method: 'CASH', amount: '1.00' }] as any, '1.01')).toThrow();
   });
-  it('keeps unknown provider states processing and final states monotonic', () => {
-    expect(nextInvoiceStatus('PROCESSING', 'FUTURE_STATE')).toBe('PROCESSING');
-    expect(nextInvoiceStatus('PROCESSING', 'SIGNATURE_FAILED')).toBe('PROCESSING');
+  it('maps SRI stages to request states and keeps final states monotonic', () => {
+    expect(nextInvoiceStatus('PROCESSING', 'SIGNED')).toBe('PROCESSING');
+    expect(nextInvoiceStatus('PROCESSING', 'RECEIVED')).toBe('PROCESSING');
+    expect(nextInvoiceStatus('PROCESSING', 'AUTHORIZED')).toBe('AUTHORIZED');
+    expect(nextInvoiceStatus('PROCESSING', 'RETURNED')).toBe('REJECTED');
+    expect(nextInvoiceStatus('PROCESSING', 'NOT_AUTHORIZED')).toBe('REJECTED');
     expect(nextInvoiceStatus('AUTHORIZED', 'RETURNED')).toBe('AUTHORIZED');
     expect(nextInvoiceStatus('REJECTED', 'AUTHORIZED')).toBe('REJECTED');
-    expect(nextInvoiceStatus('PROCESSING', 'AUTHORIZED')).toBe('AUTHORIZED');
   });
   it('builds the SRI document only from the frozen snapshot', () => {
     const doc = sampleDocument();

@@ -56,10 +56,27 @@ describe('InvoiceEmitter preflight and signing', () => {
   let commitFails: boolean;
   let stored: any;
   let events: any[];
+  let orders: any[];
+  let sessions: any[];
   let prisma: any;
+  let sri: { send: jest.Mock; authorize: jest.Mock };
   let emitter: InvoiceEmitter;
-  const deadline = () => Date.now() + 100000;
+  // Enough to sign, too little to start an SRI call: signing tests stop before transmission.
+  const deadline = () => Date.now() + 10000;
   const lastUpdate = () => prisma.updates.at(-1);
+  const matches = (target: any, where: any) =>
+    Object.entries<any>(where).every(([field, value]) =>
+      value && typeof value === 'object' && 'gt' in value
+        ? !!target[field] && target[field] > value.gt
+        : target[field] === value,
+    );
+  const apply = (target: any, data: any) => {
+    for (const [field, value] of Object.entries<any>(data))
+      target[field] =
+        value && typeof value === 'object' && 'increment' in value
+          ? target[field] + value.increment
+          : value;
+  };
 
   beforeAll(() => {
     validP12 = createTestP12({ ruc, password });
@@ -102,14 +119,19 @@ describe('InvoiceEmitter preflight and signing', () => {
     commitFails = false;
     stored = { ...row };
     events = [];
+    orders = [];
+    sessions = [];
     prisma = {
       updates: [] as any[],
       invoiceRequest: {
         findFirst: jest.fn(async ({ where }: any) =>
-          stored.id === where.id && stored.signedXmlStorageKey === where.signedXmlStorageKey
-            ? { id: stored.id }
-            : null,
+          matches(stored, where) ? { ...stored } : null,
         ),
+        updateMany: jest.fn(async ({ where, data }: any) => {
+          if (!matches(stored, where)) return { count: 0 };
+          apply(stored, data);
+          return { count: 1 };
+        }),
       },
       invoicingIssuer: { findUnique: jest.fn(async () => issuer) },
       branchEmissionPoint: {
@@ -126,10 +148,14 @@ describe('InvoiceEmitter preflight and signing', () => {
         const staged = {
           sequence: sequence ? { ...sequence } : null,
           events: [] as any[],
+          orders: [] as any[],
+          sessions: [] as any[],
           row: { ...stored },
         };
         const tx = {
-          $queryRaw: jest.fn(async () => {
+          $queryRaw: jest.fn(async (sql: TemplateStringsArray) => {
+            // SELECT ... FOR UPDATE of the request row.
+            if (!sql.join('').includes('"InvoiceSequence"')) return [{ ...staged.row }];
             if (!staged.sequence) return [];
             staged.sequence.next += 1;
             return [{ sequential: staged.sequence.next - 1 }];
@@ -138,20 +164,34 @@ describe('InvoiceEmitter preflight and signing', () => {
             create: jest.fn(async ({ data }: any) => (staged.sequence = { next: data.next })),
           },
           invoiceRequest: {
+            findFirst: jest.fn(async ({ where }: any) =>
+              matches(staged.row, where) ? { ...staged.row } : null,
+            ),
+            update: jest.fn(async (args: any) => {
+              prisma.updates.push(args);
+              apply(staged.row, args.data);
+              return { ...staged.row };
+            }),
             updateMany: jest.fn(async (args: any) => {
               prisma.updates.push(args);
-              if (leaseLost) return { count: 0 };
-              Object.assign(staged.row, args.data);
+              if (leaseLost || !matches(staged.row, args.where)) return { count: 0 };
+              apply(staged.row, args.data);
               return { count: 1 };
             }),
           },
           invoiceRequestEvent: {
             create: jest.fn(async ({ data }: any) => staged.events.push(data)),
           },
+          order: { update: jest.fn(async (args: any) => staged.orders.push(args)) },
+          treatmentSession: {
+            updateMany: jest.fn(async (args: any) => staged.sessions.push(args)),
+          },
         };
         const result = await fn(tx);
         sequence = staged.sequence;
         events.push(...staged.events);
+        orders.push(...staged.orders);
+        sessions.push(...staged.sessions);
         stored = staged.row;
         // The connection drops while COMMIT is in flight: PostgreSQL committed, Prisma rejects.
         if (commitFails) throw new Error('connection lost during commit');
@@ -159,7 +199,8 @@ describe('InvoiceEmitter preflight and signing', () => {
       }),
     };
     const issuers = new IssuerService(prisma, crypto, {} as any);
-    emitter = new InvoiceEmitter(prisma, crypto, issuers, storage as any);
+    sri = { send: jest.fn(), authorize: jest.fn() };
+    emitter = new InvoiceEmitter(prisma, crypto, issuers, storage as any, sri as any);
   });
 
   it('fails safely before signing when the certificate expired', async () => {
@@ -328,6 +369,358 @@ describe('InvoiceEmitter preflight and signing', () => {
     expect(xml).toContain('<razonSocial>Clínica Ejemplo S.A.</razonSocial>');
     expect(xml).not.toContain('Editad');
   });
+
+  describe('reception and authorization', () => {
+    // date, codDoc 01, RUC, environment, series, sequential, numeric code, emission type, check digit
+    const accessKey = `0710202601${ruc}1001002000000500123456781` + '7';
+    const signedXml = Buffer.from('<factura id="comprobante">firmada</factura>', 'utf8');
+    const received = { outcome: 'RECEIVED', sriStatus: 'RECIBIDA', messages: [] };
+    const unknown = {
+      outcome: 'PENDING',
+      sriStatus: null,
+      authorizationNumber: null,
+      authorizedAt: null,
+      environmentLabel: null,
+      messages: [],
+    };
+    const authorized = {
+      outcome: 'AUTHORIZED',
+      sriStatus: 'AUTORIZADO',
+      authorizationNumber: `0710202601${ruc}1001002000000500123456781` + '7',
+      authorizedAt: new Date('2026-10-07T15:04:05-05:00'),
+      environmentLabel: 'PRUEBAS',
+      messages: [],
+    };
+    const message = (identifier: string) => ({
+      identifier,
+      message: 'texto del SRI',
+      additionalInfo: null,
+      type: 'ERROR',
+    });
+    const returned = (...identifiers: string[]) => ({
+      outcome: 'RETURNED',
+      sriStatus: 'DEVUELTA',
+      messages: identifiers.map(message),
+    });
+    let unsigned: any;
+    let worker: InvoiceWorkerService;
+
+    /** Runs advance to completion, letting the inline 3 s waits elapse on the fake clock. */
+    const run = async (target: any = row, until = Date.now() + 100000) => {
+      const outcome = emitter.advance(target, until).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await jest.runAllTimersAsync();
+      return outcome;
+    };
+
+    beforeEach(async () => {
+      jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate'] });
+      unsigned = { ...row };
+      const key = 'invoices/clinic/request/signed-existing';
+      await storage.put(key, crypto.encryptBuffer(tenant, signedXml));
+      storage.put.mockClear();
+      Object.assign(row, {
+        status: 'PROCESSING',
+        externalState: 'SIGNED',
+        attempts: 2,
+        sequential: '000000500',
+        number: '001-002-000000500',
+        accessKey,
+        signedXmlStorageKey: key,
+        signedXmlSha256: sha256(signedXml),
+        lastErrorEncrypted: null,
+      });
+      stored = { ...row };
+      worker = new InvoiceWorkerService(prisma, crypto, emitter);
+    });
+
+    afterEach(() => jest.useRealTimers());
+
+    it('asks for the authorization before resending a row that was already sent', async () => {
+      sri.authorize.mockResolvedValueOnce(unknown).mockResolvedValue(authorized);
+      sri.send.mockResolvedValue(received);
+
+      expect(await run()).toBeUndefined();
+
+      expect(sri.authorize).toHaveBeenNthCalledWith(1, '1', accessKey);
+      expect(sri.authorize.mock.invocationCallOrder[0]).toBeLessThan(
+        sri.send.mock.invocationCallOrder[0],
+      );
+      expect(sri.send).toHaveBeenCalledTimes(1);
+      expect(stored.status).toBe('AUTHORIZED');
+    });
+
+    it('applies an authorization found before sending without sending again', async () => {
+      sri.authorize.mockResolvedValue(authorized);
+      await run();
+      expect(sri.send).not.toHaveBeenCalled();
+      expect(stored).toMatchObject({ status: 'AUTHORIZED', externalState: 'AUTHORIZED' });
+    });
+
+    it('follows a voucher the SRI is already processing without sending it again', async () => {
+      sri.authorize
+        .mockResolvedValueOnce({ ...unknown, sriStatus: 'EN PROCESO' })
+        .mockResolvedValue(authorized);
+      await run();
+      expect(sri.send).not.toHaveBeenCalled();
+      expect(sri.authorize).toHaveBeenCalledTimes(2);
+      expect(stored.status).toBe('AUTHORIZED');
+    });
+
+    it('follows a received row by its access key without sending it again', async () => {
+      row.externalState = 'RECEIVED';
+      stored = { ...row };
+      sri.authorize.mockResolvedValue(authorized);
+      const start = Date.now();
+      await run();
+      expect(sri.send).not.toHaveBeenCalled();
+      expect(sri.authorize).toHaveBeenCalledTimes(1);
+      // A resumed row is queried right away; the 3 s wait only follows a send or a pending answer.
+      expect(Date.now()).toBe(start);
+      expect(stored.status).toBe('AUTHORIZED');
+    });
+
+    it('sends the exact stored bytes and refuses them if their SHA-256 changed', async () => {
+      sri.authorize.mockResolvedValueOnce(unknown).mockResolvedValue(authorized);
+      sri.send.mockResolvedValue(received);
+      await run();
+      expect(sri.send).toHaveBeenCalledWith('1', signedXml);
+
+      sri.send.mockClear();
+      sri.authorize.mockReset().mockResolvedValue(unknown);
+      const tampered = {
+        ...row,
+        signedXmlSha256: sha256(Buffer.from('<factura>otra</factura>')),
+      };
+      stored = { ...tampered };
+      expect(await run(tampered)).toMatchObject({
+        kind: 'configuration',
+        code: 'INVOICE_SIGNED_XML_INTEGRITY',
+      });
+      expect(sri.send).not.toHaveBeenCalled();
+      expect(stored).toEqual(tampered);
+
+      await worker.process(tampered as any);
+      expect(sri.send).not.toHaveBeenCalled();
+      expect(stored).toMatchObject({
+        status: 'PROCESSING',
+        externalState: 'SIGNED',
+        signedXmlStorageKey: row.signedXmlStorageKey,
+        signedXmlSha256: tampered.signedXmlSha256,
+        leaseToken: null,
+      });
+      expect(orders).toEqual([]);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'RETRY_SCHEDULED',
+          detail: { code: 'INVOICE_SIGNED_XML_INTEGRITY' },
+        }),
+      );
+    });
+
+    it('refuses a stored file that no longer decrypts', async () => {
+      const ciphertext = storage.get(row.signedXmlStorageKey);
+      ciphertext[ciphertext.length - 1] ^= 1;
+      sri.authorize.mockResolvedValue(unknown);
+      expect(await run()).toMatchObject({ code: 'INVOICE_SIGNED_XML_INTEGRITY' });
+      expect(sri.send).not.toHaveBeenCalled();
+    });
+
+    it.each(['43', '70'])('treats DEVUELTA with message %s as received', async (identifier) => {
+      sri.authorize.mockResolvedValue(unknown);
+      sri.send.mockResolvedValue(returned(identifier));
+
+      expect(await run()).toBeUndefined();
+
+      expect(stored).toMatchObject({
+        status: 'PROCESSING',
+        externalState: 'RECEIVED',
+        lastErrorEncrypted: null,
+        leaseToken: null,
+      });
+      expect(stored.finishedAt).toBeUndefined();
+      expect(orders).toEqual([]);
+      expect(sessions).toEqual([]);
+      expect(events).toEqual([expect.objectContaining({ type: 'RECEIVED', issuerId: 'issuer' })]);
+    });
+
+    it('rejects on any other DEVUELTA, stores the SRI messages encrypted and releases the order', async () => {
+      const answer = returned('35', '26');
+      sri.authorize.mockResolvedValue(unknown);
+      sri.send.mockResolvedValue(answer);
+
+      expect(await run()).toBeUndefined();
+
+      expect(stored).toMatchObject({
+        status: 'REJECTED',
+        externalState: 'RETURNED',
+        leaseToken: null,
+        leaseUntil: null,
+        finishedAt: expect.any(Date),
+      });
+      expect(JSON.parse(crypto.decrypt(tenant, stored.lastErrorEncrypted))).toEqual({
+        code: 'SRI_REJECTED',
+        messages: answer.messages,
+      });
+      expect(orders).toEqual([
+        { where: { id: 'order' }, data: { status: 'PAID', version: { increment: 1 } } },
+      ]);
+      expect(sessions).toEqual([
+        expect.objectContaining({ data: { status: 'BILLING_FAILED', version: { increment: 1 } } }),
+      ]);
+      expect(sri.authorize).toHaveBeenCalledTimes(1);
+      expect(events).toEqual([expect.objectContaining({ type: 'REJECTED' })]);
+      expect(JSON.stringify(events)).not.toContain('texto del SRI');
+    });
+
+    it('authorizes with number and date and bills the sessions', async () => {
+      stored = { ...unsigned };
+      sri.authorize.mockResolvedValueOnce(unknown).mockResolvedValue(authorized);
+      sri.send.mockResolvedValue(received);
+
+      expect(await run(unsigned)).toBeUndefined();
+
+      expect(stored).toMatchObject({
+        status: 'AUTHORIZED',
+        externalState: 'AUTHORIZED',
+        number: '001-002-000000500',
+        authorizationNumber: authorized.authorizationNumber,
+        authorizedAt: authorized.authorizedAt,
+        lastErrorEncrypted: null,
+        leaseToken: null,
+        leaseUntil: null,
+        finishedAt: expect.any(Date),
+      });
+      expect(sri.authorize).toHaveBeenNthCalledWith(1, '1', stored.accessKey);
+      expect(sri.send).toHaveBeenCalledWith('1', decrypt(storage.get(stored.signedXmlStorageKey)));
+      expect(sessions).toEqual([
+        {
+          where: {
+            tenantId: tenant,
+            completedAt: { not: null },
+            orderItems: { some: { orderId: 'order', releasedAt: null } },
+          },
+          data: { status: 'BILLED', version: { increment: 1 } },
+        },
+      ]);
+      expect(orders).toEqual([]);
+      expect(events.map((e) => e.type)).toEqual(['SIGNED', 'RECEIVED', 'AUTHORIZED']);
+    });
+
+    it('rejects on NO AUTORIZADO', async () => {
+      const notAuthorized = {
+        ...unknown,
+        outcome: 'NOT_AUTHORIZED',
+        sriStatus: 'NO AUTORIZADO',
+        authorizedAt: new Date('2026-10-07T15:04:05-05:00'),
+        messages: [message('39')],
+      };
+      sri.authorize.mockResolvedValueOnce(unknown).mockResolvedValue(notAuthorized);
+      sri.send.mockResolvedValue(received);
+
+      await run();
+
+      expect(stored).toMatchObject({
+        status: 'REJECTED',
+        externalState: 'NOT_AUTHORIZED',
+        leaseToken: null,
+        finishedAt: expect.any(Date),
+      });
+      expect(stored.authorizationNumber).toBeUndefined();
+      expect(JSON.parse(crypto.decrypt(tenant, stored.lastErrorEncrypted))).toEqual({
+        code: 'SRI_REJECTED',
+        messages: notAuthorized.messages,
+      });
+      expect(orders).toHaveLength(1);
+      expect(sessions).toEqual([
+        expect.objectContaining({ data: { status: 'BILLING_FAILED', version: { increment: 1 } } }),
+      ]);
+      expect(events.map((e) => e.type)).toEqual(['RECEIVED', 'REJECTED']);
+    });
+
+    it('polls twice inline then leaves PENDING for the tick', async () => {
+      const calls: number[] = [];
+      sri.authorize.mockImplementation(async () => {
+        calls.push(Date.now());
+        return unknown;
+      });
+      sri.send.mockResolvedValue(received);
+      const start = Date.now();
+
+      expect(await run()).toBeUndefined();
+
+      expect(calls.map((t) => t - start)).toEqual([0, 3000, 6000]);
+      expect(stored).toMatchObject({
+        status: 'PROCESSING',
+        externalState: 'RECEIVED',
+        attempts: 3,
+        leaseToken: null,
+        leaseUntil: null,
+      });
+      expect(stored.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+      expect(orders).toEqual([]);
+    });
+
+    it('stops at the deadline without starting a new SRI call', async () => {
+      // Each authorization query takes 6 s: 14 s are left afterwards, under the 15 s client timeout.
+      sri.authorize.mockImplementation(async () => {
+        jest.setSystemTime(Date.now() + 6000);
+        return unknown;
+      });
+      const until = Date.now() + 20000;
+
+      expect(await run(row, until)).toBeUndefined();
+
+      expect(sri.authorize).toHaveBeenCalledTimes(1);
+      expect(sri.send).not.toHaveBeenCalled();
+      expect(stored).toMatchObject({
+        status: 'PROCESSING',
+        externalState: 'SIGNED',
+        leaseToken: null,
+        leaseUntil: null,
+      });
+      expect(stored.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('does not apply an SRI answer once the lease was lost', async () => {
+      stored.leaseToken = 'another-worker';
+      sri.authorize.mockResolvedValue(authorized);
+      await run();
+      expect(stored).toMatchObject({ status: 'PROCESSING', externalState: 'SIGNED' });
+      expect(sessions).toEqual([]);
+      expect(events).toEqual([]);
+    });
+
+    it('keeps a signed row PROCESSING on a transient SRI error after 24 hours', async () => {
+      const old = { ...row, requestedAt: new Date(Date.now() - 2 * 86400000) };
+      stored = { ...old };
+      sri.authorize.mockRejectedValue(new SriError('transient', 'SRI_TIMEOUT'));
+
+      await worker.process(old as any);
+
+      expect(stored).toMatchObject({
+        status: 'PROCESSING',
+        externalState: 'SIGNED',
+        signedXmlStorageKey: row.signedXmlStorageKey,
+        accessKey,
+        sequential: '000000500',
+        finishedAt: null,
+        leaseToken: null,
+        attempts: 3,
+      });
+      expect(stored.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+      expect(JSON.parse(crypto.decrypt(tenant, stored.lastErrorEncrypted))).toEqual({
+        code: 'SRI_TIMEOUT',
+      });
+      expect(orders).toEqual([]);
+      expect(sessions).toEqual([]);
+      expect(events).toEqual([
+        expect.objectContaining({ type: 'RETRY_SCHEDULED', detail: { code: 'SRI_TIMEOUT' } }),
+      ]);
+    });
+  });
 });
 
 describe('InvoiceWorkerService', () => {
@@ -384,7 +777,9 @@ describe('InvoiceWorkerService', () => {
       expect(sql).toContain('"issuerId" IS NOT NULL');
       expect(sql).not.toContain('externalDocumentId');
       expect(sql).toContain(
-        reconcile ? `"status" = 'PROCESSING'` : `"status" IN ('REQUESTED','PROCESSING')`,
+        reconcile
+          ? `("status" = 'PROCESSING' OR ("status" = 'AUTHORIZED' AND ("xmlStorageKey" IS NULL OR "rideStorageKey" IS NULL OR ("emailedAt" IS NULL AND "emailAttempts" < 5))))`
+          : `"status" IN ('REQUESTED','PROCESSING')`,
       );
     },
   );
