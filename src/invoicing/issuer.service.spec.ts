@@ -166,6 +166,23 @@ describe('IssuerService', () => {
     expect(tx.invoicingIssuer.upsert).not.toHaveBeenCalled();
   });
 
+  it('refuses a RUC whose check digit is wrong', async () => {
+    await expect(service.save(tenant, actor, dto({ ruc: '0912345678001' }))).rejects.toMatchObject({
+      status: 422,
+      response: { code: 'INVOICING_RUC_INVALID' },
+    });
+    expect(tx.invoicingIssuer.upsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a natural person', '0912345675001'],
+    ['a company', '1790012345001'],
+  ])('accepts the valid RUC of %s', async (_kind, valid) => {
+    await expect(service.save(tenant, actor, dto({ ruc: valid }))).resolves.toMatchObject({
+      ruc: valid,
+    });
+  });
+
   it('refuses the NEGOCIO_POPULAR RIMPE regime', async () => {
     await expect(
       service.save(tenant, actor, dto({ rimpeRegime: 'NEGOCIO_POPULAR' })),
@@ -174,7 +191,7 @@ describe('IssuerService', () => {
 
   it('locks the RUC once the issuer has an invoice request', async () => {
     tx.invoiceRequest.count.mockResolvedValue(1);
-    await expect(service.save(tenant, actor, dto({ ruc: '0912345678001' }))).rejects.toMatchObject({
+    await expect(service.save(tenant, actor, dto({ ruc: '0912345675001' }))).rejects.toMatchObject({
       response: { code: 'INVOICING_IDENTITY_LOCKED' },
     });
     expect(tx.invoiceRequest.count).toHaveBeenCalledWith({ where: { issuerId: 'issuer' } });
@@ -222,7 +239,7 @@ describe('IssuerService', () => {
   });
 
   it('rejects a certificate of another RUC', async () => {
-    saved.ruc = '0912345678001';
+    saved.ruc = '0912345675001';
     await expect(service.saveCertificate(tenant, actor, p12, 'clave-prueba')).rejects.toMatchObject(
       { status: 422, response: { code: 'CERTIFICATE_RUC_MISMATCH' } },
     );
@@ -257,7 +274,7 @@ describe('IssuerService', () => {
 
   it('marks the certificate unverified when the RUC changes to one it does not name', async () => {
     await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
-    const view = await service.save(tenant, actor, dto({ ruc: '0912345678001' }));
+    const view = await service.save(tenant, actor, dto({ ruc: '0912345675001' }));
     expect(view.certificate).toMatchObject({ rucVerified: false });
     const back = await service.save(tenant, actor, dto());
     expect(back.certificate).toMatchObject({ rucVerified: true });

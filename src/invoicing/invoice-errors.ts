@@ -30,6 +30,7 @@ const messages: Record<string, string> = {
   CERTIFICATE_KEY_MISMATCH:
     'La clave privada de la firma electrónica no corresponde a su certificado. Solicita un archivo válido a la entidad certificadora.',
   CERTIFICATE_RUC_MISMATCH: 'La firma electrónica pertenece a otro RUC distinto al del emisor.',
+  INVOICING_RUC_INVALID: 'El RUC del emisor no es válido. Revisa los dígitos.',
   RIMPE_REGIME_UNSUPPORTED:
     'El régimen RIMPE Negocio Popular aún no está disponible para facturación electrónica.',
   INVOICING_SERIES_TAKEN:

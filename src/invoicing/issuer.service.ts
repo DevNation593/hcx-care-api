@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { BranchEmissionPoint, InvoiceSequence, InvoicingIssuer } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { isValidRuc } from '../billing-profiles/tax-identification';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
 import { IssuerEmissionPointDto, SaveIssuerDto } from './dto/issuer.dto';
@@ -114,6 +115,7 @@ export class IssuerService {
   async save(tenantId: string, userId: string, dto: SaveIssuerDto): Promise<IssuerView> {
     this.requireEncryption();
     if (dto.rimpeRegime === 'NEGOCIO_POPULAR') throw invoiceError('RIMPE_REGIME_UNSUPPORTED', 422);
+    if (!isValidRuc(dto.ruc)) throw invoiceError('INVOICING_RUC_INVALID', 422);
     const initial = await this.prisma.invoicingIssuer.findUnique({ where: { tenantId } });
     if (dto.revision !== undefined && dto.revision !== initial?.revision)
       throw invoiceError('INVOICING_CONFIGURATION_CHANGED');
