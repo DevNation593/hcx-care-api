@@ -7,6 +7,8 @@ import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.servic
 import { InvoiceEmitter } from './invoice-emitter';
 import { releaseOrder, retryDelay } from './invoice-state';
 import { SriError } from './sri/sri-types';
+/** No claim reaches a halted row; intervention resets its nextAttemptAt. */
+const HALTED_UNTIL = new Date('9999-12-31T00:00:00Z');
 @Injectable()
 export class InvoiceWorkerService {
   constructor(
@@ -66,6 +68,8 @@ export class InvoiceWorkerService {
       // Signed XML may still reach the SRI, so the request never fails and keeps its order.
       const signed = !!current.signedXmlStorageKey;
       const safeFailure = !signed && (e.kind !== 'transient' || expired);
+      // Signed XML that is missing or altered can never be sent: stop until someone intervenes.
+      const halted = signed && e.code === 'INVOICE_SIGNED_XML_INTEGRITY';
       const status = signed ? current.status : safeFailure ? 'FAILED' : 'REQUESTED';
       const changed = await tx.invoiceRequest.updateMany({
         where: this.lease(row),
@@ -73,7 +77,9 @@ export class InvoiceWorkerService {
           status,
           attempts: { increment: 1 },
           lastErrorEncrypted: this.crypto.encrypt(row.tenantId, JSON.stringify({ code: e.code })),
-          nextAttemptAt: new Date(Date.now() + retryDelay(current.attempts + 1, e.retryAfterMs)),
+          nextAttemptAt: halted
+            ? HALTED_UNTIL
+            : new Date(Date.now() + retryDelay(current.attempts + 1, e.retryAfterMs)),
           leaseToken: null,
           leaseUntil: null,
           finishedAt: status === 'FAILED' ? new Date() : null,
@@ -86,7 +92,7 @@ export class InvoiceWorkerService {
           issuerId: row.issuerId,
           connectionId: null,
           invoiceRequestId: row.id,
-          type: safeFailure ? 'FAILED' : 'RETRY_SCHEDULED',
+          type: safeFailure ? 'FAILED' : halted ? 'INTEGRITY_HALTED' : 'RETRY_SCHEDULED',
           source: 'DISPATCHER',
           detail: { code: e.code },
         },

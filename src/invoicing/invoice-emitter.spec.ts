@@ -61,8 +61,8 @@ describe('InvoiceEmitter preflight and signing', () => {
   let prisma: any;
   let sri: { send: jest.Mock; authorize: jest.Mock };
   let emitter: InvoiceEmitter;
-  // Enough to sign, too little to start an SRI call: signing tests stop before transmission.
-  const deadline = () => Date.now() + 10000;
+  // Enough to sign, under the 4 s needed to start an SRI call: signing tests stop before sending.
+  const deadline = () => Date.now() + 3000;
   const lastUpdate = () => prisma.updates.at(-1);
   const matches = (target: any, where: any) =>
     Object.entries<any>(where).every(([field, value]) =>
@@ -415,6 +415,31 @@ describe('InvoiceEmitter preflight and signing', () => {
       return outcome;
     };
 
+    /** An integrity failure stops the row for intervention: no claim selects it any more. */
+    const expectHalted = () => {
+      expect(sri.send).not.toHaveBeenCalled();
+      expect(stored).toMatchObject({
+        status: 'PROCESSING',
+        externalState: 'SIGNED',
+        signedXmlStorageKey: row.signedXmlStorageKey,
+        accessKey,
+        leaseToken: null,
+        leaseUntil: null,
+        finishedAt: null,
+        nextAttemptAt: new Date('9999-12-31T00:00:00Z'),
+      });
+      expect(JSON.parse(crypto.decrypt(tenant, stored.lastErrorEncrypted))).toEqual({
+        code: 'INVOICE_SIGNED_XML_INTEGRITY',
+      });
+      expect(orders).toEqual([]);
+      expect(sessions).toEqual([]);
+      expect(events.at(-1)).toMatchObject({
+        type: 'INTEGRITY_HALTED',
+        detail: { code: 'INVOICE_SIGNED_XML_INTEGRITY' },
+      });
+      expect(events.map((e) => e.type)).not.toContain('RETRY_SCHEDULED');
+    };
+
     beforeEach(async () => {
       jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate'] });
       unsigned = { ...row };
@@ -444,7 +469,7 @@ describe('InvoiceEmitter preflight and signing', () => {
 
       expect(await run()).toBeUndefined();
 
-      expect(sri.authorize).toHaveBeenNthCalledWith(1, '1', accessKey);
+      expect(sri.authorize).toHaveBeenNthCalledWith(1, '1', accessKey, { timeoutMs: 15000 });
       expect(sri.authorize.mock.invocationCallOrder[0]).toBeLessThan(
         sri.send.mock.invocationCallOrder[0],
       );
@@ -486,7 +511,7 @@ describe('InvoiceEmitter preflight and signing', () => {
       sri.authorize.mockResolvedValueOnce(unknown).mockResolvedValue(authorized);
       sri.send.mockResolvedValue(received);
       await run();
-      expect(sri.send).toHaveBeenCalledWith('1', signedXml);
+      expect(sri.send).toHaveBeenCalledWith('1', signedXml, { timeoutMs: 15000 });
 
       sri.send.mockClear();
       sri.authorize.mockReset().mockResolvedValue(unknown);
@@ -495,6 +520,8 @@ describe('InvoiceEmitter preflight and signing', () => {
         signedXmlSha256: sha256(Buffer.from('<factura>otra</factura>')),
       };
       stored = { ...tampered };
+      events.length = 0;
+      sessions.length = 0;
       expect(await run(tampered)).toMatchObject({
         kind: 'configuration',
         code: 'INVOICE_SIGNED_XML_INTEGRITY',
@@ -503,21 +530,20 @@ describe('InvoiceEmitter preflight and signing', () => {
       expect(stored).toEqual(tampered);
 
       await worker.process(tampered as any);
-      expect(sri.send).not.toHaveBeenCalled();
-      expect(stored).toMatchObject({
-        status: 'PROCESSING',
-        externalState: 'SIGNED',
-        signedXmlStorageKey: row.signedXmlStorageKey,
-        signedXmlSha256: tampered.signedXmlSha256,
-        leaseToken: null,
+      expectHalted();
+      expect(stored.signedXmlSha256).toBe(tampered.signedXmlSha256);
+    });
+
+    it('halts the row when the signed file is missing from storage', async () => {
+      (storage as any).get = jest.fn().mockRejectedValue(new Error('object not found'));
+      sri.authorize.mockResolvedValue(unknown);
+      expect(await run()).toMatchObject({
+        kind: 'configuration',
+        code: 'INVOICE_SIGNED_XML_INTEGRITY',
       });
-      expect(orders).toEqual([]);
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          type: 'RETRY_SCHEDULED',
-          detail: { code: 'INVOICE_SIGNED_XML_INTEGRITY' },
-        }),
-      );
+
+      await worker.process(row);
+      expectHalted();
     });
 
     it('refuses a stored file that no longer decrypts', async () => {
@@ -593,8 +619,12 @@ describe('InvoiceEmitter preflight and signing', () => {
         leaseUntil: null,
         finishedAt: expect.any(Date),
       });
-      expect(sri.authorize).toHaveBeenNthCalledWith(1, '1', stored.accessKey);
-      expect(sri.send).toHaveBeenCalledWith('1', decrypt(storage.get(stored.signedXmlStorageKey)));
+      expect(sri.authorize).toHaveBeenNthCalledWith(1, '1', stored.accessKey, {
+        timeoutMs: 15000,
+      });
+      expect(sri.send).toHaveBeenCalledWith('1', decrypt(storage.get(stored.signedXmlStorageKey)), {
+        timeoutMs: 15000,
+      });
       expect(sessions).toEqual([
         {
           where: {
@@ -664,16 +694,17 @@ describe('InvoiceEmitter preflight and signing', () => {
     });
 
     it('stops at the deadline without starting a new SRI call', async () => {
-      // Each authorization query takes 6 s: 14 s are left afterwards, under the 15 s client timeout.
+      // The authorization query takes 7 s: 3 s are left afterwards, under the 4 s minimum.
       sri.authorize.mockImplementation(async () => {
-        jest.setSystemTime(Date.now() + 6000);
+        jest.setSystemTime(Date.now() + 7000);
         return unknown;
       });
-      const until = Date.now() + 20000;
+      const until = Date.now() + 10000;
 
       expect(await run(row, until)).toBeUndefined();
 
       expect(sri.authorize).toHaveBeenCalledTimes(1);
+      expect(sri.authorize).toHaveBeenCalledWith('1', accessKey, { timeoutMs: 9000 });
       expect(sri.send).not.toHaveBeenCalled();
       expect(stored).toMatchObject({
         status: 'PROCESSING',
@@ -682,6 +713,56 @@ describe('InvoiceEmitter preflight and signing', () => {
         leaseUntil: null,
       });
       expect(stored.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('does not start an SRI call with less than 4 s left', async () => {
+      expect(await run(row, Date.now() + 3999)).toBeUndefined();
+      expect(sri.authorize).not.toHaveBeenCalled();
+      expect(stored).toMatchObject({ status: 'PROCESSING', leaseToken: null });
+    });
+
+    it('fits signing, authorization, sending and one poll into a 15 s inline budget', async () => {
+      stored = { ...unsigned };
+      const until = Date.now() + 15000;
+      const calls: { call: string; remaining: number; timeoutMs: number }[] = [];
+      // Every SRI call takes 2 s and reading the signed file 1 s.
+      const slow =
+        (call: string, answer: unknown) =>
+        async (...args: any[]) => {
+          calls.push({ call, remaining: until - Date.now(), timeoutMs: args[2].timeoutMs });
+          jest.setSystemTime(Date.now() + 2000);
+          return answer;
+        };
+      sri.authorize.mockImplementation(slow('authorize', unknown));
+      sri.send.mockImplementation(slow('send', received));
+      const get = storage.get;
+      (storage as any).get = async (key: string) => {
+        jest.setSystemTime(Date.now() + 1000);
+        return get(key);
+      };
+
+      expect(await run(unsigned, until)).toBeUndefined();
+
+      expect(calls).toEqual([
+        { call: 'authorize', remaining: 15000, timeoutMs: 14000 },
+        { call: 'send', remaining: 12000, timeoutMs: 11000 },
+        { call: 'authorize', remaining: 7000, timeoutMs: 6000 },
+      ]);
+      for (const { remaining, timeoutMs } of calls) {
+        expect(timeoutMs).toBeLessThanOrEqual(Math.min(15000, remaining - 1000));
+      }
+      expect(sri.send).toHaveBeenCalledWith(
+        '1',
+        decrypt(get(stored.signedXmlStorageKey)),
+        expect.anything(),
+      );
+      expect(stored).toMatchObject({
+        status: 'PROCESSING',
+        externalState: 'RECEIVED',
+        leaseToken: null,
+        leaseUntil: null,
+      });
+      expect(events.map((e) => e.type)).toEqual(['SIGNED', 'RECEIVED']);
     });
 
     it('does not apply an SRI answer once the lease was lost', async () => {

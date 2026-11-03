@@ -16,19 +16,25 @@ import {
 import { buildAccessKey, newNumericCode } from './sri/access-key';
 import { assertCertificateFor, SigningMaterial } from './sri/certificate';
 import { buildInvoiceXml, invoiceNumber } from './sri/invoice-xml';
-import { AuthorizationResult, hasMessage, SriClient } from './sri/sri-client';
+import { AuthorizationResult, hasMessage, SriCallOptions, SriClient } from './sri/sri-client';
 import { SriError, SriMessage } from './sri/sri-types';
 import { signInvoiceXml } from './sri/xades-signer';
 import { verifyInvoiceSignature } from './sri/xades-verifier';
 
-/** The SRI client gives up after 15 s: no SRI call starts with less budget left than that. */
-const SRI_CALL_MS = 15000;
+/** No SRI call starts with less time left than this; the tick resumes the row instead. */
+const MIN_CALL_MS = 4000;
+/** An SRI call never waits longer than this, and ends this long before the deadline. */
+const MAX_CALL_MS = 15000;
+const CALL_MARGIN_MS = 1000;
 /** Inline: up to two authorization queries, each after a 3 s wait. Later ones are the tick's. */
 const POLL_WAIT_MS = 3000;
 const INLINE_POLLS = 2;
 
-function hasBudget(deadline: number, waitMs = 0): boolean {
-  return deadline - Date.now() - waitMs >= SRI_CALL_MS;
+/** Options for an SRI call started after waitMs, or null when the budget cannot fit one. */
+function callBudget(deadline: number, waitMs = 0): SriCallOptions | null {
+  const remaining = deadline - Date.now() - waitMs;
+  if (remaining < MIN_CALL_MS) return null;
+  return { timeoutMs: Math.min(MAX_CALL_MS, remaining - CALL_MARGIN_MS) };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -70,19 +76,22 @@ export class InvoiceEmitter {
    * SRI has no answer the lease is released and the reconcile claim resumes it later.
    */
   private async transmit(row: InvoiceRequest, deadline: number): Promise<void> {
-    if (!hasBudget(deadline)) return this.park(row);
     const s = this.snapshot(row);
     const accessKey = row.accessKey!;
     let current = row;
     let waitFirst = false;
     if (row.externalState !== 'RECEIVED') {
+      const first = callBudget(deadline);
+      if (!first) return this.park(row);
       // An earlier pass may have sent it and failed before recording the answer: ask first.
-      const known = await this.sri.authorize(s.environment, accessKey);
+      const known = await this.sri.authorize(s.environment, accessKey, first);
       if (known.outcome !== 'PENDING') return this.settle(row, s, known);
       // No authorizations at all: the SRI does not know this access key yet.
       if (known.sriStatus === null) {
-        if (!hasBudget(deadline)) return this.park(row);
-        const reception = await this.sri.send(s.environment, await this.signedBytes(row));
+        const bytes = await this.signedBytes(row);
+        const budget = callBudget(deadline);
+        if (!budget) return this.park(row);
+        const reception = await this.sri.send(s.environment, bytes, budget);
         // 43 (access key registered) and 70 (key in process) mean the SRI already has it.
         if (
           reception.outcome === 'RETURNED' &&
@@ -100,9 +109,11 @@ export class InvoiceEmitter {
     }
     for (let poll = 0; poll < INLINE_POLLS; poll++) {
       const wait = poll > 0 || waitFirst ? POLL_WAIT_MS : 0;
-      if (!hasBudget(deadline, wait)) return this.park(current);
+      if (!callBudget(deadline, wait)) return this.park(current);
       if (wait) await sleep(wait);
-      const answer = await this.sri.authorize(s.environment, accessKey);
+      const budget = callBudget(deadline);
+      if (!budget) return this.park(current);
+      const answer = await this.sri.authorize(s.environment, accessKey, budget);
       if (answer.outcome !== 'PENDING') return this.settle(current, s, answer);
     }
     await this.park(current);
@@ -204,12 +215,17 @@ export class InvoiceEmitter {
     });
   }
 
-  /** The bytes exactly as signed; anything that does not match its SHA-256 is never sent. */
+  /**
+   * The bytes exactly as signed; a missing, undecryptable or altered file is never sent and halts
+   * the row (the worker stops claiming it until someone intervenes).
+   */
   private async signedBytes(row: InvoiceRequest): Promise<Buffer> {
-    const encrypted = await this.storage.get(row.signedXmlStorageKey!);
     let bytes: Buffer;
     try {
-      bytes = this.crypto.decryptBuffer(row.tenantId, encrypted);
+      bytes = this.crypto.decryptBuffer(
+        row.tenantId,
+        await this.storage.get(row.signedXmlStorageKey!),
+      );
     } catch {
       throw new SriError('configuration', 'INVOICE_SIGNED_XML_INTEGRITY');
     }

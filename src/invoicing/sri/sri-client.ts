@@ -8,6 +8,11 @@ export interface ReceptionResult {
   messages: SriMessage[];
 }
 
+/** A call may be given less time than the client default, e.g. to fit an inline budget. */
+export interface SriCallOptions {
+  timeoutMs?: number;
+}
+
 export interface AuthorizationResult {
   outcome: 'AUTHORIZED' | 'NOT_AUTHORIZED' | 'PENDING';
   sriStatus: string | null;
@@ -214,21 +219,31 @@ export class SriClient {
     this.testBaseUrl = options.testBaseUrl?.replace(/\/+$/, '');
   }
 
-  async send(environment: SriEnvironment, signedXml: Buffer): Promise<ReceptionResult> {
+  async send(
+    environment: SriEnvironment,
+    signedXml: Buffer,
+    options: SriCallOptions = {},
+  ): Promise<ReceptionResult> {
     const soap = soapEnvelope(
       RECEPTION_NS,
       `<ec:validarComprobante><xml>${signedXml.toString('base64')}</xml></ec:validarComprobante>`,
     );
-    return parseReception(await this.post(this.url(environment, 'reception'), soap));
+    return parseReception(await this.post(this.url(environment, 'reception'), soap, options));
   }
 
-  async authorize(environment: SriEnvironment, accessKey: string): Promise<AuthorizationResult> {
+  async authorize(
+    environment: SriEnvironment,
+    accessKey: string,
+    options: SriCallOptions = {},
+  ): Promise<AuthorizationResult> {
     if (!ACCESS_KEY.test(accessKey)) throw new SriError('data', 'INVALID_ACCESS_KEY');
     const soap = soapEnvelope(
       AUTHORIZATION_NS,
       `<ec:autorizacionComprobante><claveAccesoComprobante>${accessKey}</claveAccesoComprobante></ec:autorizacionComprobante>`,
     );
-    return parseAuthorization(await this.post(this.url(environment, 'authorization'), soap));
+    return parseAuthorization(
+      await this.post(this.url(environment, 'authorization'), soap, options),
+    );
   }
 
   /** True when the reception WSDL answers; never throws. */
@@ -248,18 +263,26 @@ export class SriClient {
     return SRI_ENDPOINTS[environment][service];
   }
 
-  private post(url: string, soap: string): Promise<string> {
-    return this.exchange(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/xml; charset=utf-8', SOAPAction: '""' },
-      body: soap,
-    });
+  private post(url: string, soap: string, options: SriCallOptions): Promise<string> {
+    return this.exchange(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/xml; charset=utf-8', SOAPAction: '""' },
+        body: soap,
+      },
+      options.timeoutMs,
+    );
   }
 
   /** One HTTP exchange bounded in time and size; anything but a complete 2xx is a transient SriError. */
-  private async exchange(url: string, init: RequestInit): Promise<string> {
+  private async exchange(
+    url: string,
+    init: RequestInit,
+    timeoutMs = this.timeoutMs,
+  ): Promise<string> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await this.fetchImpl(url, {
         ...init,

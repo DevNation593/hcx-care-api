@@ -202,6 +202,20 @@ describe('SriClient', () => {
     });
   });
 
+  it('aborts a call at its own timeout instead of the client default', async () => {
+    const { client } = fake({ hang: true }, 60000);
+    const started = Date.now();
+    await expect(client.send('1', Buffer.from('x'), { timeoutMs: 30 })).rejects.toMatchObject({
+      kind: 'transient',
+      code: 'SRI_TIMEOUT',
+    });
+    await expect(client.authorize('1', KEY, { timeoutMs: 30 })).rejects.toMatchObject({
+      kind: 'transient',
+      code: 'SRI_TIMEOUT',
+    });
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
   it('classifies a network failure as unavailable', async () => {
     const client = new SriClient({
       fetch: (() => Promise.reject(new TypeError('fetch failed'))) as unknown as typeof fetch,
