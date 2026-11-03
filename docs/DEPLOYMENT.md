@@ -68,13 +68,15 @@ Termina con código **1** si `productionBlocking` es mayor que 0, es decir, si l
 
 #### 2. Ventana de despliegue
 
-Entre `npx prisma migrate deploy` y el momento en que la nueva compilación de la API recibe tráfico, las rutas de facturación de la compilación anterior fallan (las columnas que usaba ya no existen). Por eso:
+Entre `npx prisma migrate deploy` y el momento en que la nueva compilación de la API recibe tráfico, la compilación anterior falla en todo lo que lee las columnas y tablas eliminadas, no solo en facturación: los reembolsos (`payments.service` lee `requiresReconciliation`), completar una sesión clínica (`treatment-sessions.service` selecciona todas las columnas de `InvoiceRequest`) y la elegibilidad de facturación de Caja (`eligibility-facts.ts` une la conexión eliminada). A la inversa, la compilación nueva falla contra la base sin migrar. Por eso esa ventana debe durar segundos:
 
 1. Elija una hora de poco uso.
-2. Ejecute `npx prisma migrate deploy` y despliegue la API nueva inmediatamente después.
-3. Verifique `GET /health` (queda fuera del prefijo `/api/v1`) y una consulta de facturas.
+2. Compile la API nueva **sin promoverla**: `vercel deploy --prod --skip-domain` desde `api/`. La compilación no ejecuta migraciones (`prisma generate && nest build`). Anote la URL del despliegue que imprime. Si los despliegues de producción salen de Git, desactive antes «Auto-assign Custom Production Domains» en el proyecto para que el despliegue del merge tampoco se promueva solo.
+3. Cuando ese despliegue esté `Ready`, ejecute `npx prisma migrate deploy` contra producción.
+4. Inmediatamente después, `vercel promote <url del paso 2>`.
+5. Verifique `GET /health` (queda fuera del prefijo `/api/v1`), una consulta de facturas, la facturación de una orden en Caja y completar una sesión (en un consultorio de demostración). Si desactivó la asignación automática de dominios, vuelva a activarla.
 
-El resto de la API no usa esas columnas y no se interrumpe.
+Si no puede compilar sin promover, programe una ventana de mantenimiento corta y avise a los consultorios: entre la migración y la promoción fallan los reembolsos, la facturación (también desde Caja) y completar sesiones clínicas.
 
 #### 3. Si la guarda aborta la migración
 
@@ -119,13 +121,15 @@ select * from cron.job_run_details order by start_time desc limit 20;
 
 #### 5. Prueba manual en `celcer` antes de pasar a producción
 
-Ningún emisor debe pasar al ambiente `2` sin esta prueba con un certificado real:
+Ningún emisor debe pasar al ambiente `2` sin esta prueba con un certificado real. Hágala en un **consultorio de demostración desechable**, nunca con una venta real: la base es la de producción, una orden facturada queda `INVOICED` para siempre (no hay anulación ni nota de crédito) y la factura cuenta para el límite mensual del plan del consultorio.
 
-1. En el consultorio, como `MASTER`, guarde el emisor con ambiente `1` y suba el `.p12` real de prueba (el certificado del RUC emisor y su contraseña; máx. 50 KB).
-2. Defina el punto de emisión de la sucursal (establecimiento, punto, dirección y siguiente secuencial) y use `POST /invoicing/test`: debe confirmar que el certificado es válido y del RUC, y que los servicios del SRI responden.
-3. Cree una factura de una orden pagada y espere el resultado (inline o por el tick). Debe llegar a `AUTHORIZED` con número y fecha de autorización, XML y RIDE descargables, y el correo al paciente si tiene email.
+1. En el consultorio de demostración, como `MASTER`, guarde el emisor con el RUC a probar y ambiente `1`, y suba el `.p12` real de prueba (el certificado de ese RUC y su contraseña; máx. 50 KB).
+2. Defina el punto de emisión de una sucursal (establecimiento, punto, dirección y siguiente secuencial) y use `POST /invoicing/test`: debe confirmar que el certificado es válido y del RUC, y que los servicios del SRI responden.
+3. Cree en ese consultorio una orden de prueba con un cliente ficticio, cóbrela, factúrela y espere el resultado (inline o por el tick). Debe llegar a `AUTHORIZED` con número y fecha de autorización, XML y RIDE descargables, y el correo al paciente si tiene email (use un correo propio).
 4. Revise una factura rechazada de propósito (por ejemplo, con datos del cliente inválidos) para ver los mensajes del SRI y confirmar la reemisión con secuencial nuevo.
-5. Solo entonces cambie el emisor al ambiente `2`. El cambio exige que no haya solicitudes `REQUESTED`/`PROCESSING` ni `AUTHORIZED` sin artefactos (`INVOICING_ENVIRONMENT_BUSY`). El RUC queda fijo tras la primera solicitud (`INVOICING_IDENTITY_LOCKED`).
+5. Solo entonces configure el emisor del consultorio real (mismo RUC y certificado) en el ambiente `2`, o cámbielo a `2` si ya existía. El cambio exige que no haya solicitudes `REQUESTED`/`PROCESSING` ni `AUTHORIZED` sin artefactos (`INVOICING_ENVIRONMENT_BUSY`). El RUC queda fijo tras la primera solicitud (`INVOICING_IDENTITY_LOCKED`).
+
+**Secuenciales al pasar al ambiente `2`.** Los secuenciales se llevan por ambiente: al cambiar un emisor al ambiente `2`, cada punto de emisión empieza en el secuencial 1 aunque en pruebas haya llegado más lejos. Si el consultorio ya facturó en producción con otro sistema con ese establecimiento y punto, vuelva a definir el punto de emisión (`PUT /branches/:branchId/emission-point`) con `nextSequential` igual al último secuencial que emitió más uno, antes de la primera factura. Si no, el SRI la rechaza con el error 45 (secuencial registrado).
 
 El régimen RIMPE `NEGOCIO_POPULAR` se rechaza con `RIMPE_REGIME_UNSUPPORTED` hasta verificar el XSD oficial (el `factura_V1.1.0.xsd` incluido solo acepta «CONTRIBUYENTE RÉGIMEN RIMPE»), así que esos consultorios no pueden facturar aún.
 
