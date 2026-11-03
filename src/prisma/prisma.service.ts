@@ -63,6 +63,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       'usageMetrics',
       'invoice',
       'invoicingConnection',
+      'invoicingIssuer',
+      'invoiceSequence',
       'branchEmissionPoint',
       'invoicingRef',
       'invoiceRequest',
@@ -161,7 +163,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       'invoiceRequest',
       'invoicingRef',
       'branchEmissionPoint',
+      'invoiceSequence',
       'invoicingConnection',
+      'invoicingIssuer',
       // Lot allocations and stock movements restrict deleting their lot, and go before the payments.
       'orderItemLot',
       'stockMovement',

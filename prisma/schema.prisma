@@ -229,6 +229,7 @@ enum SessionMediaPhase {
 
 model Tenant {
   invoicingConnection InvoicingConnection?
+  invoicingIssuer     InvoicingIssuer?
   invoiceRequests     InvoiceRequest[]
 
   id                      String     @id @default(cuid())
@@ -2245,18 +2246,74 @@ model InvoicingConnection {
   events                 InvoiceRequestEvent[]
 }
 
-model BranchEmissionPoint {
-  id                String              @id @default(cuid())
-  branchId          String              @unique
-  branch            Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  connectionId      String
-  connection        InvoicingConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
-  establishmentId   String
-  emissionPointId   String
+enum RimpeRegime {
+  NONE
+  EMPRENDEDOR
+  NEGOCIO_POPULAR
+}
+
+// The clinic itself as SRI issuer: tax data, environment and its encrypted signing certificate.
+model InvoicingIssuer {
+  id                           String                @id @default(cuid())
+  tenantId                     String                @unique
+  tenant                       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  ruc                          String
+  legalName                    String
+  tradeName                    String?
+  headOfficeAddress            String
+  accountingRequired           Boolean
+  specialTaxpayerCode          String?
+  withholdingAgentCode         String?
+  rimpeRegime                  RimpeRegime           @default(NONE)
+  environment                  String
+  active                       Boolean               @default(true)
+  // The .p12 bytes encrypted with the tenant key, in base64; never returned or logged.
+  certificateEncrypted         String?
+  certificatePasswordEncrypted String?
+  certificateSubject           String?
+  certificateSerial            String?
+  certificateValidTo           DateTime?
+  certificateSha256            String?
+  // Whether the certificate names the issuer RUC (false when it names none).
+  certificateRucVerified       Boolean               @default(false)
+  revision                     Int                   @default(1)
+  createdAt                    DateTime              @default(now())
+  updatedAt                    DateTime              @updatedAt
+  points                       BranchEmissionPoint[]
+  sequences                    InvoiceSequence[]
+  requests                     InvoiceRequest[]
+  events                       InvoiceRequestEvent[]
+}
+
+// Next sequential of an issuer series per environment. Gaps from rejected requests are fine.
+model InvoiceSequence {
+  id                String          @id @default(cuid())
+  issuerId          String
+  issuer            InvoicingIssuer @relation(fields: [issuerId], references: [id], onDelete: Restrict)
   establishmentCode String
   emissionPointCode String
-  updatedAt         DateTime            @updatedAt
+  environment       String
+  next              Int             @default(1)
 
+  @@unique([issuerId, establishmentCode, emissionPointCode, environment])
+}
+
+model BranchEmissionPoint {
+  id                   String               @id @default(cuid())
+  branchId             String               @unique
+  branch               Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  connectionId         String?
+  connection           InvoicingConnection? @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  issuerId             String?
+  issuer               InvoicingIssuer?     @relation(fields: [issuerId], references: [id], onDelete: Restrict)
+  establishmentId      String?
+  emissionPointId      String?
+  establishmentCode    String
+  emissionPointCode    String
+  establishmentAddress String?
+  updatedAt            DateTime             @updatedAt
+
+  @@unique([issuerId, establishmentCode, emissionPointCode])
   @@index([connectionId])
 }
 
@@ -2279,15 +2336,17 @@ model InvoiceRequest {
   tenant                   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   orderId                  String
   order                    Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  connectionId             String
-  connection               InvoicingConnection   @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  connectionId             String?
+  connection               InvoicingConnection?  @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  issuerId                 String?
+  issuer                   InvoicingIssuer?      @relation(fields: [issuerId], references: [id], onDelete: Restrict)
   billingProfileId         String
   billingProfile           BillingProfile        @relation(fields: [billingProfileId], references: [id], onDelete: Restrict)
   requestedById            String
   requestedBy              User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
   status                   InvoiceRequestStatus  @default(REQUESTED)
   clientIdempotencyKey     String
-  providerIdempotencyKey   String                @unique
+  providerIdempotencyKey   String?               @unique
   snapshotEncrypted        String
   providerBodyEncrypted    String?
   providerBodyHash         String?
@@ -2300,6 +2359,11 @@ model InvoiceRequest {
   externalState            String?
   number                   String?
   accessKey                String?
+  sequential               String?
+  signedXmlStorageKey      String?
+  signedXmlSha256          String?
+  emailedAt                DateTime?
+  emailAttempts            Int                   @default(0)
   authorizationNumber      String?
   authorizedAt             DateTime?
   xmlStorageKey            String?
@@ -2318,6 +2382,7 @@ model InvoiceRequest {
 
   @@unique([tenantId, clientIdempotencyKey])
   @@unique([connectionId, externalDocumentId])
+  @@unique([issuerId, accessKey])
   @@index([tenantId, requestedAt])
   @@index([status, nextAttemptAt, leaseUntil])
   @@index([orderId])
@@ -2325,16 +2390,18 @@ model InvoiceRequest {
 }
 
 model InvoiceRequestEvent {
-  id               String              @id @default(cuid())
-  connectionId     String
-  connection       InvoicingConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  id               String               @id @default(cuid())
+  connectionId     String?
+  connection       InvoicingConnection? @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  issuerId         String?
+  issuer           InvoicingIssuer?     @relation(fields: [issuerId], references: [id], onDelete: Restrict)
   invoiceRequestId String?
-  invoiceRequest   InvoiceRequest?     @relation(fields: [invoiceRequestId], references: [id], onDelete: Restrict)
+  invoiceRequest   InvoiceRequest?      @relation(fields: [invoiceRequestId], references: [id], onDelete: Restrict)
   type             String
   source           String
   detail           Json
   webhookEventId   String?
-  createdAt        DateTime            @default(now())
+  createdAt        DateTime             @default(now())
 
   @@unique([connectionId, webhookEventId])
   @@index([invoiceRequestId, createdAt])

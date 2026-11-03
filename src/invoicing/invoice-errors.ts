@@ -8,14 +8,34 @@ const messages: Record<string, string> = {
   INVOICING_TAXPAYER_INVALID: 'Selecciona un emisor válido de esta conexión.',
   INVOICING_TENANT_INACTIVE: 'La empresa está suspendida en emite-facil.',
   INVOICING_IDENTITY_LOCKED:
-    'La empresa y el emisor no pueden cambiar después de solicitar una factura. Puedes rotar la API key del mismo emisor.',
+    'El RUC del emisor no puede cambiar después de solicitar una factura. Puedes actualizar sus demás datos.',
   INVOICING_ENVIRONMENT_BUSY:
-    'Finaliza la conciliación y las descargas pendientes antes de cambiar el ambiente del emisor.',
+    'Espera a que terminen las facturas en proceso y la descarga de sus archivos antes de cambiar el ambiente del emisor.',
   INVOICING_ENVIRONMENT_CHANGED:
     'El ambiente del emisor cambió en emite-facil. Revisa la configuración antes de continuar.',
   INVOICING_POINT_INVALID:
     'El establecimiento o punto de emisión no pertenece al emisor seleccionado o está deshabilitado.',
   INVOICING_DISABLED: 'La conexión de facturación está desactivada.',
+  INVOICING_NOT_CONFIGURED:
+    'Configura el emisor, su firma electrónica y el punto de emisión de la sede antes de facturar.',
+  INVOICING_CERTIFICATE_REQUIRED: 'Sube la firma electrónica (.p12) del emisor con su contraseña.',
+  CERTIFICATE_PASSWORD_INVALID: 'La contraseña de la firma electrónica no es correcta.',
+  CERTIFICATE_UNREADABLE:
+    'No se pudo leer la firma electrónica. Sube el archivo .p12 o .pfx que entregó la entidad certificadora.',
+  CERTIFICATE_EXPIRED: 'La firma electrónica está vencida. Renuévala y súbela nuevamente.',
+  CERTIFICATE_NOT_YET_VALID:
+    'La firma electrónica todavía no está vigente. Revisa su fecha de inicio de validez.',
+  CERTIFICATE_NO_RSA_KEY:
+    'La firma electrónica no contiene una clave privada RSA utilizable para firmar comprobantes.',
+  CERTIFICATE_KEY_MISMATCH:
+    'La clave privada de la firma electrónica no corresponde a su certificado. Solicita un archivo válido a la entidad certificadora.',
+  CERTIFICATE_RUC_MISMATCH: 'La firma electrónica pertenece a otro RUC distinto al del emisor.',
+  RIMPE_REGIME_UNSUPPORTED:
+    'El régimen RIMPE Negocio Popular aún no está disponible para facturación electrónica.',
+  INVOICING_SERIES_TAKEN:
+    'Ese establecimiento y punto de emisión ya están asignados a otra sede. Usa una serie distinta.',
+  INVOICING_SEQUENCE_BACKWARDS:
+    'El siguiente secuencial no puede ser menor que el actual: el SRI rechazaría números repetidos.',
   INVOICING_WEBHOOK_RETRY: 'No se pudo procesar la notificación. Se requiere un nuevo intento.',
   INVOICE_LIMIT_REACHED: 'Alcanzaste el límite mensual de facturas de tu plan.',
   INVOICE_RECONCILIATION_REQUIRED:
@@ -51,11 +71,23 @@ const messages: Record<string, string> = {
   PRODUCT_SYNC_PENDING:
     'La sincronización del producto está pendiente. Se volverá a intentar automáticamente.',
   TAX_RATE_UNSUPPORTED:
-    'La tarifa de impuesto de la orden no está disponible en el catálogo de emite-facil.',
+    'La tarifa de impuesto de la orden no está disponible en el catálogo del SRI.',
+  INVOICE_LINE_INVALID:
+    'Una línea de la orden tiene cantidad, precio o descuento no válidos para la factura.',
+  FINAL_CONSUMER_LIMIT:
+    'El total supera el máximo permitido para facturar a consumidor final. Registra los datos del cliente.',
   SIGNATURE_FAILED:
     'Corrige la firma en emite-facil y reintenta el mismo documento allí. HCX seguirá consultando su estado.',
   SRI_REJECTED:
     'El comprobante fue rechazado. Revisa la explicación del SRI, corrige los datos y solicita un reemplazo.',
+  SRI_UNAVAILABLE:
+    'Los servicios del SRI no están disponibles. Se volverá a intentar automáticamente.',
+  SRI_TIMEOUT:
+    'El SRI no respondió a tiempo. Se volverá a consultar el mismo comprobante automáticamente.',
+  SRI_INVALID_RESPONSE:
+    'El SRI devolvió una respuesta que no se pudo interpretar. Se volverá a intentar automáticamente.',
+  INVOICE_SIGNED_XML_INTEGRITY:
+    'No se pudo verificar el comprobante firmado guardado. Requiere revisión antes de volver a enviarlo al SRI.',
   UNAUTHENTICATED: 'La API key no es válida o fue revocada. Revisa la conexión con emite-facil.',
   ROLE_FORBIDDEN: 'La API key no tiene permisos para esta operación en emite-facil.',
   RATE_LIMITED:

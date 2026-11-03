@@ -11,7 +11,10 @@ import {
   RawBodyRequest,
   Req,
   Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
@@ -23,17 +26,19 @@ import { ConnectionService } from './connection.service';
 import { InvoiceRequestsService } from './invoice-requests.service';
 import { InvoiceArtifactsService } from './invoice-artifacts.service';
 import { InvoiceWebhookService } from './invoice-webhook.service';
+import { IssuerService } from './issuer.service';
 import {
-  EmissionPointDto,
   ListInvoiceRequestsQuery,
   SaveConnectionDto,
   TestConnectionDto,
 } from './dto/invoicing.dto';
+import { IssuerCertificateDto, IssuerEmissionPointDto, SaveIssuerDto } from './dto/issuer.dto';
 @Controller('tenants/:tenantId')
 @RequireSection('core.billing.invoicing')
 export class InvoicingController {
   constructor(
     private readonly connections: ConnectionService,
+    private readonly issuer: IssuerService,
     private readonly requests: InvoiceRequestsService,
     private readonly artifacts: InvoiceArtifactsService,
   ) {}
@@ -56,13 +61,40 @@ export class InvoicingController {
   @Get('invoicing/options') @Roles('MASTER') options(@Param('tenantId') t: string) {
     return this.connections.options(t);
   }
+  @Get('invoicing/issuer') @Roles('MASTER') getIssuer(@Param('tenantId') t: string) {
+    return this.issuer.get(t);
+  }
+  @Put('invoicing/issuer') @Roles('MASTER') saveIssuer(
+    @Param('tenantId') t: string,
+    @CurrentUser() u: AuthUser,
+    @Body() d: SaveIssuerDto,
+  ) {
+    return this.issuer.save(t, u.userId, d);
+  }
+  @Put('invoicing/issuer/certificate')
+  @Roles('MASTER')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 } }))
+  saveCertificate(
+    @Param('tenantId') t: string,
+    @CurrentUser() u: AuthUser,
+    @UploadedFile() file: { buffer: Buffer } | undefined,
+    @Body() d: IssuerCertificateDto,
+  ) {
+    return this.issuer.saveCertificate(t, u.userId, file?.buffer ?? Buffer.alloc(0), d.password);
+  }
+  // Moves to invoicing/test when the Emite Fácil connection is removed.
+  @Post('invoicing/issuer/test') @HttpCode(200) @Roles('MASTER') testIssuer(
+    @Param('tenantId') t: string,
+  ) {
+    return this.issuer.test(t);
+  }
   @Put('branches/:branchId/emission-point') @Roles('MASTER') point(
     @Param('tenantId') t: string,
     @Param('branchId') b: string,
     @CurrentUser() u: AuthUser,
-    @Body() d: EmissionPointDto,
+    @Body() d: IssuerEmissionPointDto,
   ) {
-    return this.connections.setPoint(t, u.userId, b, d);
+    return this.issuer.setPoint(t, u.userId, b, d);
   }
   @Post('orders/:id/invoice-requests')
   @HttpCode(202)
