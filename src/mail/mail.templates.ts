@@ -1,7 +1,14 @@
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
+
 export interface MailContent {
   subject: string;
   html: string;
   text: string;
+  attachments?: MailAttachment[];
 }
 
 const BRAND = 'HCX Care';
@@ -83,5 +90,35 @@ export function invitationMail(input: {
       url: input.loginUrl,
     }),
     text: [greeting, '', intro, next, '', input.loginUrl].join('\n'),
+  };
+}
+
+/** Ecuador has no daylight saving time, so its civil time is always UTC-5. */
+function ecuadorDate(date: Date): string {
+  const [year, month, day] = new Date(date.getTime() - 5 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10)
+    .split('-');
+  return `${day}/${month}/${year}`;
+}
+
+/**
+ * Cover message of an authorized invoice. It only names the billing customer and the issuer: it
+ * must never carry clinical data.
+ */
+export function invoiceMail(input: {
+  number: string;
+  issuerName: string;
+  customerName: string;
+  authorizedAt: Date;
+}): MailContent {
+  const greeting = `Hola ${input.customerName},`;
+  const intro = `Adjuntamos tu factura electrónica ${input.number}, emitida por ${input.issuerName} el ${ecuadorDate(input.authorizedAt)}.`;
+  const files = 'Incluye el comprobante autorizado en XML y su representación impresa en PDF.';
+
+  return {
+    subject: `Factura ${input.number} de ${input.issuerName}`,
+    html: layout(`Factura ${input.number}`, [escapeHtml(greeting), escapeHtml(intro), files]),
+    text: [greeting, '', intro, files].join('\n'),
   };
 }

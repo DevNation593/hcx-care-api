@@ -4,8 +4,13 @@ import { InvoiceRequest } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { FILE_STORAGE, FileStorage } from '../patient-files/file-storage';
-import { InvoicingProvider } from './provider/invoicing-provider';
 import { invoiceError } from './invoice-errors';
+import { FiscalSnapshot, toInvoiceDocument } from './invoice-snapshot';
+import { buildAuthorizedXml } from './sri/authorized-xml';
+import { renderRide } from './sri/ride';
+
+const ENVIRONMENT_LABELS = { '1': 'PRUEBAS', '2': 'PRODUCCIÓN' } as const;
+
 @Injectable()
 export class InvoiceArtifactsService {
   constructor(
@@ -13,8 +18,15 @@ export class InvoiceArtifactsService {
     private readonly crypto: ClinicalCryptoService,
     @Inject(FILE_STORAGE) private readonly storage: FileStorage,
   ) {}
-  async collect(row: InvoiceRequest, client: InvoicingProvider) {
-    if (row.status !== 'AUTHORIZED' || !row.externalDocumentId) return;
+
+  /**
+   * Step e: keeps the authorized XML and the RIDE, built from the stored signed XML and the
+   * snapshot. Each file has its own CAS under the lease; a failure leaves the authorization alone
+   * and the next pass retries what is missing.
+   */
+  async collect(row: InvoiceRequest): Promise<void> {
+    if (row.status !== 'AUTHORIZED') return;
+    let built: { signedXml: string; snapshot: FiscalSnapshot } | undefined;
     for (const kind of ['xml', 'ride'] as const) {
       const keyField = kind === 'xml' ? 'xmlStorageKey' : 'rideStorageKey';
       const hashField = kind === 'xml' ? 'xmlSha256' : 'rideSha256';
@@ -22,15 +34,15 @@ export class InvoiceArtifactsService {
       try {
         if (!(await this.ownsLease(row))) return;
         if (!this.crypto.enabled) throw invoiceError('INVOICING_ENCRYPTION_REQUIRED', 503);
-        const artifact = await client.getArtifact(
-          row.externalDocumentId,
-          kind === 'xml' ? 'xml-authorized' : 'ride',
-        );
-        if (createHash('sha256').update(artifact.bytes).digest('hex') !== artifact.sha256)
-          throw invoiceError('INVOICE_ARTIFACT_INTEGRITY', 503);
+        built ??= await this.sources(row);
+        const bytes =
+          kind === 'xml'
+            ? Buffer.from(this.authorizedXml(row, built), 'utf8')
+            : await this.ride(row, built);
+        const sha256 = createHash('sha256').update(bytes).digest('hex');
         if (!(await this.ownsLease(row))) return;
         const key = `invoices/${row.tenantId}/${row.id}/${kind}-${randomUUID()}`;
-        await this.storage.put(key, this.crypto.encryptBuffer(row.tenantId, artifact.bytes));
+        await this.storage.put(key, this.crypto.encryptBuffer(row.tenantId, bytes));
         const kept = await this.prisma.$transaction(async (tx) => {
           const changed = await tx.invoiceRequest.updateMany({
             where: {
@@ -40,26 +52,64 @@ export class InvoiceArtifactsService {
               leaseUntil: { gt: new Date() },
               [keyField]: null,
             },
-            data: { [keyField]: key, [hashField]: artifact.sha256 },
+            data: { [keyField]: key, [hashField]: sha256 },
           });
           if (changed.count)
             await tx.invoiceRequestEvent.create({
               data: {
-                connectionId: row.connectionId,
+                issuerId: row.issuerId,
+                connectionId: null,
                 invoiceRequestId: row.id,
                 type: 'ARTIFACT_STORED',
-                source: 'RECONCILER',
-                detail: { kind, sha256: artifact.sha256 },
+                source: 'DISPATCHER',
+                detail: { kind, sha256 },
               },
             });
           return changed.count;
         });
         if (!kept) await this.storage.remove(key);
       } catch {
-        /* Authorization survives artifact unavailability; the reconciler retries. */
+        /* Authorization survives artifact failures; the next pass retries. */
       }
     }
   }
+
+  /** The signed bytes, SHA-256 checked, and the decrypted snapshot. */
+  private async sources(row: InvoiceRequest) {
+    const bytes = this.crypto.decryptBuffer(
+      row.tenantId,
+      await this.storage.get(row.signedXmlStorageKey!),
+    );
+    if (createHash('sha256').update(bytes).digest('hex') !== row.signedXmlSha256)
+      throw invoiceError('INVOICE_SIGNED_XML_INTEGRITY', 503);
+    return {
+      signedXml: bytes.toString('utf8'),
+      snapshot: JSON.parse(
+        this.crypto.decrypt(row.tenantId, row.snapshotEncrypted),
+      ) as FiscalSnapshot,
+    };
+  }
+
+  private authorizedXml(
+    row: InvoiceRequest,
+    { signedXml, snapshot }: { signedXml: string; snapshot: FiscalSnapshot },
+  ): string {
+    return buildAuthorizedXml({
+      signedXml,
+      authorizationNumber: row.authorizationNumber!,
+      authorizedAt: row.authorizedAt!,
+      environmentLabel: ENVIRONMENT_LABELS[snapshot.environment],
+    });
+  }
+
+  private ride(row: InvoiceRequest, { snapshot }: { snapshot: FiscalSnapshot }): Promise<Buffer> {
+    return renderRide({
+      document: toInvoiceDocument(snapshot, Number(row.sequential), row.accessKey!),
+      authorizationNumber: row.authorizationNumber!,
+      authorizedAt: row.authorizedAt!,
+    });
+  }
+
   private async ownsLease(row: InvoiceRequest) {
     return (
       !!row.leaseToken &&
@@ -74,6 +124,7 @@ export class InvoiceArtifactsService {
       }))
     );
   }
+
   async read(tenantId: string, userId: string, id: string, kind: 'xml' | 'ride') {
     const r = await this.prisma.invoiceRequest.findFirst({ where: { id, tenantId } });
     if (!r) throw invoiceError('INVOICE_REQUEST_NOT_FOUND', 404);

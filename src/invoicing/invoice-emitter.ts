@@ -4,6 +4,8 @@ import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { FILE_STORAGE, FileStorage } from '../patient-files/file-storage';
+import { InvoiceArtifactsService } from './invoice-artifacts.service';
+import { InvoiceDeliveryService, MAX_EMAIL_ATTEMPTS } from './invoice-delivery.service';
 import { IssuerService } from './issuer.service';
 import { FiscalSnapshot, toInvoiceDocument } from './invoice-snapshot';
 import {
@@ -56,10 +58,14 @@ export class InvoiceEmitter {
     private readonly issuers: IssuerService,
     @Inject(FILE_STORAGE) private readonly storage: FileStorage,
     private readonly sri: SriClient,
+    private readonly artifacts: InvoiceArtifactsService,
+    private readonly delivery: InvoiceDeliveryService,
   ) {}
 
   /** Throws SriError; a configuration error before signing fails the request safely. */
   async advance(row: InvoiceRequest, deadline: number): Promise<void> {
+    // An authorized row is claimed again only for the files and the e-mail it still lacks.
+    if (row.status === 'AUTHORIZED') return this.finish(row, deadline);
     if (row.status !== 'REQUESTED' && row.status !== 'PROCESSING') return;
     let signed: InvoiceRequest | null = row;
     // Signed XML is final: the request never gets another sequential or access key.
@@ -85,7 +91,7 @@ export class InvoiceEmitter {
       if (!first) return this.park(row);
       // An earlier pass may have sent it and failed before recording the answer: ask first.
       const known = await this.sri.authorize(s.environment, accessKey, first);
-      if (known.outcome !== 'PENDING') return this.settle(row, s, known);
+      if (known.outcome !== 'PENDING') return this.settle(row, s, known, deadline);
       // No authorizations at all: the SRI does not know this access key yet.
       if (known.sriStatus === null) {
         const bytes = await this.signedBytes(row);
@@ -114,7 +120,7 @@ export class InvoiceEmitter {
       const budget = callBudget(deadline);
       if (!budget) return this.park(current);
       const answer = await this.sri.authorize(s.environment, accessKey, budget);
-      if (answer.outcome !== 'PENDING') return this.settle(current, s, answer);
+      if (answer.outcome !== 'PENDING') return this.settle(current, s, answer, deadline);
     }
     await this.park(current);
   }
@@ -123,9 +129,10 @@ export class InvoiceEmitter {
     row: InvoiceRequest,
     s: FiscalSnapshot,
     answer: AuthorizationResult,
+    deadline: number,
   ): Promise<void> {
     if (answer.outcome === 'AUTHORIZED') {
-      await this.applyStage(row, 'AUTHORIZED', {
+      const authorized = await this.applyStage(row, 'AUTHORIZED', {
         number: invoiceNumber({
           establishmentCode: s.establishmentCode,
           emissionPointCode: s.emissionPointCode,
@@ -134,6 +141,7 @@ export class InvoiceEmitter {
         authorizationNumber: answer.authorizationNumber,
         authorizedAt: answer.authorizedAt,
       });
+      if (authorized) await this.finish(authorized, deadline);
     } else {
       await this.applyStage(row, 'NOT_AUTHORIZED', {}, answer.messages);
     }
@@ -175,11 +183,11 @@ export class InvoiceEmitter {
                   JSON.stringify({ code: 'SRI_REJECTED', messages }),
                 )
               : null,
-          // A final answer frees the row; an AUTHORIZED one is claimed again for its artifacts.
+          // A final answer frees the row, except an AUTHORIZED one: this pass keeps its lease to
+          // store the files and send the e-mail, and finish() frees it.
           ...(final
             ? {
-                leaseToken: null,
-                leaseUntil: null,
+                ...(status === 'AUTHORIZED' ? {} : { leaseToken: null, leaseUntil: null }),
                 nextAttemptAt: new Date(),
                 finishedAt: new Date(),
               }
@@ -199,6 +207,41 @@ export class InvoiceEmitter {
         },
       });
       return updated;
+    });
+  }
+
+  /**
+   * Steps e and f for an authorized row, while the budget lasts, and then the lease is freed. What
+   * is still pending (a file, an e-mail to retry) is resumed by the reconcile claim after a backoff.
+   */
+  private async finish(row: InvoiceRequest, deadline: number): Promise<void> {
+    if (deadline - Date.now() >= MIN_CALL_MS) {
+      await this.artifacts.collect(row);
+      if (deadline - Date.now() >= MIN_CALL_MS) await this.delivery.deliver(row);
+    }
+    const where = { id: row.id, leaseToken: row.leaseToken, leaseUntil: { gt: new Date() } };
+    const current = await this.prisma.invoiceRequest.findFirst({ where });
+    if (!current) return;
+    const lackingFiles = !current.xmlStorageKey || !current.rideStorageKey;
+    const pending =
+      lackingFiles || (!current.emailedAt && current.emailAttempts < MAX_EMAIL_ATTEMPTS);
+    // A failed e-mail already scheduled its own retry; anything else waits one backoff step.
+    const backoff = pending && current.nextAttemptAt.getTime() <= Date.now();
+    await this.prisma.invoiceRequest.updateMany({
+      where,
+      data: {
+        leaseToken: null,
+        leaseUntil: null,
+        ...(backoff
+          ? {
+              attempts: { increment: 1 },
+              nextAttemptAt: new Date(
+                Date.now() +
+                  retryDelay(lackingFiles ? current.attempts + 1 : current.emailAttempts + 1),
+              ),
+            }
+          : {}),
+      },
     });
   }
 

@@ -60,6 +60,8 @@ describe('InvoiceEmitter preflight and signing', () => {
   let sessions: any[];
   let prisma: any;
   let sri: { send: jest.Mock; authorize: jest.Mock };
+  let artifacts: { collect: jest.Mock };
+  let delivery: { deliver: jest.Mock };
   let emitter: InvoiceEmitter;
   // Enough to sign, under the 4 s needed to start an SRI call: signing tests stop before sending.
   const deadline = () => Date.now() + 3000;
@@ -200,7 +202,17 @@ describe('InvoiceEmitter preflight and signing', () => {
     };
     const issuers = new IssuerService(prisma, crypto, {} as any);
     sri = { send: jest.fn(), authorize: jest.fn() };
-    emitter = new InvoiceEmitter(prisma, crypto, issuers, storage as any, sri as any);
+    artifacts = { collect: jest.fn() };
+    delivery = { deliver: jest.fn() };
+    emitter = new InvoiceEmitter(
+      prisma,
+      crypto,
+      issuers,
+      storage as any,
+      sri as any,
+      artifacts as any,
+      delivery as any,
+    );
   });
 
   it('fails safely before signing when the certificate expired', async () => {
@@ -618,6 +630,111 @@ describe('InvoiceEmitter preflight and signing', () => {
       expect(sri.authorize).toHaveBeenCalledTimes(1);
       expect(events).toEqual([expect.objectContaining({ type: 'REJECTED' })]);
       expect(JSON.stringify(events)).not.toContain('texto del SRI');
+    });
+
+    describe('after the authorization', () => {
+      const stores = () =>
+        Object.assign(stored, {
+          xmlStorageKey: 'xml',
+          rideStorageKey: 'ride',
+        });
+
+      it('stores the files and sends the e-mail under the same lease, then frees the row', async () => {
+        stored = { ...unsigned };
+        sri.authorize.mockResolvedValueOnce(unknown).mockResolvedValue(authorized);
+        sri.send.mockResolvedValue(received);
+        artifacts.collect.mockImplementation(async (claimed: any) => {
+          expect(claimed).toMatchObject({ status: 'AUTHORIZED', leaseToken: 'lease' });
+          stores();
+        });
+        delivery.deliver.mockImplementation(async () => {
+          expect(stored.leaseToken).toBe('lease');
+          stored.emailedAt = new Date();
+        });
+
+        await run(unsigned);
+
+        expect(artifacts.collect).toHaveBeenCalledTimes(1);
+        expect(artifacts.collect.mock.calls[0][0]).toMatchObject({
+          number: '001-002-000000500',
+          authorizationNumber: authorized.authorizationNumber,
+          authorizedAt: authorized.authorizedAt,
+        });
+        expect(artifacts.collect.mock.invocationCallOrder[0]).toBeLessThan(
+          delivery.deliver.mock.invocationCallOrder[0],
+        );
+        expect(stored).toMatchObject({ leaseToken: null, leaseUntil: null, attempts: 0 });
+        expect(events.map((e) => e.type)).toEqual(['SIGNED', 'RECEIVED', 'AUTHORIZED']);
+      });
+
+      it('schedules a backoff when a file is still missing', async () => {
+        sri.authorize.mockResolvedValue(authorized);
+        await run();
+        expect(stored).toMatchObject({ status: 'AUTHORIZED', leaseToken: null, attempts: 3 });
+        expect(stored.nextAttemptAt.getTime()).toBe(Date.now() + 30000 * 2 ** 2);
+      });
+
+      it('leaves the schedule alone when the row has nothing pending', async () => {
+        sri.authorize.mockResolvedValue(authorized);
+        delivery.deliver.mockImplementation(async () => {
+          stores();
+          stored.emailAttempts = 5;
+        });
+        const before = Date.now();
+        await run();
+        expect(stored).toMatchObject({ leaseToken: null, attempts: 2 });
+        expect(stored.nextAttemptAt.getTime()).toBe(before);
+      });
+
+      it('keeps the retry that a failed e-mail already scheduled', async () => {
+        sri.authorize.mockResolvedValue(authorized);
+        const retryAt = new Date(Date.now() + 60000);
+        delivery.deliver.mockImplementation(async () => {
+          stores();
+          Object.assign(stored, { emailAttempts: 1, nextAttemptAt: retryAt });
+        });
+        await run();
+        expect(stored).toMatchObject({ leaseToken: null, attempts: 2 });
+        expect(stored.nextAttemptAt).toBe(retryAt);
+      });
+
+      it('resumes a claimed authorized row without calling the SRI', async () => {
+        Object.assign(row, {
+          status: 'AUTHORIZED',
+          externalState: 'AUTHORIZED',
+          number: '001-002-000000500',
+          authorizationNumber: authorized.authorizationNumber,
+          authorizedAt: authorized.authorizedAt,
+        });
+        stored = { ...row, emailAttempts: 1, nextAttemptAt: new Date(Date.now() - 1000) };
+        await run();
+        expect(sri.authorize).not.toHaveBeenCalled();
+        expect(sri.send).not.toHaveBeenCalled();
+        expect(artifacts.collect).toHaveBeenCalledWith(row);
+        expect(delivery.deliver).toHaveBeenCalledWith(row);
+        expect(stored.leaseToken).toBeNull();
+        expect(stored.nextAttemptAt.getTime()).toBe(Date.now() + 30000 * 2 ** 2);
+      });
+
+      it('only frees the row when less than 4 s of budget remain', async () => {
+        sri.authorize.mockResolvedValue(authorized);
+        const deadline = Date.now() + 5000;
+        artifacts.collect.mockImplementation(async () => jest.setSystemTime(Date.now() + 2000));
+        await run(row, deadline);
+        expect(artifacts.collect).toHaveBeenCalledTimes(1);
+        expect(delivery.deliver).not.toHaveBeenCalled();
+        expect(stored.leaseToken).toBeNull();
+      });
+
+      it('does not touch a row whose lease was lost', async () => {
+        sri.authorize.mockResolvedValue(authorized);
+        artifacts.collect.mockImplementation(async () => {
+          stored.leaseToken = 'other';
+        });
+        await run();
+        expect(stored.leaseToken).toBe('other');
+        expect(stored.attempts).toBe(2);
+      });
     });
 
     it('authorizes with number and date and bills the sessions', async () => {
