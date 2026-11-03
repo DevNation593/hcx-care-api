@@ -41,6 +41,15 @@ describe('buildInvoiceXml', () => {
     expect(xml).not.toContain('<infoAdicional>');
   });
 
+  it('refuses the NEGOCIO_POPULAR regime, which the 1.1.0 XSD does not accept', () => {
+    const doc = sampleDocument({
+      issuer: { ...sampleDocument().issuer, rimpeRegime: 'NEGOCIO_POPULAR' },
+    });
+    expect(() => buildInvoiceXml(doc)).toThrow(
+      expect.objectContaining({ kind: 'configuration', code: 'RIMPE_REGIME_UNSUPPORTED' }),
+    );
+  });
+
   it('derives a stable main code for lines without a treatment or product code', () => {
     expect(mainCode({ ...sampleDocument().lines[0], code: undefined, localId: 'item-1' })).toMatch(
       /^HCX-[0-9A-F]{8}$/,

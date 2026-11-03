@@ -7,11 +7,13 @@ import { IVA_TAX_CODE } from './tax-catalog';
 const MAX_TEXT = 300;
 const MAX_CODE = 25;
 
-/** Annex 22 of the SRI technical sheet. */
-const RIMPE_LEGENDS: Record<RimpeRegime, string | null> = {
+/**
+ * Annex 22 of the SRI technical sheet. NEGOCIO_POPULAR is refused: the 1.1.0 XSD only
+ * accepts the EMPRENDEDOR legend in contribuyenteRimpe.
+ */
+const RIMPE_LEGENDS: Partial<Record<RimpeRegime, string | null>> = {
   NONE: null,
   EMPRENDEDOR: 'CONTRIBUYENTE RÉGIMEN RIMPE',
-  NEGOCIO_POPULAR: 'CONTRIBUYENTE NEGOCIO POPULAR - RÉGIMEN RIMPE',
 };
 
 function allowedInXml(c: number): boolean {
@@ -116,6 +118,9 @@ export function buildInvoiceXml(doc: InvoiceDocument): string {
   w.element('dirMatriz', issuer.headOfficeAddress);
   w.optional('agenteRetencion', issuer.withholdingAgentCode);
   const legend = RIMPE_LEGENDS[issuer.rimpeRegime];
+  if (issuer.rimpeRegime === 'NEGOCIO_POPULAR') {
+    throw new SriError('configuration', 'RIMPE_REGIME_UNSUPPORTED');
+  }
   if (legend === undefined) throw new SriError('configuration', 'RIMPE_REGIME_UNKNOWN');
   w.optional('contribuyenteRimpe', legend);
   w.close('infoTributaria');
