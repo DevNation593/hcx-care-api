@@ -266,7 +266,11 @@ describe('Product inventory: receipt, sale, invoice, cancel, transfer, adjustmen
       .set(as('master'))
       .set('Idempotency-Key', randomUUID())
       .expect(202);
-    expect(invoice.body.status).toBe('REQUESTED');
+    // The fixture issuer has no usable certificate: the inline attempt fails safely before signing
+    // (nothing reaches the SRI) and releases the order, while the snapshot keeps the product line.
+    expect(invoice.body.status).toBe('FAILED');
+    expect(invoice.body.lastError.code).toBe('INVOICING_CERTIFICATE_REQUIRED');
+    expect(invoice.body.sequential).toBeNull();
 
     const row = await prisma.invoiceRequest.findUniqueOrThrow({ where: { id: invoice.body.id } });
     const snapshot = JSON.parse(
@@ -282,9 +286,7 @@ describe('Product inventory: receipt, sale, invoice, cancel, transfer, adjustmen
         taxRatePercent: '15.00',
       }),
     ]);
-    expect((await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).status).toBe(
-      'INVOICED',
-    );
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('PAID');
   });
 
   it('3. a cancelled order returns its units to the lot they came from', async () => {
