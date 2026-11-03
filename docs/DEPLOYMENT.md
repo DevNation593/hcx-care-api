@@ -52,9 +52,9 @@ La API firma y envía las facturas (código `01`, XSD `1.1.0`) directamente a lo
 
 La variable del proveedor anterior ya no existe y `BACKEND_PUBLIC_URL` ya no se usa para facturar; quítelas del entorno si siguen configuradas. Pruebas locales: configure `DATABASE_URL` y `DATABASE_URL_TEST` hacia una base desechable y ejecute `npx jest --config test/jest-e2e.json --runInBand test/invoicing.e2e-spec.ts`, que usa un SRI simulado (`SRI_TEST_BASE_URL`, solo con `NODE_ENV=test`). Nunca la apunte a una base de clínicas reales.
 
-### Procedimiento de despliegue de las dos migraciones
+### Procedimiento de despliegue de las migraciones
 
-La base de Supabase es compartida con las demostraciones y con producción. Las migraciones son `20261102000000_own_sri_issuer` (crea emisor, secuenciales y columnas nuevas) y `20261102000100_drop_emite_facil` (elimina el proveedor anterior y sus datos). Haga primero una copia de seguridad de la base. Siga estos pasos en orden.
+La base de Supabase es compartida con las demostraciones y con producción. Las migraciones, en el orden en que se aplican, son `20261102000000_own_sri_issuer` (crea emisor, secuenciales y columnas nuevas), `20261102000100_drop_emite_facil` (elimina el proveedor anterior y sus datos), `20261102000200_restore_one_blocking_per_order` (restaura el índice de una sola solicitud pendiente o autorizada por orden) y `20261102000300_issuer_certificate_in_storage` (pasa el `.p12` del emisor al almacenamiento de archivos). La `20261102000300` borra cualquier certificado guardado en la base junto con su contraseña y sus metadatos: esos consultorios deben volver a subir el `.p12`, y sus solicitudes pendientes aún sin firmar terminan en `FAILED` con `INVOICING_CERTIFICATE_REQUIRED`. Haga primero una copia de seguridad de la base. Siga estos pasos en orden.
 
 #### 1. Antes de desplegar: auditoría de solo lectura
 
