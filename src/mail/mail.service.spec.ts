@@ -2,7 +2,7 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createTransport } from 'nodemailer';
 import { MailService } from './mail.service';
-import { describeDuration, invitationMail, passwordResetMail } from './mail.templates';
+import { describeDuration, invitationMail, invoiceMail, passwordResetMail } from './mail.templates';
 
 jest.mock('nodemailer', () => ({ createTransport: jest.fn() }));
 
@@ -34,6 +34,30 @@ describe('mail templates', () => {
     expect(mail.html).toContain('&lt;script&gt;');
     expect(mail.html).toContain('Centro &quot;A&amp;B&quot;');
     expect(mail.text).toContain('Centro "A&B"');
+  });
+
+  describe('invoice mail', () => {
+    const input = {
+      number: '001-002-000000123',
+      issuerName: 'Clínica <Ejemplo>',
+      customerName: 'María Pérez',
+      authorizedAt: new Date('2026-10-08T03:30:00Z'),
+    };
+
+    it('names the invoice, the issuer and the customer, with the Ecuador date', () => {
+      const mail = invoiceMail(input);
+      expect(mail.subject).toBe('Factura 001-002-000000123 de Clínica <Ejemplo>');
+      expect(mail.text).toContain('Hola María Pérez,');
+      expect(mail.text).toContain('07/10/2026');
+      expect(mail.html).toContain('Clínica &lt;Ejemplo&gt;');
+      expect(mail.html).not.toContain('<Ejemplo>');
+    });
+
+    it('never puts clinical data in the invoice mail', () => {
+      const mail = invoiceMail(input);
+      expect(mail.text).not.toMatch(/diagn|sesión|paciente/i);
+      expect(mail.html).not.toMatch(/diagn|sesión|paciente/i);
+    });
   });
 
   it.each([
@@ -130,6 +154,38 @@ describe('MailService', () => {
     expect(sent).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(warn.mock.calls[0][0]).toContain('http://localhost:4200/reset-password?token=dev-token');
+  });
+
+  describe('attachments', () => {
+    const attachments = [
+      { filename: 'factura-1.xml', content: Buffer.from('<a/>'), contentType: 'application/xml' },
+      { filename: 'factura-1.pdf', content: Buffer.from('%PDF'), contentType: 'application/pdf' },
+    ];
+    const content = { subject: 'Factura', html: '<p>x</p>', text: 'x', attachments };
+
+    it('sends them to the HTTP API as base64 files', async () => {
+      await expect(serviceWith(configured).send('ana@example.com', content)).resolves.toBe(true);
+      const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+      expect(body.attachments).toEqual([
+        { filename: 'factura-1.xml', content: Buffer.from('<a/>').toString('base64') },
+        { filename: 'factura-1.pdf', content: Buffer.from('%PDF').toString('base64') },
+      ]);
+    });
+
+    it('omits the field when there are none', async () => {
+      await serviceWith(configured).send('ana@example.com', { ...content, attachments: undefined });
+      expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).not.toHaveProperty('attachments');
+    });
+
+    it('passes them through SMTP as they are', async () => {
+      const sendMail = jest.fn().mockResolvedValue({});
+      (createTransport as unknown as jest.Mock).mockReset().mockReturnValue({ sendMail });
+      await serviceWith({ SMTP_HOST: 'smtp.example.test', EMAIL_FROM: 'a@b.test' }).send(
+        'ana@example.com',
+        content,
+      );
+      expect(sendMail.mock.calls[0][0].attachments).toEqual(attachments);
+    });
   });
 
   describe('through SMTP', () => {

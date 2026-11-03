@@ -1019,6 +1019,22 @@ describe('OrdersService', () => {
       expect(await rejection(service.eligibility('tenant-1', 'order-9'))).toBe('ORDER_NOT_FOUND');
     });
 
+    it('asks for invoicing setup unless the branch point belongs to an active issuer with a certificate', async () => {
+      prisma.order.findFirst.mockResolvedValue(orderForEligibility({ branchId: 'branch-1' }));
+      prisma.treatmentSession.findMany.mockResolvedValue([fullSession()]);
+      prisma.branchEmissionPoint.findFirst.mockResolvedValue(null);
+
+      const result = await service.eligibility('tenant-1', 'order-1');
+
+      expect(prisma.branchEmissionPoint.findFirst).toHaveBeenCalledWith({
+        where: {
+          branchId: 'branch-1',
+          issuer: { tenantId: 'tenant-1', active: true, certificateStorageKey: { not: null } },
+        },
+      });
+      expect(result.missing).toEqual(['INVOICING_NOT_CONFIGURED']);
+    });
+
     it('lists only sessions with no live item and not in a non-billable status', async () => {
       prisma.treatmentSession.findMany.mockResolvedValue([fullSession()]);
 

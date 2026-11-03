@@ -228,8 +228,8 @@ enum SessionMediaPhase {
 // ============================================
 
 model Tenant {
-  invoicingConnection InvoicingConnection?
-  invoiceRequests     InvoiceRequest[]
+  invoicingIssuer InvoicingIssuer?
+  invoiceRequests InvoiceRequest[]
 
   id                      String     @id @default(cuid())
   name                    String
@@ -2223,54 +2223,71 @@ enum InvoiceRequestStatus {
   FAILED
 }
 
-model InvoicingConnection {
-  id                     String                @id @default(cuid())
-  tenantId               String                @unique
-  tenant                 Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  apiKeyEncrypted        String
-  webhookSecretEncrypted String?
-  externalTenantId       String
-  taxpayerId             String
-  taxpayerName           String
-  taxpayerRuc            String
-  environment            String
-  active                 Boolean               @default(true)
-  revision               Int                   @default(1)
-  validatedAt            DateTime
-  createdAt              DateTime              @default(now())
-  updatedAt              DateTime              @updatedAt
-  points                 BranchEmissionPoint[]
-  refs                   InvoicingRef[]
-  requests               InvoiceRequest[]
-  events                 InvoiceRequestEvent[]
+enum RimpeRegime {
+  NONE
+  EMPRENDEDOR
+  NEGOCIO_POPULAR
+}
+
+// The clinic itself as SRI issuer: tax data, environment and its signing certificate.
+model InvoicingIssuer {
+  id                           String                @id @default(cuid())
+  tenantId                     String                @unique
+  tenant                       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  ruc                          String
+  legalName                    String
+  tradeName                    String?
+  headOfficeAddress            String
+  accountingRequired           Boolean
+  specialTaxpayerCode          String?
+  withholdingAgentCode         String?
+  rimpeRegime                  RimpeRegime           @default(NONE)
+  environment                  String
+  active                       Boolean               @default(true)
+  // FILE_STORAGE key of the .p12 bytes, encrypted with the tenant key; never returned or logged.
+  certificateStorageKey        String?
+  certificatePasswordEncrypted String?
+  certificateSubject           String?
+  certificateSerial            String?
+  certificateValidTo           DateTime?
+  // SHA-256 of the plaintext .p12 bytes, checked every time the file is read.
+  certificateSha256            String?
+  // Whether the certificate names the issuer RUC (false when it names none).
+  certificateRucVerified       Boolean               @default(false)
+  revision                     Int                   @default(1)
+  createdAt                    DateTime              @default(now())
+  updatedAt                    DateTime              @updatedAt
+  points                       BranchEmissionPoint[]
+  sequences                    InvoiceSequence[]
+  requests                     InvoiceRequest[]
+  events                       InvoiceRequestEvent[]
+}
+
+// Next sequential of an issuer series per environment. Gaps from rejected requests are fine.
+model InvoiceSequence {
+  id                String          @id @default(cuid())
+  issuerId          String
+  issuer            InvoicingIssuer @relation(fields: [issuerId], references: [id], onDelete: Restrict)
+  establishmentCode String
+  emissionPointCode String
+  environment       String
+  next              Int             @default(1)
+
+  @@unique([issuerId, establishmentCode, emissionPointCode, environment])
 }
 
 model BranchEmissionPoint {
-  id                String              @id @default(cuid())
-  branchId          String              @unique
-  branch            Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  connectionId      String
-  connection        InvoicingConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
-  establishmentId   String
-  emissionPointId   String
-  establishmentCode String
-  emissionPointCode String
-  updatedAt         DateTime            @updatedAt
+  id                   String          @id @default(cuid())
+  branchId             String          @unique
+  branch               Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  issuerId             String
+  issuer               InvoicingIssuer @relation(fields: [issuerId], references: [id], onDelete: Restrict)
+  establishmentCode    String
+  emissionPointCode    String
+  establishmentAddress String
+  updatedAt            DateTime        @updatedAt
 
-  @@index([connectionId])
-}
-
-model InvoicingRef {
-  id           String              @id @default(cuid())
-  connectionId String
-  connection   InvoicingConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
-  kind         String
-  localId      String
-  externalId   String
-  syncedHash   String
-  updatedAt    DateTime            @updatedAt
-
-  @@unique([connectionId, kind, localId])
+  @@unique([issuerId, establishmentCode, emissionPointCode])
 }
 
 model InvoiceRequest {
@@ -2279,27 +2296,27 @@ model InvoiceRequest {
   tenant                   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   orderId                  String
   order                    Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  connectionId             String
-  connection               InvoicingConnection   @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  issuerId                 String
+  issuer                   InvoicingIssuer       @relation(fields: [issuerId], references: [id], onDelete: Restrict)
   billingProfileId         String
   billingProfile           BillingProfile        @relation(fields: [billingProfileId], references: [id], onDelete: Restrict)
   requestedById            String
   requestedBy              User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
   status                   InvoiceRequestStatus  @default(REQUESTED)
   clientIdempotencyKey     String
-  providerIdempotencyKey   String                @unique
   snapshotEncrypted        String
-  providerBodyEncrypted    String?
-  providerBodyHash         String?
-  requiresReconciliation   Boolean               @default(false)
   replacesInvoiceRequestId String?               @unique
   replacesInvoiceRequest   InvoiceRequest?       @relation("InvoiceReplacement", fields: [replacesInvoiceRequestId], references: [id], onDelete: Restrict)
   replacedBy               InvoiceRequest?       @relation("InvoiceReplacement")
   rootRequestId            String
-  externalDocumentId       String?
   externalState            String?
   number                   String?
   accessKey                String?
+  sequential               String?
+  signedXmlStorageKey      String?
+  signedXmlSha256          String?
+  emailedAt                DateTime?
+  emailAttempts            Int                   @default(0)
   authorizationNumber      String?
   authorizedAt             DateTime?
   xmlStorageKey            String?
@@ -2317,7 +2334,7 @@ model InvoiceRequest {
   events                   InvoiceRequestEvent[]
 
   @@unique([tenantId, clientIdempotencyKey])
-  @@unique([connectionId, externalDocumentId])
+  @@unique([issuerId, accessKey])
   @@index([tenantId, requestedAt])
   @@index([status, nextAttemptAt, leaseUntil])
   @@index([orderId])
@@ -2325,17 +2342,15 @@ model InvoiceRequest {
 }
 
 model InvoiceRequestEvent {
-  id               String              @id @default(cuid())
-  connectionId     String
-  connection       InvoicingConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  id               String          @id @default(cuid())
+  issuerId         String
+  issuer           InvoicingIssuer @relation(fields: [issuerId], references: [id], onDelete: Restrict)
   invoiceRequestId String?
-  invoiceRequest   InvoiceRequest?     @relation(fields: [invoiceRequestId], references: [id], onDelete: Restrict)
+  invoiceRequest   InvoiceRequest? @relation(fields: [invoiceRequestId], references: [id], onDelete: Restrict)
   type             String
   source           String
   detail           Json
-  webhookEventId   String?
-  createdAt        DateTime            @default(now())
+  createdAt        DateTime        @default(now())
 
-  @@unique([connectionId, webhookEventId])
   @@index([invoiceRequestId, createdAt])
 }

@@ -9,7 +9,7 @@ import { SupabaseFileStorage } from '../src/patient-files/supabase-file-storage'
 
 export type StorageKeyDatabase = Pick<
   PrismaClient,
-  'patientFile' | 'consentDocument' | 'consentSignature' | 'invoiceRequest'
+  'patientFile' | 'consentDocument' | 'consentSignature' | 'invoiceRequest' | 'invoicingIssuer'
 >;
 
 export interface StorageCopySummary {
@@ -44,7 +44,7 @@ export function assertSupabaseProjectUrl(databaseUrl: string, supabaseUrl: strin
 export async function collectReferencedStorageKeys(
   database: StorageKeyDatabase,
 ): Promise<StorageObjectRef[]> {
-  const [files, documents, signatures, invoices] = await Promise.all([
+  const [files, documents, signatures, invoices, issuers] = await Promise.all([
     database.patientFile.findMany({ select: { storageKey: true, tenantId: true } }),
     database.consentDocument.findMany({
       where: { pdfStorageKey: { not: null } },
@@ -54,6 +54,10 @@ export async function collectReferencedStorageKeys(
     database.invoiceRequest.findMany({
       where: { OR: [{ xmlStorageKey: { not: null } }, { rideStorageKey: { not: null } }] },
       select: { xmlStorageKey: true, rideStorageKey: true, tenantId: true },
+    }),
+    database.invoicingIssuer.findMany({
+      where: { certificateStorageKey: { not: null } },
+      select: { certificateStorageKey: true, tenantId: true },
     }),
   ]);
 
@@ -65,6 +69,7 @@ export async function collectReferencedStorageKeys(
       { key: row.xmlStorageKey, tenantId: row.tenantId },
       { key: row.rideStorageKey, tenantId: row.tenantId },
     ]),
+    ...issuers.map((row) => ({ key: row.certificateStorageKey, tenantId: row.tenantId })),
   ];
   const unique = new Map<string, StorageObjectRef>();
   for (const ref of refs) {
