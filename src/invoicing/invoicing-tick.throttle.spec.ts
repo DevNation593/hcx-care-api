@@ -1,14 +1,23 @@
-import { INestApplication } from '@nestjs/common';
+import { Controller, INestApplication, Post } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { InvoicingTickController } from './invoicing-tick.controller';
 import { InvoiceWorkerService } from './invoice-worker.service';
-import { isTickRoute, tickThrottlers } from './invoicing-tick.throttle';
+import { TickAwareThrottlerGuard, buildThrottlers } from './invoicing-tick.throttle';
 
-const secret = 'tick-secret-value';
+const secret = 'tick-secret-value-0123456789abcdef-xyz';
 const valid = `Bearer ${secret}`;
+const WINDOW_MS = 2500;
+
+@Controller('other')
+class OtherController {
+  @Post()
+  hit() {
+    return { ok: true };
+  }
+}
 
 describe('invoicing tick throttling (SEC-API-05)', () => {
   const original = process.env.INVOICING_TICK_SECRET;
@@ -19,16 +28,13 @@ describe('invoicing tick throttling (SEC-API-05)', () => {
     process.env.INVOICING_TICK_SECRET = secret;
     worker = { tick: jest.fn().mockResolvedValue({ processed: 1 }) };
     const module = await Test.createTestingModule({
-      imports: [
-        ThrottlerModule.forRoot([
-          { ttl: 60_000, limit: 1000, skipIf: isTickRoute },
-          ...tickThrottlers,
-        ]),
-      ],
-      controllers: [InvoicingTickController],
+      // The same builder as AppModule; the default limit is 1, so a second valid tick call (or a
+      // second hit anywhere else) would 429 if the default throttler counted the tick.
+      imports: [ThrottlerModule.forRoot(buildThrottlers({ ttl: 60_000, limit: 1 }, WINDOW_MS))],
+      controllers: [InvoicingTickController, OtherController],
       providers: [
         { provide: InvoiceWorkerService, useValue: worker },
-        { provide: APP_GUARD, useClass: ThrottlerGuard },
+        { provide: APP_GUARD, useClass: TickAwareThrottlerGuard },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -40,9 +46,8 @@ describe('invoicing tick throttling (SEC-API-05)', () => {
     else process.env.INVOICING_TICK_SECRET = original;
   });
 
-  const post = (forwarded: string, authorization?: string) => {
-    const call = request(app.getHttpServer()).post('/internal/invoicing/tick');
-    call.set('X-Forwarded-For', forwarded);
+  const post = (forwarded: string, authorization?: string, path = '/internal/invoicing/tick') => {
+    const call = request(app.getHttpServer()).post(path).set('X-Forwarded-For', forwarded);
     return authorization === undefined ? call : call.set('Authorization', authorization);
   };
 
@@ -50,22 +55,36 @@ describe('invoicing tick throttling (SEC-API-05)', () => {
     for (let i = 0; i < 10; i++) await post(forwarded, 'Bearer wrong').expect(401);
   }
 
-  it('answers 429 to the 11th invalid attempt of a client within a minute', async () => {
+  it('answers 429 to the 11th invalid attempt, and also to the valid secret afterwards', async () => {
     await exhaust('203.0.113.1');
     await post('203.0.113.1', 'Bearer wrong').expect(429);
     await post('203.0.113.1').expect(429);
     await post('203.0.113.1', 'Basic ' + secret).expect(429);
+    await post('203.0.113.1', valid).expect(429);
     expect(worker.tick).not.toHaveBeenCalled();
   });
 
-  it('never blocks the valid secret because of a client that exhausted the invalid budget', async () => {
-    await exhaust('203.0.113.2');
-    await post('203.0.113.2', 'Bearer wrong').expect(429);
-    await post('203.0.113.2', valid).expect(200);
-    expect(worker.tick).toHaveBeenCalledTimes(1);
+  it('answers 429 to the valid secret right after the tenth invalid attempt', async () => {
+    await exhaust('203.0.113.7');
+    await post('203.0.113.7', valid).expect(429);
   });
 
-  it('still puts a ceiling of 30 per minute on the valid secret', async () => {
+  it('leaves other clients unaffected', async () => {
+    await exhaust('203.0.113.2');
+    await post('203.0.113.2', valid).expect(429);
+    await post('203.0.113.8', valid).expect(200);
+    await post('203.0.113.8', 'Bearer wrong').expect(401);
+  });
+
+  it('lets both kinds through again once the window ends', async () => {
+    await exhaust('203.0.113.9');
+    await post('203.0.113.9', valid).expect(429);
+    await new Promise((resolve) => setTimeout(resolve, WINDOW_MS + 150));
+    await post('203.0.113.9', valid).expect(200);
+    await post('203.0.113.9', 'Bearer wrong').expect(401);
+  });
+
+  it('keeps a ceiling of 30 per minute on the valid secret, not the default limit', async () => {
     for (let i = 0; i < 30; i++) await post('203.0.113.3', valid).expect(200);
     await post('203.0.113.3', valid).expect(429);
   });
@@ -76,10 +95,32 @@ describe('invoicing tick throttling (SEC-API-05)', () => {
     await post('203.0.113.5, 10.0.0.1', 'Bearer wrong').expect(401);
   });
 
-  it('counts nothing and answers 404 when no secret is configured', async () => {
-    delete process.env.INVOICING_TICK_SECRET;
-    for (let i = 0; i < 12; i++) await post('203.0.113.6', 'Bearer wrong').expect(404);
+  it('counts nothing and answers 404 when no usable secret is configured', async () => {
+    for (const unusable of [undefined, 'x'.repeat(31)]) {
+      if (unusable) process.env.INVOICING_TICK_SECRET = unusable;
+      else delete process.env.INVOICING_TICK_SECRET;
+      for (let i = 0; i < 12; i++) await post('203.0.113.6', 'Bearer wrong').expect(404);
+    }
     process.env.INVOICING_TICK_SECRET = secret;
     await post('203.0.113.6', 'Bearer wrong').expect(401);
+  });
+
+  it('never applies the tick throttlers to other routes', async () => {
+    // A roomy default limit, so only the tick throttlers could answer 429 below.
+    await app.close();
+    const module = await Test.createTestingModule({
+      imports: [ThrottlerModule.forRoot(buildThrottlers({ ttl: 60_000, limit: 1000 }, WINDOW_MS))],
+      controllers: [InvoicingTickController, OtherController],
+      providers: [
+        { provide: InvoiceWorkerService, useValue: worker },
+        { provide: APP_GUARD, useClass: TickAwareThrottlerGuard },
+      ],
+    }).compile();
+    app = module.createNestApplication();
+    await app.init();
+
+    for (let i = 0; i < 15; i++) await post('203.0.113.10', 'Bearer wrong', '/other').expect(201);
+    for (let i = 0; i < 15; i++) await post('203.0.113.10', undefined, '/other').expect(201);
+    await post('203.0.113.10', valid, '/other').expect(201);
   });
 });

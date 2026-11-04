@@ -9,7 +9,7 @@ jest.mock('crypto', () => {
   return { ...actual, timingSafeEqual: jest.fn(actual.timingSafeEqual) };
 });
 
-const secret = 'tick-secret-value';
+const secret = 'tick-secret-value-0123456789abcdef-xyz';
 
 describe('InvoicingTickController', () => {
   const original = process.env.INVOICING_TICK_SECRET;
@@ -30,6 +30,18 @@ describe('InvoicingTickController', () => {
     delete process.env.INVOICING_TICK_SECRET;
     expect(() => controller.tick(`Bearer ${secret}`)).toThrow(NotFoundException);
     expect(worker.tick).not.toHaveBeenCalled();
+  });
+
+  it('treats a secret under 32 characters as unset: 404, and a boot warning without the value', () => {
+    const short = 'x'.repeat(31);
+    process.env.INVOICING_TICK_SECRET = short;
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    controller = new InvoicingTickController(worker as any);
+    expect(() => controller.tick(`Bearer ${short}`)).toThrow(NotFoundException);
+    expect(worker.tick).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).not.toContain(short);
+    warn.mockRestore();
   });
 
   it.each([undefined, '', 'Bearer', 'Bearer x', 'Basic ' + secret, 'Bearer ' + secret + 'x'])(
