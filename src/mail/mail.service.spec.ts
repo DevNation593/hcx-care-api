@@ -156,6 +156,64 @@ describe('MailService', () => {
     expect(warn.mock.calls[0][0]).toContain('http://localhost:4200/reset-password?token=dev-token');
   });
 
+  describe('invoice mail (SEC-API-12)', () => {
+    const invoice = () =>
+      invoiceMail({
+        number: '001-002-000000123',
+        issuerName: 'Centro Ejemplo',
+        customerName: 'María Pérez Secreta',
+        authorizedAt: new Date('2026-10-08T03:30:00Z'),
+      });
+    const logged = () => JSON.stringify([warn.mock.calls, error.mock.calls]);
+
+    it.each(['development', 'test', undefined, 'production'])(
+      'logs neither the recipient, the body nor the customer with no provider (NODE_ENV %s)',
+      async (env) => {
+        const content = invoice();
+        content.attachments = [
+          { filename: 'f-secreta.xml', content: Buffer.from('x'), contentType: 'application/xml' },
+        ];
+        const config = env ? { NODE_ENV: env } : {};
+
+        await expect(
+          serviceWith(config).send('cliente.secreto@example.com', content),
+        ).resolves.toBe(false);
+
+        const output = logged();
+        expect(output).toContain('Factura 001-002-000000123 de Centro Ejemplo');
+        for (const leaked of ['cliente.secreto', 'María', 'Pérez', 'Adjuntamos', 'f-secreta']) {
+          expect(output).not.toContain(leaked);
+        }
+      },
+    );
+
+    it('does not echo the provider error, which may quote the address, when sending fails', async () => {
+      const sendMail = jest.fn().mockRejectedValue(new Error('550 <cliente.secreto@example.com>'));
+      (createTransport as jest.Mock).mockReturnValue({ sendMail });
+
+      await expect(
+        serviceWith({ SMTP_HOST: 'smtp.example.test', EMAIL_FROM: 'a@example.test' }).send(
+          'cliente.secreto@example.com',
+          invoice(),
+        ),
+      ).resolves.toBe(false);
+
+      expect(logged()).not.toContain('cliente.secreto');
+      expect(error).toHaveBeenCalledTimes(1);
+    });
+
+    it('still prints a password reset locally, as before', async () => {
+      await serviceWith({ NODE_ENV: 'development' }).sendPasswordReset('ana@x.com', {
+        firstName: 'Ana',
+        token: 'dev-token',
+        expiresIn: '1h',
+      });
+
+      expect(warn.mock.calls[0][0]).toContain('ana@x.com');
+      expect(warn.mock.calls[0][0]).toContain('token=dev-token');
+    });
+  });
+
   describe('attachments', () => {
     const attachments = [
       { filename: 'factura-1.xml', content: Buffer.from('<a/>'), contentType: 'application/xml' },

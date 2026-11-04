@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bull';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
@@ -35,6 +35,7 @@ import { ConsentsModule } from './consents/consents.module';
 import { BillingProfilesModule } from './billing-profiles/billing-profiles.module';
 import { CashRegistersModule } from './cash-registers/cash-registers.module';
 import { InvoicingModule } from './invoicing/invoicing.module';
+import { TickAwareThrottlerGuard, buildThrottlers } from './invoicing/invoicing-tick.throttle';
 import { OrdersModule } from './orders/orders.module';
 import { TreatmentsModule } from './treatments/treatments.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -60,12 +61,9 @@ const throttleTtlMs = throttleTtlRaw < 1000 ? throttleTtlRaw * 1000 : throttleTt
     }),
 
     // Rate limiting
-    ThrottlerModule.forRoot([
-      {
-        ttl: throttleTtlMs,
-        limit: parseInt(process.env.THROTTLE_LIMIT) || 10,
-      },
-    ]),
+    ThrottlerModule.forRoot(
+      buildThrottlers({ ttl: throttleTtlMs, limit: parseInt(process.env.THROTTLE_LIMIT) || 10 }),
+    ),
 
     // Cron jobs. The subscription lifecycle runs here even without Redis.
     ScheduleModule.forRoot(),
@@ -127,7 +125,7 @@ const throttleTtlMs = throttleTtlRaw < 1000 ? throttleTtlRaw * 1000 : throttleTt
   providers: [
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: TickAwareThrottlerGuard,
     },
   ],
 })
