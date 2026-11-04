@@ -60,8 +60,9 @@ export class MailService {
 
   async send(to: string, content: MailContent): Promise<boolean> {
     if (!this.isConfigured) {
-      if (this.isProduction) {
-        // Never log the body here: it carries links that grant access to the account.
+      if (this.isProduction || content.sensitive) {
+        // Never log the body here: it carries links that grant access to the account. A message
+        // flagged sensitive (invoices) is never printed, in any environment, and not addressed either.
         this.logger.error(`E-mail "${content.subject}" not sent: mail provider is not configured`);
       } else {
         // Outside production the message is printed so the flow can be followed locally.
@@ -115,8 +116,11 @@ export class MailService {
       }
       return true;
     } catch (error) {
+      // The provider text may quote the recipient, so sensitive messages do not repeat it.
       this.logger.error(
-        `E-mail "${content.subject}" could not be sent: ${(error as Error).message}`,
+        content.sensitive
+          ? `E-mail "${content.subject}" could not be sent`
+          : `E-mail "${content.subject}" could not be sent: ${(error as Error).message}`,
       );
       return false;
     }

@@ -107,7 +107,7 @@ $$);
 
 El secreto queda guardado en el texto de la tarea; solo quien administra el proyecto de Supabase puede verlo. Para rotarlo, cambie la variable en Vercel, redespliegue y ejecute `select cron.unschedule('hcx-invoicing-tick');` seguido del bloque anterior con el valor nuevo.
 
-La ruta no tiene límite de peticiones: la protege el secreto, comparado en tiempo constante, y los ticks concurrentes son seguros (`FOR UPDATE SKIP LOCKED` y presupuesto acotado de 45 s). Sin `INVOICING_TICK_SECRET` responde 404; con un secreto incorrecto, 401.
+La ruta está protegida por el secreto, comparado en tiempo constante, y por límites de peticiones por cliente (la IP es el primer valor de `X-Forwarded-For`, que Vercel fija con la IP real): los intentos con secreto ausente o incorrecto se limitan a 10 por minuto y luego responden 429, sin afectar a las llamadas con el secreto válido, que tienen su propio tope de 30 por minuto. Los ticks concurrentes son seguros (`FOR UPDATE SKIP LOCKED` y presupuesto acotado de 45 s). Sin `INVOICING_TICK_SECRET` responde 404 (sin contar intentos); con un secreto incorrecto, 401.
 
 Cómo revisar que corre:
 

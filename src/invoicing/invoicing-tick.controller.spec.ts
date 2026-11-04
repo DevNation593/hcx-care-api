@@ -50,10 +50,10 @@ describe('InvoicingTickController', () => {
     expect(worker.tick).not.toHaveBeenCalled();
   });
 
-  it('is not throttled', () => {
-    expect(
-      Reflect.getMetadata(`THROTTLER:SKIPdefault`, InvoicingTickController.prototype.tick),
-    ).toBe(true);
+  it('is no longer exempt from throttling and is marked for the tick throttlers', () => {
+    const handler = InvoicingTickController.prototype.tick;
+    expect(Reflect.getMetadata(`THROTTLER:SKIPdefault`, handler)).toBeUndefined();
+    expect(Reflect.getMetadata('invoicing:tick-route', handler)).toBe(true);
   });
 
   it('runs one tick with the right secret', async () => {

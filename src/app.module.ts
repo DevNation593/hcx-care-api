@@ -35,6 +35,7 @@ import { ConsentsModule } from './consents/consents.module';
 import { BillingProfilesModule } from './billing-profiles/billing-profiles.module';
 import { CashRegistersModule } from './cash-registers/cash-registers.module';
 import { InvoicingModule } from './invoicing/invoicing.module';
+import { isTickRoute, tickThrottlers } from './invoicing/invoicing-tick.throttle';
 import { OrdersModule } from './orders/orders.module';
 import { TreatmentsModule } from './treatments/treatments.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -64,7 +65,10 @@ const throttleTtlMs = throttleTtlRaw < 1000 ? throttleTtlRaw * 1000 : throttleTt
       {
         ttl: throttleTtlMs,
         limit: parseInt(process.env.THROTTLE_LIMIT) || 10,
+        // The scheduler tick has its own throttlers (see invoicing-tick.throttle.ts).
+        skipIf: isTickRoute,
       },
+      ...tickThrottlers,
     ]),
 
     // Cron jobs. The subscription lifecycle runs here even without Redis.
