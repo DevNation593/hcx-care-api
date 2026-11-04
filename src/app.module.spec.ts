@@ -16,5 +16,6 @@ describe('AppModule', () => {
         }),
       ]),
     );
+    expect(TickAwareThrottlerGuard.prototype).toBeInstanceOf(ThrottlerGuard);
   });
 });

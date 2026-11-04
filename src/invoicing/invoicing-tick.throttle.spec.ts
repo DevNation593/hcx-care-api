@@ -10,6 +10,7 @@ import { TickAwareThrottlerGuard, buildThrottlers } from './invoicing-tick.throt
 const secret = 'tick-secret-value-0123456789abcdef-xyz';
 const valid = `Bearer ${secret}`;
 const WINDOW_MS = 2500;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 @Controller('other')
 class OtherController {
@@ -82,6 +83,36 @@ describe('invoicing tick throttling (SEC-API-05)', () => {
     await new Promise((resolve) => setTimeout(resolve, WINDOW_MS + 150));
     await post('203.0.113.9', valid).expect(200);
     await post('203.0.113.9', 'Bearer wrong').expect(401);
+  });
+
+  it('answers a right and a wrong guess identically once the budget is spent', async () => {
+    await exhaust('203.0.113.13');
+    const wrong = await post('203.0.113.13', 'Bearer wrong').expect(429);
+    const right = await post('203.0.113.13', valid).expect(429);
+    const comparable = (headers: Record<string, any>) =>
+      Object.fromEntries(
+        Object.entries(headers).filter(
+          ([name]) => !['date', 'etag', 'content-length'].includes(name),
+        ),
+      );
+    expect(right.body).toEqual(wrong.body);
+    expect(Object.keys(right.headers).sort()).toEqual(Object.keys(wrong.headers).sort());
+    expect(comparable(right.headers)).toEqual(comparable(wrong.headers));
+    expect(Object.keys(right.headers).filter((name) => /rate|retry/i.test(name))).toEqual([]);
+  });
+
+  it('keeps the lockout while blocked even after the counted hits decayed below the limit', async () => {
+    const client = '203.0.113.14';
+    for (let i = 0; i < 2; i++) await post(client, 'Bearer wrong').expect(401);
+    await sleep(WINDOW_MS * 0.7);
+    // Nine more bring the count to 11: blocked until one window after this moment.
+    for (let i = 0; i < 8; i++) await post(client, 'Bearer wrong').expect(401);
+    await post(client, 'Bearer wrong').expect(429);
+    // The first two hits expire; the count falls to 9 but the block lasts.
+    await sleep(WINDOW_MS * 0.45);
+    await post(client, valid).expect(429);
+    await sleep(WINDOW_MS * 0.7);
+    await post(client, valid).expect(200);
   });
 
   it('keeps a ceiling of 30 per minute on the valid secret, not the default limit', async () => {

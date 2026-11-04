@@ -15,6 +15,9 @@ import { timingSafeEqual } from 'crypto';
  *  - the route is skipped by the global default throttler (it would count both kinds in one bucket),
  *    and these two skip every other route.
  *
+ * Neither tick throttler sets rate-limit headers (setHeaders: false): Retry-After and friends would
+ * tell a right guess from a wrong one once the client is locked out.
+ *
  * A secret shorter than 32 characters counts as unset: the route answers 404 and nothing is counted,
  * so the limiter reveals nothing about whether a secret is configured.
  *
@@ -77,6 +80,7 @@ export function buildThrottlers(
       ttl: windowMs,
       limit: INVALID_TICK_ATTEMPTS_PER_MINUTE,
       getTracker: tickClient,
+      setHeaders: false,
       skipIf: (context) => !countsAsInvalid(context),
     },
     {
@@ -84,6 +88,7 @@ export function buildThrottlers(
       ttl: windowMs,
       limit: VALID_TICK_CALLS_PER_MINUTE,
       getTracker: tickClient,
+      setHeaders: false,
       skipIf: (context) => !countsAsValid(context),
     },
   ];
@@ -102,16 +107,23 @@ export class TickAwareThrottlerGuard extends ThrottlerGuard {
       const key = props.generateKey(props.context, tracker, 'tick-invalid');
       const record = (this.storageService as any).storage?.get?.(key);
       const used: number = record?.totalHits?.get('tick-invalid') ?? 0;
-      if (record && used >= INVALID_TICK_ATTEMPTS_PER_MINUTE && record.expiresAt > Date.now()) {
+      const now = Date.now();
+      // Blocked: the library keeps the block for one window after the 11th hit, while the counted
+      // hits keep decaying, so the count alone can fall below the limit during the block.
+      const blocked = !!record?.isBlocked && record.blockExpiresAt > now;
+      const spent = used >= INVALID_TICK_ATTEMPTS_PER_MINUTE && record?.expiresAt > now;
+      if (record && (blocked || spent)) {
         await this.throwThrottlingException(props.context, {
           limit: INVALID_TICK_ATTEMPTS_PER_MINUTE,
           ttl: props.ttl,
           key,
           tracker,
           totalHits: used,
-          timeToExpire: Math.ceil((record.expiresAt - Date.now()) / 1000),
+          timeToExpire: Math.ceil((Math.max(record.expiresAt, record.blockExpiresAt) - now) / 1000),
           isBlocked: true,
-          timeToBlockExpire: Math.ceil((record.expiresAt - Date.now()) / 1000),
+          timeToBlockExpire: Math.ceil(
+            (Math.max(record.expiresAt, record.blockExpiresAt) - now) / 1000,
+          ),
         });
       }
     }
