@@ -239,6 +239,17 @@ describe('PaymentsService', () => {
       expect(await rejection(refund())).toBe('PAYMENT_NOT_REFUNDABLE');
     });
 
+    it('refuses while the order has a pending or authorized invoice', async () => {
+      await record('10.00');
+      prisma.invoiceRequest.findFirst.mockResolvedValue({ id: 'invoice-1', status: 'PROCESSING' });
+      expect(await rejection(refund())).toBe('PAYMENT_NOT_REFUNDABLE');
+      expect(prisma.invoiceRequest.findFirst.mock.calls.at(-1)![0].where).toEqual({
+        tenantId: 'tenant-1',
+        orderId: order.id,
+        status: { in: ['REQUESTED', 'PROCESSING', 'AUTHORIZED'] },
+      });
+    });
+
     it('404 for an unknown payment', async () => {
       expect(await rejection(service.refund('tenant-1', 'user-1', 'nope', { reason: 'x' }))).toBe(
         'PAYMENT_NOT_FOUND',

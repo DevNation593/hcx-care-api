@@ -1,8 +1,6 @@
 ## Billing
 
-The `/billing/invoices` routes preserve the read-only history of Faktur invoices.
-New electronic invoices use the durable emite-facil request endpoints below. Historical
-routes require a JWT, the `MASTER` role and the `billing.view` permission.
+Las rutas `/billing/invoices` conservan el historial de solo lectura de las facturas de Faktur. Las facturas electrónicas nuevas las emite la propia API directamente al SRI con las rutas de abajo. Las rutas históricas exigen JWT, rol `MASTER` y el permiso `billing.view`.
 
 ### List invoices
 
@@ -12,72 +10,38 @@ routes require a JWT, the `MASTER` role and the `billing.view` permission.
 
 `GET /api/v1/tenants/:tenantId/billing/invoices/:invoiceId`
 
-### Electronic invoicing (emite-facil)
+### Facturación electrónica (SRI)
 
-All tenant routes require JWT and the `core.billing` section. Configuration is
-restricted to MASTER. Request creation requires `billing.create`; list, detail and
-downloads require `billing.view`. MASTER has these permissions by default; PROFESIONAL and
-ASISTENTE can use invoice workflows when the platform grants them to their clinic role
-through the existing RolesGuard/PermissionGuard. Configuration remains MASTER-only.
+Todas las rutas de tenant exigen JWT y la sección `core.billing.invoicing`. Acceso por ruta: `GET/PUT /invoicing/issuer`, `PUT /invoicing/issuer/certificate`, `POST /invoicing/test` y `PUT /branches/:branchId/emission-point` son solo del titular (`MASTER`). `POST /orders/:id/invoice-requests` exige el permiso `billing.create`; `GET /invoice-requests`, `/:id`, `/:id/xml` y `/:id/ride` exigen `billing.view`. Esos permisos los tienen por defecto `MASTER` y `CAJERO`, y `PROFESIONAL` y `ASISTENTE` solo si la plataforma se los concede (`RolesGuard` + `PermissionGuard`).
 
-| Method | Path after `/api/v1/tenants/:tenantId` | Body / response |
+| Método | Ruta tras `/api/v1/tenants/:tenantId` | Cuerpo / respuesta |
 | --- | --- | --- |
-| GET | `/invoicing/connection` | Connection metadata or JSON null |
-| PUT | `/invoicing/connection` | `{taxpayerId, apiKey?, active?, webhookSecret?}` -> metadata |
-| POST | `/invoicing/test` | `{apiKey?}` -> `{tenant,taxpayers}`; 200, never saves credentials |
-| GET | `/invoicing/options` | `{tenant,taxpayers:[{...taxpayer,establishments:[{...establishment,emissionPoints:[]}]}]}` |
-| PUT | `/branches/:branchId/emission-point` | `{establishmentId,emissionPointId}` -> saved point with branchId and three-digit codes |
-| POST | `/orders/:id/invoice-requests` | No body. Required `Idempotency-Key` header; 202 with durable request |
-| GET | `/invoice-requests` | `{items,total,page,pageSize}` |
-| GET | `/invoice-requests/:id` | Request plus safe event timeline |
-| GET | `/invoice-requests/:id/xml` | Authorized XML bytes, `application/xml` |
-| GET | `/invoice-requests/:id/ride` | RIDE PDF bytes, `application/pdf` |
+| GET | `/invoicing/issuer` | Emisor (o `null`), metadatos del certificado sin secretos y puntos con su siguiente secuencial |
+| PUT | `/invoicing/issuer` | `{ruc, legalName, tradeName?, headOfficeAddress, accountingRequired, specialTaxpayerCode?, withholdingAgentCode?, rimpeRegime, environment, active?, revision?}` -> emisor |
+| PUT | `/invoicing/issuer/certificate` | `multipart/form-data`: `file` (`.p12`/`.pfx`, máx. 50 KB) y `password`. Valida y devuelve los metadatos del certificado |
+| POST | `/invoicing/test` | Sin cuerpo; 200. `{certificateValid, certificateError, rucVerified, sriReachable}` (certificado válido y del RUC, y servicios del SRI del ambiente responden). No guarda nada |
+| PUT | `/branches/:branchId/emission-point` | `{establishmentCode, emissionPointCode, establishmentAddress, nextSequential?}` (códigos de tres dígitos, no `000`) -> punto guardado |
+| POST | `/orders/:id/invoice-requests` | Sin cuerpo. Cabecera `Idempotency-Key` obligatoria; 202 con la solicitud tras el intento inline |
+| GET | `/invoice-requests` | `{items, total, page, pageSize}` |
+| GET | `/invoice-requests/:id` | Solicitud más línea de tiempo de eventos seguros |
+| GET | `/invoice-requests/:id/xml` | Bytes del XML autorizado, `application/xml` |
+| GET | `/invoice-requests/:id/ride` | Bytes del RIDE, `application/pdf` |
+| POST | `/api/v1/internal/invoicing/tick` | Sin JWT; `Authorization: Bearer <INVOICING_TICK_SECRET>`. Ver más abajo |
 
-List accepts `status=REQUESTED|PROCESSING|AUTHORIZED|REJECTED|FAILED`, `branchId`,
-`orderId`, `patientId`, `page` (1-based, default 1), `pageSize` (1..100, default 20).
-List/detail permit 120 requests/minute per caller for polling every five seconds.
+Las rutas `GET/PUT /invoicing/connection`, `GET /invoicing/options` y el webhook público del proveedor anterior se eliminaron.
 
-Connection metadata: `{id,active,externalTenantId,taxpayerId,taxpayerName,taxpayerRuc,
-environment,hasApiKey,hasWebhookSecret,revision,validatedAt,webhookUrl,points}`.
-Environment is `'1'` (test) or `'2'` (production), read from the provider issuer.
-`webhookUrl` is null if BACKEND_PUBLIC_URL is absent/invalid. No secret is returned.
-Omit `apiKey` to reuse it; omit `webhookSecret` to preserve it, send `""` to remove it.
-`active` defaults to true on PUT. A new key is tested before saving. Company/issuer
-identity is immutable once any request exists; same-identity key rotation is supported.
-Same-issuer environment refresh is allowed only without active/uncertain requests or
-authorized artifacts awaiting collection. Identity changes before first use invalidate
-branch points; key rotation and environment refresh preserve them and dispatch rechecks them.
+**Emisor.** `environment` es `'1'` (pruebas, `celcer.sri.gob.ec`) o `'2'` (producción, `cel.sri.gob.ec`). `rimpeRegime` es `NONE`, `EMPRENDEDOR` o `NEGOCIO_POPULAR`; este último se rechaza con 422 `RIMPE_REGIME_UNSUPPORTED` hasta verificar el XSD oficial. El RUC queda fijo desde la primera solicitud (`INVOICING_IDENTITY_LOCKED`). Cambiar de ambiente exige no tener solicitudes `REQUESTED`/`PROCESSING` ni `AUTHORIZED` sin artefactos (`INVOICING_ENVIRONMENT_BUSY`). Enviar `revision` evita pisar un cambio concurrente (`INVOICING_CONFIGURATION_CHANGED`). Nunca se devuelven el `.p12`, su clave de almacenamiento ni su contraseña. El `.p12` se guarda cifrado en el almacenamiento de archivos (no en la base) y `certificate.sha256` es el SHA-256 del archivo subido; si el almacenamiento no responde, `PUT /invoicing/issuer/certificate` y un cambio de RUC responden 503 `INVOICING_CERTIFICATE_UNAVAILABLE`, y `POST /invoicing/test` lo informa en `certificateError`. Cada escritura deja auditoría: `ISSUER_SAVED`, `CERTIFICATE_REPLACED` (con el SHA-256) y `EMISSION_POINT_SAVED`.
 
-Request responses expose `{id,orderId,orderNumber,branchId,billingProfileId,status,
-requiresReconciliation,replacesInvoiceRequestId,externalDocumentId,externalState,number,
-accessKey,authorizationNumber,authorizedAt,artifacts:{xml,ride},attempts,lastError,
-requestedAt,finishedAt}`. Nullable fiscal values remain null until known. `lastError`
-is null or `{code,message,attempts?}`; attempts contain actual SRI explanations, visible
-only through GET/list/detail guarded by `billing.view`. Every POST response is an
-acceptance receipt with `lastError:null`, including same-key and collision replays;
-POST never decrypts stored errors and requires only `billing.create`. Detail additionally returns `events` with
-`{id,type,source,detail,createdAt}`. No credentials, fiscal snapshots, storage keys or
-leases are exposed. The exact typed contract and examples are in
-`./superpowers/reports/2026-10-17-emite-facil-b2-backend.md`.
+**Listado.** Acepta `status=REQUESTED|PROCESSING|AUTHORIZED|REJECTED|FAILED`, `branchId`, `orderId`, `patientId`, `page` (desde 1, por defecto 1) y `pageSize` (1 a 100, por defecto 20). Listado y detalle admiten 120 peticiones por minuto por usuario.
 
-Creation performs no provider HTTP call. Keep the same client key after a transport
-failure; reusing it for the same order returns the same request, for another order 409.
-Only a known safe FAILED or REJECTED request permits correction and a new key. Never
-offer reissue/refund when `requiresReconciliation` is true, even if status is FAILED.
-SIGNATURE_FAILED stays PROCESSING: correct/retry that same document in emite-facil;
-HCX keeps reconciling it. Authorized invoices cannot be cancelled/refunded in HCX.
+**Solicitud.** La respuesta expone `{id, orderId, orderNumber, branchId, billingProfileId, status, replacesInvoiceRequestId, externalState, number, sequential, accessKey, authorizationNumber, authorizedAt, artifacts: {xml, ride}, emailedAt, attempts, lastError, requestedAt, finishedAt}`; el detalle añade `events` con `{id, type, source, detail, createdAt}`. Los valores fiscales son `null` hasta conocerse. `lastError` es `null` o `{code, message}` y contiene la explicación del SRI solo para quien tiene `billing.view`; la respuesta del POST la omite (`lastError: null`) si el usuario no tiene `billing.view`. No se exponen credenciales, claves de almacenamiento ni leases.
 
-Errors use `{statusCode,code,message}` with controlled Spanish messages. Eligibility
-422 uses the existing `{statusCode,code,message,missing,items}` billing eligibility
-contract. Examples: INVOICING_NOT_CONFIGURED, INVOICE_LIMIT_REACHED,
-INVOICE_REQUEST_IN_PROGRESS, INVOICE_RECONCILIATION_REQUIRED, ORDER_ALREADY_AUTHORIZED,
-CUSTOMER_SYNC_REQUIRED. An unavailable artifact returns 404; integrity failures 503.
+**Creación.** `POST .../invoice-requests` crea la solicitud `REQUESTED`, confirma y, en la misma petición, intenta avanzar hasta 15 s (firma, recepción, autorización y artefactos). Si el intento falla o el SRI aún no responde, la solicitud sigue existiendo y la reanuda el tick; la respuesta trae el estado alcanzado. Repetir la misma clave para la misma orden devuelve la misma solicitud; para otra orden, 409. Solo una solicitud `FAILED` o `REJECTED` permite corregir y emitir de nuevo (con secuencial nuevo). Una solicitud firmada nunca pasa a `FAILED`: termina en `AUTHORIZED` o `REJECTED` según el SRI.
 
-Public callback: `POST /api/v1/integrations/emite-facil/webhook/:connectionId` -> 204.
-No JWT; requires authentic raw-body signature in `webhook-id`, `webhook-timestamp`,
-`webhook-signature`, rejects invalid signatures/foreign company with 401. Limit300/min.
-Register its URL and secret manually in emite-facil. No API-key subscription management
-is attempted; minute reconciliation works without webhook.
+**Tick.** `POST /api/v1/internal/invoicing/tick` (`@Public`, sin guards de tenant) lo llama cada minuto `pg_cron` + `pg_net` (ver `DEPLOYMENT.md`). Sin `INVOICING_TICK_SECRET` responde 404; con un secreto distinto, 401; la comparación es en tiempo constante. Responde 200 con el resumen del lote y trabaja hasta 45 s. Límite por cliente (primer valor de `X-Forwarded-For`, si no la IP del socket): 10 intentos por minuto con secreto ausente o incorrecto, luego 429; agotados, toda petición de ese cliente (también con el secreto correcto) responde 429 hasta que termina la ventana; las llamadas válidas tienen además un tope propio de 30 por minuto. Un secreto de menos de 32 caracteres cuenta como no configurado (404). Los ticks concurrentes son seguros.
+
+**Errores.** Formato `{statusCode, code, message}` con mensajes controlados en español. La elegibilidad 422 conserva el contrato `{statusCode, code, message, missing, items}`. Ejemplos: `INVOICING_NOT_CONFIGURED`, `INVOICING_CERTIFICATE_REQUIRED`, `INVOICING_ENCRYPTION_REQUIRED`, `INVOICING_SERIES_TAKEN`, `INVOICING_SEQUENCE_BACKWARDS`, `INVOICE_LIMIT_REACHED`, `INVOICE_REQUEST_IN_PROGRESS`, `ORDER_ALREADY_AUTHORIZED`, `RIMPE_REGIME_UNSUPPORTED`. Un artefacto aún no disponible devuelve 404 y un fallo de integridad, 503.
+
 # API Endpoints Reference
 
 Base URL: `http://localhost:3000/api/v1`
