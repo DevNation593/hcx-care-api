@@ -128,9 +128,14 @@ describe('local clinical file migration', () => {
 
     const source = new MemoryStorage();
     const destination = new MemoryStorage();
-    source.objects.set('invoices/signed', Buffer.from('<factura/>'));
-    await copyEncryptedStorageObjects(refs, source, destination, CIPHER, true);
-    expect(destination.objects.has('invoices/signed')).toBe(true);
+    const encrypted = CIPHER.encryptBuffer('tenant-a', Buffer.from('<factura/>'));
+    source.objects.set('invoices/signed', encrypted);
+    const summary = await copyEncryptedStorageObjects(refs, source, destination, CIPHER, true);
+    expect(summary).toMatchObject({ planned: 1, uploaded: 1, verified: 1, plaintextSource: 0 });
+    expect(destination.objects.get('invoices/signed')).toEqual(encrypted);
+    expect(
+      CIPHER.decryptBuffer('tenant-a', destination.objects.get('invoices/signed')!).toString(),
+    ).toBe('<factura/>');
   });
 
   it('rejects an empty non-null database storage key', async () => {
