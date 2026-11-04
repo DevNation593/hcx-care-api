@@ -21,7 +21,7 @@ import { SIMULATED_SRI_MESSAGE, SriSimulator, startSriSimulator } from './helper
 
 jest.setTimeout(120000);
 
-const TICK_SECRET = 'e2e-secret';
+const TICK_SECRET = 'e2e-secret-0123456789abcdef0123456789';
 const CERTIFICATE_PASSWORD = 'clave-prueba';
 const ISSUER = {
   ruc: '1790012345001',

@@ -46,7 +46,7 @@ La API firma y envía las facturas (código `01`, XSD `1.1.0`) directamente a lo
 | Variable | Obligatoria | Uso |
 | --- | --- | --- |
 | `CLINICAL_ENCRYPTION_KEYS` | Sí, también en desarrollo | Cifra el `.p12` y su contraseña, los mensajes del SRI y los archivos (XML firmado, XML autorizado, RIDE). Sin ella la facturación responde `INVOICING_ENCRYPTION_REQUIRED`. Conserve todas las claves de descifrado al rotar. |
-| `INVOICING_TICK_SECRET` | Sí en Vercel | Secreto Bearer de `POST /api/v1/internal/invoicing/tick`. Sin la variable la ruta responde 404. Genérelo con `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`. |
+| `INVOICING_TICK_SECRET` | Sí en Vercel | Secreto Bearer de `POST /api/v1/internal/invoicing/tick`. Sin la variable, o con menos de 32 caracteres, la ruta responde 404 y el arranque registra un aviso (sin el valor). Genérelo con `openssl rand -hex 32`. |
 | `INVOICING_INTERNAL_SCHEDULER` | No (por defecto `false`) | `true` ejecuta el mismo trabajo cada 10 s dentro de la API (desarrollo y servidores persistentes). Déjela en `false` en Vercel. Se ignora con `NODE_ENV=test`. |
 | `STORAGE_DRIVER` y relacionadas | Sí | Los XML, los RIDE y el `.p12` de cada emisor (cifrado; en la base solo quedan su clave, su SHA-256 y la contraseña cifrada) se guardan con el `FILE_STORAGE`/`STORAGE_DRIVER` existente: use un almacenamiento persistente y con respaldo. Si el almacenamiento no responde, la emisión se reintenta (`INVOICING_CERTIFICATE_UNAVAILABLE`); si el archivo cambió, la solicitud falla con `CERTIFICATE_INTEGRITY` y hay que volver a subir el `.p12`. |
 
@@ -107,7 +107,7 @@ $$);
 
 El secreto queda guardado en el texto de la tarea; solo quien administra el proyecto de Supabase puede verlo. Para rotarlo, cambie la variable en Vercel, redespliegue y ejecute `select cron.unschedule('hcx-invoicing-tick');` seguido del bloque anterior con el valor nuevo.
 
-La ruta no tiene límite de peticiones: la protege el secreto, comparado en tiempo constante, y los ticks concurrentes son seguros (`FOR UPDATE SKIP LOCKED` y presupuesto acotado de 45 s). Sin `INVOICING_TICK_SECRET` responde 404; con un secreto incorrecto, 401.
+La ruta está protegida por el secreto, comparado en tiempo constante, y por límites de peticiones por cliente (la IP es el primer valor de `X-Forwarded-For`, que Vercel fija con la IP real): los intentos con secreto ausente o incorrecto se limitan a 10 por minuto; agotados, todas las peticiones de ese cliente (incluida la del secreto correcto) responden 429 hasta que termina la ventana, y los demás clientes no se ven afectados. Las llamadas con el secreto válido tienen además su propio tope de 30 por minuto. Fuera de Vercel `X-Forwarded-For` lo controla el cliente, y el almacenamiento de los límites es en memoria por instancia (mejor esfuerzo en serverless). Los ticks concurrentes son seguros (`FOR UPDATE SKIP LOCKED` y presupuesto acotado de 45 s). Sin `INVOICING_TICK_SECRET` responde 404 (sin contar intentos); con un secreto incorrecto, 401.
 
 Cómo revisar que corre:
 

@@ -2,36 +2,45 @@ import {
   Controller,
   Headers,
   HttpCode,
+  Logger,
   NotFoundException,
   Post,
   UnauthorizedException,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
-import { timingSafeEqual } from 'crypto';
 import { Public } from '../common/decorators/public.decorator';
 import { InvoiceWorkerService } from './invoice-worker.service';
+import {
+  MIN_TICK_SECRET_LENGTH,
+  TickRoute,
+  configuredTickSecret,
+  hasValidTickSecret,
+} from './invoicing-tick.throttle';
 
 @Controller('internal/invoicing')
 export class InvoicingTickController {
-  constructor(private readonly worker: InvoiceWorkerService) {}
+  constructor(private readonly worker: InvoiceWorkerService) {
+    // Never log the value, only that it is unusable.
+    if (process.env.INVOICING_TICK_SECRET && !configuredTickSecret()) {
+      new Logger(InvoicingTickController.name).warn(
+        `INVOICING_TICK_SECRET is shorter than ${MIN_TICK_SECRET_LENGTH} characters: the tick route is disabled (404)`,
+      );
+    }
+  }
 
   // @Public(): called by an external scheduler with no user session, so it is authenticated by
-  // INVOICING_TICK_SECRET (Bearer) instead of JWT. Without the secret configured the route does not exist.
-  // Not throttled: behind a proxy callers may share one bucket, so bad requests could lock the real
-  // scheduler out. The secret check guards the route and concurrent ticks are safe (SKIP LOCKED leases).
+  // INVOICING_TICK_SECRET (Bearer) instead of JWT. Without a usable secret (unset or under 32 characters) the route does not exist.
+  // Throttled per client by the named throttlers of invoicing-tick.throttle.ts (SEC-API-05): wrong or
+  // missing secrets are limited to 10 per minute, then every request from that client, the right secret
+  // included, gets 429 until the window ends (so a right guess cannot be told from a wrong one); other
+  // clients are unaffected and valid calls have a ceiling of their own. Concurrent ticks are safe
+  // (SKIP LOCKED leases).
   @Public()
+  @TickRoute()
   @Post('tick')
   @HttpCode(200)
-  @SkipThrottle()
   tick(@Headers('authorization') authorization?: string) {
-    const secret = process.env.INVOICING_TICK_SECRET;
-    if (!secret) throw new NotFoundException();
-    const given = Buffer.from(authorization?.startsWith('Bearer ') ? authorization.slice(7) : '');
-    const expected = Buffer.from(secret);
-    // timingSafeEqual throws on different lengths, so those are rejected first.
-    if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
-      throw new UnauthorizedException();
-    }
+    if (!configuredTickSecret()) throw new NotFoundException();
+    if (!hasValidTickSecret(authorization)) throw new UnauthorizedException();
     return this.worker.tick(45000);
   }
 }

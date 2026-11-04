@@ -9,6 +9,11 @@ export interface MailContent {
   html: string;
   text: string;
   attachments?: MailAttachment[];
+  /**
+   * The message carries personal data (SEC-API-12). MailService then never logs the recipient, the
+   * body, the attachments or a provider error text, in any environment; only the subject.
+   */
+  sensitive?: boolean;
 }
 
 const BRAND = 'HCX Care';
@@ -120,5 +125,6 @@ export function invoiceMail(input: {
     subject: `Factura ${input.number} de ${input.issuerName}`,
     html: layout(`Factura ${input.number}`, [escapeHtml(greeting), escapeHtml(intro), files]),
     text: [greeting, '', intro, files].join('\n'),
+    sensitive: true,
   };
 }
