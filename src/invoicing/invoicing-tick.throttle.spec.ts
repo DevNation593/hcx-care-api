@@ -1,6 +1,6 @@
 import { Controller, INestApplication, Post } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerStorage } from '@nestjs/throttler';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { InvoicingTickController } from './invoicing-tick.controller';
@@ -113,6 +113,24 @@ describe('invoicing tick throttling (SEC-API-05)', () => {
     await post(client, valid).expect(429);
     await sleep(WINDOW_MS * 0.7);
     await post(client, valid).expect(200);
+  }, 15_000);
+
+  it('leaves the same stored state after a right guess as after a wrong one', async () => {
+    const storage = app.get<{ storage: Map<string, any> }>(ThrottlerStorage as any).storage;
+    // The record that a scenario adds for its client (the only new key), without the clock fields.
+    async function stateAfter(client: string, guess: string) {
+      const before = new Set(storage.keys());
+      for (let i = 0; i < 10; i++) await post(client, 'Bearer wrong').expect(401);
+      await post(client, guess).expect(429);
+      const keys = [...storage.keys()].filter((key) => !before.has(key));
+      expect(keys).toHaveLength(1);
+      const record = storage.get(keys[0]);
+      return { hits: record.totalHits.get('tick-invalid'), blocked: record.isBlocked };
+    }
+    const afterWrong = await stateAfter('203.0.113.15', 'Bearer wrong');
+    const afterRight = await stateAfter('203.0.113.16', valid);
+    expect(afterWrong).toEqual({ hits: 11, blocked: true });
+    expect(afterRight).toEqual(afterWrong);
   });
 
   it('keeps a ceiling of 30 per minute on the valid secret, not the default limit', async () => {

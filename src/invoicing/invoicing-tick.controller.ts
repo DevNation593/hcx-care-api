@@ -30,9 +30,10 @@ export class InvoicingTickController {
   // @Public(): called by an external scheduler with no user session, so it is authenticated by
   // INVOICING_TICK_SECRET (Bearer) instead of JWT. Without a usable secret (unset or under 32 characters) the route does not exist.
   // Throttled per client by the named throttlers of invoicing-tick.throttle.ts (SEC-API-05): wrong or
-  // missing secrets are limited to 10 per minute, then 429, while a request with the right secret is
-  // never blocked by that budget (it only has a generous ceiling of its own). Concurrent ticks are
-  // safe (SKIP LOCKED leases).
+  // missing secrets are limited to 10 per minute, then every request from that client, the right secret
+  // included, gets 429 until the window ends (so a right guess cannot be told from a wrong one); other
+  // clients are unaffected and valid calls have a ceiling of their own. Concurrent ticks are safe
+  // (SKIP LOCKED leases).
   @Public()
   @TickRoute()
   @Post('tick')

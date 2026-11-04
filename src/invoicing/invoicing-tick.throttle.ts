@@ -111,8 +111,19 @@ export class TickAwareThrottlerGuard extends ThrottlerGuard {
       // Blocked: the library keeps the block for one window after the 11th hit, while the counted
       // hits keep decaying, so the count alone can fall below the limit during the block.
       const blocked = !!record?.isBlocked && record.blockExpiresAt > now;
-      const spent = used >= INVALID_TICK_ATTEMPTS_PER_MINUTE && record?.expiresAt > now;
+      // The count is kept by the per-hit decay timers; `expiresAt` is a fixed window that only the
+      // next increment renews, so it must not be consulted here.
+      const spent = used >= INVALID_TICK_ATTEMPTS_PER_MINUTE;
       if (record && (blocked || spent)) {
+        // Change the state exactly as a wrong guess would (same key, ttl, limit and block duration as
+        // the tick-invalid throttler), so a later known-wrong probe cannot reveal this guess was right.
+        await this.storageService.increment(
+          key,
+          props.ttl,
+          INVALID_TICK_ATTEMPTS_PER_MINUTE,
+          props.ttl,
+          'tick-invalid',
+        );
         await this.throwThrottlingException(props.context, {
           limit: INVALID_TICK_ATTEMPTS_PER_MINUTE,
           ttl: props.ttl,
