@@ -52,8 +52,19 @@ export async function collectReferencedStorageKeys(
     }),
     database.consentSignature.findMany({ select: { signatureStorageKey: true, tenantId: true } }),
     database.invoiceRequest.findMany({
-      where: { OR: [{ xmlStorageKey: { not: null } }, { rideStorageKey: { not: null } }] },
-      select: { xmlStorageKey: true, rideStorageKey: true, tenantId: true },
+      where: {
+        OR: [
+          { xmlStorageKey: { not: null } },
+          { rideStorageKey: { not: null } },
+          { signedXmlStorageKey: { not: null } },
+        ],
+      },
+      select: {
+        xmlStorageKey: true,
+        rideStorageKey: true,
+        signedXmlStorageKey: true,
+        tenantId: true,
+      },
     }),
     database.invoicingIssuer.findMany({
       where: { certificateStorageKey: { not: null } },
@@ -68,6 +79,7 @@ export async function collectReferencedStorageKeys(
     ...invoices.flatMap((row) => [
       { key: row.xmlStorageKey, tenantId: row.tenantId },
       { key: row.rideStorageKey, tenantId: row.tenantId },
+      { key: row.signedXmlStorageKey, tenantId: row.tenantId },
     ]),
     ...issuers.map((row) => ({ key: row.certificateStorageKey, tenantId: row.tenantId })),
   ];

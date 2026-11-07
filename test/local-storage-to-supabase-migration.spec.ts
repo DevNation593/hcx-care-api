@@ -88,6 +88,56 @@ describe('local clinical file migration', () => {
     ]);
   });
 
+  it('collects, copies and verifies a request that only has a signed XML key', async () => {
+    const rows = [
+      {
+        tenantId: 'tenant-a',
+        xmlStorageKey: null,
+        rideStorageKey: null,
+        signedXmlStorageKey: 'invoices/signed',
+      },
+      {
+        tenantId: 'tenant-a',
+        xmlStorageKey: null,
+        rideStorageKey: null,
+        signedXmlStorageKey: null,
+      },
+    ];
+    const database = {
+      patientFile: { findMany: async () => [] },
+      consentDocument: { findMany: async () => [] },
+      consentSignature: { findMany: async () => [] },
+      invoiceRequest: {
+        findMany: async (args: {
+          where: { OR: Array<Record<string, { not: null }>> };
+          select: Record<string, boolean>;
+        }) => {
+          const fields = args.where.OR.map((condition) => Object.keys(condition)[0]);
+          expect(fields).toContain('signedXmlStorageKey');
+          expect(args.select.signedXmlStorageKey).toBe(true);
+          return rows.filter((row) =>
+            fields.some((field) => row[field as keyof typeof row] !== null),
+          );
+        },
+      },
+      invoicingIssuer: { findMany: async () => [] },
+    };
+
+    const refs = await collectReferencedStorageKeys(database as never);
+    expect(refs).toEqual([ref('invoices/signed')]);
+
+    const source = new MemoryStorage();
+    const destination = new MemoryStorage();
+    const encrypted = CIPHER.encryptBuffer('tenant-a', Buffer.from('<factura/>'));
+    source.objects.set('invoices/signed', encrypted);
+    const summary = await copyEncryptedStorageObjects(refs, source, destination, CIPHER, true);
+    expect(summary).toMatchObject({ planned: 1, uploaded: 1, verified: 1, plaintextSource: 0 });
+    expect(destination.objects.get('invoices/signed')).toEqual(encrypted);
+    expect(
+      CIPHER.decryptBuffer('tenant-a', destination.objects.get('invoices/signed')!).toString(),
+    ).toBe('<factura/>');
+  });
+
   it('rejects an empty non-null database storage key', async () => {
     const database = {
       patientFile: { findMany: async () => [{ tenantId: 'tenant-a', storageKey: '' }] },
