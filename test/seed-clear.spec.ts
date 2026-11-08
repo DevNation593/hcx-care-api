@@ -1,8 +1,9 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { clearDatabase } from '../prisma/seed';
 
-// Shared catalog the seed updates in place instead of recreating.
-const KEPT = new Set(['specialty']);
+// Shared catalog the seed updates in place instead of recreating, and demo requests: visitors'
+// real requests, not demo data, with no relation that could block the clearing.
+const KEPT = new Set(['specialty', 'demoRequest']);
 
 const delegateName = (model: string) => `${model.charAt(0).toLowerCase()}${model.slice(1)}`;
 
