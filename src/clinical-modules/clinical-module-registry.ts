@@ -1,6 +1,7 @@
 import { clinicalRecordInvalid, validateFormData } from '../clinical-forms/form-schema';
 import { DENTISTRY_MODULES } from './definitions/dentistry';
 import { GENERAL_MODULES } from './definitions/general';
+import { GYNECOLOGY_MODULES } from './definitions/gynecology';
 import { NUTRITION_MODULES } from './definitions/nutrition';
 import { PHYSIOTHERAPY_MODULES } from './definitions/physiotherapy';
 import { PSYCHOLOGY_MODULES } from './definitions/psychology';
@@ -13,6 +14,7 @@ export const CLINICAL_MODULES: readonly ClinicalModuleDefinition[] = [
   ...NUTRITION_MODULES,
   ...PHYSIOTHERAPY_MODULES,
   ...DENTISTRY_MODULES,
+  ...GYNECOLOGY_MODULES,
 ];
 
 /** Answers to a tenant-defined form are stored under `custom.<formDefinitionId>`. */
