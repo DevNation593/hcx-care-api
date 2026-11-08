@@ -104,6 +104,18 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
         isActive: true,
       },
     }),
+    db.specialty.upsert({
+      where: { code: 'GYNECOLOGY' },
+      update: { name: 'Ginecología', isActive: true },
+      create: {
+        id: 'specialty-gynecology',
+        code: 'GYNECOLOGY',
+        name: 'Ginecología',
+        description:
+          'Consulta ginecológica, antecedentes gineco-obstétricos, anticoncepción, tamizaje y procedimientos.',
+        isActive: true,
+      },
+    }),
   ]);
   // Retired from the catalog: no plan offers it and no clinic can select it.
   await db.specialty.upsert({
@@ -117,7 +129,7 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
     },
   });
 
-  const [psychology, nutrition, physiotherapy, dentistry, generalMedicine, aesthetics] =
+  const [psychology, nutrition, physiotherapy, dentistry, generalMedicine, aesthetics, gynecology] =
     specialties;
   const catalog: SpecialtyCatalog = {
     psychology,
@@ -126,6 +138,7 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
     dentistry,
     generalMedicine,
     aesthetics,
+    gynecology,
   };
 
   await db.specialtyModule.createMany({
