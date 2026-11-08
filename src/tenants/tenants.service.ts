@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateTenantDto } from './dto/tenant.dto';
 
@@ -23,9 +24,16 @@ export class TenantsService {
   }
 
   async update(id: string, updateTenantDto: UpdateTenantDto) {
+    // A cleared phone or address is stored as missing, not as an empty string.
+    const { phone, address, ...rest } = updateTenantDto;
+    const data: Prisma.TenantUpdateInput = {
+      ...rest,
+      ...(phone !== undefined ? { phone: phone || null } : {}),
+      ...(address !== undefined ? { address: address || null } : {}),
+    };
     const tenant = await this.prisma.tenant.update({
       where: { id },
-      data: updateTenantDto,
+      data,
       include: {
         settings: true,
         subscription: { include: { plan: { select: { id: true, code: true, name: true } } } },
