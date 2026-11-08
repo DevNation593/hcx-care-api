@@ -4,6 +4,9 @@ import { ClinicalCipher } from '../clinical-access/clinical-cipher';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertOpenEncounter, EncountersService } from './encounters.service';
 
+// Signing reads the bytes of files that have no hash yet.
+const fileBytes = { get: jest.fn() };
+
 describe('EncountersService', () => {
   const plain = new ClinicalCipher();
   const physio: ClinicalActor = {
@@ -46,6 +49,7 @@ describe('EncountersService', () => {
     encounter: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
     specialtyRecord: { count: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     clinicalNote: { findMany: jest.fn() },
+    patientFile: { findMany: jest.fn(), update: jest.fn() },
     auditLog: { createMany: jest.fn() },
     $queryRaw: jest.fn(),
   };
@@ -54,6 +58,7 @@ describe('EncountersService', () => {
     prisma as unknown as PrismaService,
     new ClinicalAuditService(prisma as unknown as PrismaService, plain),
     plain,
+    fileBytes,
   );
   const auditRows = () => db.auditLog.createMany.mock.calls.flatMap(([args]) => args.data);
   const start = (dto = {}, actor = physio) =>
@@ -75,6 +80,7 @@ describe('EncountersService', () => {
     db.specialtyRecord.count.mockResolvedValue(0);
     db.specialtyRecord.findMany.mockResolvedValue([]);
     db.clinicalNote.findMany.mockResolvedValue([]);
+    db.patientFile.findMany.mockResolvedValue([]);
     db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
   });
 
@@ -335,6 +341,60 @@ describe('EncountersService', () => {
             contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/),
             updatedAt: new Date('2026-10-03T15:20:00Z'),
           },
+        });
+      });
+
+      it('covers its files: what they are and the hash of their bytes', async () => {
+        const file = (overrides = {}) => ({
+          id: 'file-1',
+          category: 'EXAMEN',
+          fileName: 'hemograma.pdf',
+          description: null,
+          mimeType: 'application/pdf',
+          sizeBytes: 120,
+          storageKey: 'tenant-1/patient-1/blob',
+          contentHash: 'v1:aa',
+          ...overrides,
+        });
+        const closeWithFiles = async (files: unknown[]) => {
+          db.patientFile.findMany.mockResolvedValue(files);
+          return closeWith([storedRecord()]);
+        };
+
+        const base = await closeWithFiles([file()]);
+        jest.clearAllMocks();
+        db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+        const otherBytes = await closeWithFiles([file({ contentHash: 'v1:bb' })]);
+        jest.clearAllMocks();
+        db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+        const renamed = await closeWithFiles([file({ fileName: 'otro.pdf' })]);
+
+        expect(new Set([base, otherBytes, renamed]).size).toBe(3);
+        expect(fileBytes.get).not.toHaveBeenCalled();
+      });
+
+      it('hashes the bytes of a file uploaded before hashes existed, once, as it signs', async () => {
+        const bytes = Buffer.from('%PDF-1.7 hemograma');
+        fileBytes.get.mockResolvedValue(bytes);
+        db.patientFile.findMany.mockResolvedValue([
+          {
+            id: 'file-old',
+            category: 'EXAMEN',
+            fileName: 'antiguo.pdf',
+            description: null,
+            mimeType: 'application/pdf',
+            sizeBytes: bytes.length,
+            storageKey: 'tenant-1/patient-1/old',
+            contentHash: null,
+          },
+        ]);
+
+        await closeWith([]);
+
+        expect(fileBytes.get).toHaveBeenCalledWith('tenant-1/patient-1/old');
+        expect(db.patientFile.update).toHaveBeenCalledWith({
+          where: { id: 'file-old' },
+          data: { contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/) },
         });
       });
 

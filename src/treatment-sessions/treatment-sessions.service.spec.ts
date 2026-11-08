@@ -17,6 +17,9 @@ import {
 } from './dto/treatment-session.dto';
 import { TreatmentSessionsService } from './treatment-sessions.service';
 
+// Signing reads the bytes of files that have no hash yet.
+const fileBytes = { get: jest.fn() };
+
 describe('TreatmentSessionsService', () => {
   const plain = new ClinicalCipher();
   const professional: ClinicalActor = {
@@ -174,7 +177,7 @@ describe('TreatmentSessionsService', () => {
     audit,
     plain,
     new TreatmentsService(prismaService, new ConsentTemplatesService(prismaService)),
-    new EncountersService(prismaService, audit, plain),
+    new EncountersService(prismaService, audit, plain, fileBytes),
     new SpecialtyRecordsService(prismaService, audit, plain),
   );
   const auditRows = () => db.auditLog.createMany.mock.calls.flatMap(([args]) => args.data);
@@ -213,6 +216,7 @@ describe('TreatmentSessionsService', () => {
     db.specialtyRecord.findMany.mockResolvedValue([]);
     db.clinicalNote.findMany.mockResolvedValue([]);
     db.$queryRaw.mockResolvedValue([{ id: 'locked' }]);
+    db.patientFile.findMany.mockResolvedValue([]);
   });
 
   describe('create', () => {
@@ -666,7 +670,7 @@ describe('TreatmentSessionsService', () => {
       keyedAudit,
       cipher,
       new TreatmentsService(prismaService, new ConsentTemplatesService(prismaService)),
-      new EncountersService(prismaService, keyedAudit, cipher),
+      new EncountersService(prismaService, keyedAudit, cipher, fileBytes),
       new SpecialtyRecordsService(prismaService, keyedAudit, cipher),
     );
     const signedConsent = (overrides = {}) => ({

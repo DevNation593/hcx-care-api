@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
+
+import { createHash } from 'crypto';
 import { mkdtempSync, readdirSync, readFileSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -315,7 +317,12 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
       const invalid = await request(server())
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
-        .send({ moduleKey: 'general.vital-signs', data: { oxygenSaturation: 300 }, encounterId })
+        .send({
+          password: TEST_PASSWORD,
+          moduleKey: 'general.vital-signs',
+          data: { oxygenSaturation: 300 },
+          encounterId,
+        })
         .expect(422);
       expect(invalid.body.code).toBe('CLINICAL_RECORD_INVALID');
       expect(invalid.body.details).toEqual([
@@ -326,6 +333,7 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
         .send({
+          password: TEST_PASSWORD,
           moduleKey: 'general.vital-signs',
           data: { weightKg: 72, heightCm: 170, oxygenSaturation: 85 },
           encounterId,
@@ -386,10 +394,23 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
     });
 
     it('closes with a summary, completes the appointment and takes no more records', async () => {
+      // Closing signs: who signs types their password again. A 403 keeps the session and the
+      // encounter open.
+      for (const password of [undefined, 'otra-clave']) {
+        const refused = await request(server())
+          .post(patientUrl(`encounters/${encounterId}/close`))
+          .set(as('pro'))
+          .send({ password, summary: 'Control en 7 días' })
+          .expect(403);
+        expect(refused.body.code).toBe('SIGNATURE_PASSWORD_INVALID');
+      }
+      const stillOpen = await prisma.encounter.findUniqueOrThrow({ where: { id: encounterId } });
+      expect(stillOpen).toMatchObject({ status: 'OPEN', signedAt: null });
+
       const closed = await request(server())
         .post(patientUrl(`encounters/${encounterId}/close`))
         .set(as('pro'))
-        .send({ summary: 'Control en 7 días' })
+        .send({ password: TEST_PASSWORD, summary: 'Control en 7 días' })
         .expect(201);
       expect(closed.body).toMatchObject({ status: 'CLOSED', summary: 'Control en 7 días' });
       const appointment = await prisma.appointment.findUniqueOrThrow({
@@ -400,7 +421,12 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
       await request(server())
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
-        .send({ moduleKey: 'general.vital-signs', data: { weightKg: 70 }, encounterId })
+        .send({
+          password: TEST_PASSWORD,
+          moduleKey: 'general.vital-signs',
+          data: { weightKg: 70 },
+          encounterId,
+        })
         .expect(409);
     });
 
@@ -573,30 +599,50 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
       expect(JSON.stringify(files.body)).not.toContain('hemograma');
     });
 
-    it('lets only the uploader remove it, with a reason', async () => {
-      await request(server())
+    it('keeps the file of a signed encounter, with the hash of its bytes', async () => {
+      const row = await prisma.patientFile.findUniqueOrThrow({ where: { id: fileId } });
+      expect(row.contentHash).toBe(`v1:${createHash('sha256').update(PDF).digest('hex')}`);
+
+      const refused = await request(server())
         .delete(patientUrl(`files/${fileId}`))
+        .set(as('pro'))
+        .send({ reason: 'Paciente equivocado' })
+        .expect(409);
+      expect(refused.body.code).toBe('PATIENT_FILE_SIGNED');
+    });
+
+    it('lets only the uploader remove a file outside any encounter, with a reason', async () => {
+      const loose = await request(server())
+        .post(patientUrl('files'))
+        .set(as('pro'))
+        .field('category', 'EXAMEN')
+        .attach('file', PDF, { filename: 'suelto.pdf', contentType: 'application/pdf' })
+        .expect(201);
+      const looseId = loose.body.id as string;
+
+      await request(server())
+        .delete(patientUrl(`files/${looseId}`))
         .set(as('colleague'))
         .send({ reason: 'No es mío' })
         .expect(403);
       await request(server())
-        .delete(patientUrl(`files/${fileId}`))
+        .delete(patientUrl(`files/${looseId}`))
         .set(as('pro'))
         .send({})
         .expect(400);
       await request(server())
-        .delete(patientUrl(`files/${fileId}`))
+        .delete(patientUrl(`files/${looseId}`))
         .set(as('pro'))
         .send({ reason: 'Paciente equivocado' })
         .expect(200);
 
       const listed = await request(server()).get(patientUrl('files')).set(as('pro')).expect(200);
-      expect(listed.body).toEqual([]);
+      expect(listed.body.map((file: { id: string }) => file.id)).toEqual([fileId]);
       const audit = await prisma.auditLog.findMany({
-        where: { tenantId, entity: 'PATIENT_FILE', entityId: fileId },
+        where: { tenantId, entity: 'PATIENT_FILE', entityId: looseId },
       });
       expect(audit.map((entry) => entry.action).sort()).toEqual(
-        expect.arrayContaining(['CREATE', 'DELETE', 'READ']),
+        expect.arrayContaining(['CREATE', 'DELETE']),
       );
     });
   });
@@ -738,12 +784,12 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
       await request(server())
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
-        .send({ moduleKey, data: { injuryType: 'OTRA' } })
+        .send({ password: TEST_PASSWORD, moduleKey, data: { injuryType: 'OTRA' } })
         .expect(422);
       const record = await request(server())
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
-        .send({ moduleKey, data: { injuryType: 'DEPORTIVA' } })
+        .send({ password: TEST_PASSWORD, moduleKey, data: { injuryType: 'DEPORTIVA' } })
         .expect(201);
       expect(record.body).toMatchObject({ moduleKey, schemaVersion: 1 });
     });
@@ -893,6 +939,7 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
         .send({
+          password: TEST_PASSWORD,
           moduleKey: 'general.consents',
           data: { ...consent, signerSignature: 'data:image/png;base64,PHN2Zz4=' },
         })
@@ -902,7 +949,11 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
       const created = await request(server())
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
-        .send({ moduleKey: 'general.consents', data: { ...consent, signerSignature: signature } })
+        .send({
+          password: TEST_PASSWORD,
+          moduleKey: 'general.consents',
+          data: { ...consent, signerSignature: signature },
+        })
         .expect(201);
       consentId = created.body.id;
       expect(created.body.data.signerSignature).toBe(signature);
@@ -985,6 +1036,7 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
         .send({
+          password: TEST_PASSWORD,
           moduleKey: signed.body.moduleKey,
           schemaVersion: signed.body.schemaVersion,
           data: signed.body.data,
@@ -1004,6 +1056,7 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
         .send({
+          password: TEST_PASSWORD,
           moduleKey: signed.body.moduleKey,
           schemaVersion: signed.body.schemaVersion,
           data: signed.body.data,

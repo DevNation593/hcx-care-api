@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -14,11 +15,14 @@ import {
   clinicalRecordNotFound,
 } from '../clinical-access/clinical-errors';
 import {
+  bytesContentHash,
   encounterContentHash,
+  fileContentHash,
   noteContentHash,
   recordContentHash,
 } from '../clinical-access/clinical-signature';
 import { ENCRYPTED_NOTE_FIELDS } from '../clinical-notes/encrypted-note-fields';
+import { FILE_STORAGE, FileStorage } from '../patient-files/file-storage';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CloseEncounterDto,
@@ -137,6 +141,8 @@ export class EncountersService {
     private readonly prisma: PrismaService,
     private readonly audit: ClinicalAuditService,
     private readonly crypto: ClinicalCryptoService,
+    // Files uploaded before their hash existed are read once, when their encounter is signed.
+    @Inject(FILE_STORAGE) private readonly storage: Pick<FileStorage, 'get'>,
   ) {}
 
   /** Encounters of the patient, newest first, with how many live records each one holds. */
@@ -409,8 +415,8 @@ export class EncountersService {
   }
 
   /**
-   * Signs the records and notes the encounter holds as of `signedAt` and returns the hash of the
-   * encounter, which covers theirs. Records keep the date of their last change: signing is not one.
+   * Signs the records, notes and files the encounter holds as of `signedAt` and returns the hash
+   * of the encounter, which covers theirs. Records keep the date of their last change: signing is not one.
    */
   private async signContents(
     tx: Prisma.TransactionClient,
@@ -450,7 +456,30 @@ export class EncountersService {
       return { id: note.id, contentHash: noteContentHash(note) };
     });
 
-    return encounterContentHash(encounter, recordHashes, noteHashes);
+    const files = await tx.patientFile.findMany({
+      where: { tenantId, encounterId, deletedAt: null },
+    });
+    const fileHashes: { id: string; contentHash: string }[] = [];
+    for (const file of files) {
+      let bytesHash = file.contentHash;
+      if (!bytesHash) {
+        const bytes = this.crypto.decryptBuffer(tenantId, await this.storage.get(file.storageKey));
+        bytesHash = bytesContentHash(bytes);
+        await tx.patientFile.update({ where: { id: file.id }, data: { contentHash: bytesHash } });
+      }
+      fileHashes.push({
+        id: file.id,
+        contentHash: fileContentHash({
+          ...file,
+          fileName: this.crypto.decrypt(tenantId, file.fileName),
+          description:
+            file.description === null ? null : this.crypto.decrypt(tenantId, file.description),
+          contentHash: bytesHash,
+        }),
+      });
+    }
+
+    return encounterContentHash(encounter, recordHashes, noteHashes, fileHashes);
   }
 
   /** An encounter started by mistake. It must hold no records; the row stays for audit. */

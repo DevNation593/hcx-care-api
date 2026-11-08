@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import {
   encounterContentHash,
+  fileContentHash,
   noteContentHash,
   recordContentHash,
 } from '../src/clinical-access/clinical-signature';
@@ -32,6 +33,13 @@ export async function signSeededClinicalContent(db: PrismaClient): Promise<void>
     const notes = (await db.clinicalNote.findMany({ where: { encounterId: encounter.id } }))
       .filter((note) => !note.deletedAt)
       .map((note) => ({ id: note.id, contentHash: noteContentHash(note) }));
+    // The seed keeps the hash of the bytes of every file it writes, as the API does on upload.
+    const files = (await db.patientFile.findMany({ where: { encounterId: encounter.id } }))
+      .filter((file) => !file.deletedAt && file.contentHash)
+      .map((file) => ({
+        id: file.id,
+        contentHash: fileContentHash({ ...file, contentHash: file.contentHash! }),
+      }));
 
     await db.encounter.update({
       where: { id: encounter.id },
@@ -42,6 +50,7 @@ export async function signSeededClinicalContent(db: PrismaClient): Promise<void>
           { ...encounter, closedAt: signedAt },
           records.map(({ id, contentHash }) => ({ id, contentHash })),
           notes,
+          files,
         ),
         updatedAt: encounter.updatedAt,
       },

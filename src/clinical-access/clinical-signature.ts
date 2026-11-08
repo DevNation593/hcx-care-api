@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { createHash } from 'crypto';
 
 /**
@@ -88,6 +88,34 @@ export function noteContentHash(note: SignableNote): string {
   });
 }
 
+/** SHA-256 of the decrypted bytes of a file, kept with the file from its upload. */
+export function bytesContentHash(bytes: Buffer): string {
+  return `${SIGNATURE_ALGORITHM}:${createHash('sha256').update(bytes).digest('hex')}`;
+}
+
+/** A file attached to an encounter, as its signature covers it: what it is and its bytes. */
+export interface SignableFile {
+  id: string;
+  category: string;
+  fileName: string;
+  description: string | null;
+  mimeType: string;
+  sizeBytes: number;
+  contentHash: string;
+}
+
+export function fileContentHash(file: SignableFile): string {
+  return sha256({
+    id: file.id,
+    category: file.category,
+    fileName: file.fileName,
+    description: file.description,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+    bytes: file.contentHash,
+  });
+}
+
 /** The decrypted encounter, with the hashes of everything written in it. */
 export function encounterContentHash(
   encounter: {
@@ -105,6 +133,7 @@ export function encounterContentHash(
   },
   records: { id: string; contentHash: string }[],
   notes: { id: string; contentHash: string }[],
+  files: { id: string; contentHash: string }[] = [],
 ): string {
   const byId = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
   return sha256({
@@ -123,8 +152,24 @@ export function encounterContentHash(
     },
     records: [...records].sort(byId),
     notes: [...notes].sort(byId),
+    // Only when there are files: encounters without them keep the hash the first version gave.
+    ...(files.length ? { files: [...files].sort(byId) } : {}),
   });
 }
+
+export const patientFileSigned = () =>
+  new ConflictException({
+    statusCode: 409,
+    code: 'PATIENT_FILE_SIGNED',
+    message: 'El archivo pertenece a una atención firmada: no se puede eliminar.',
+  });
+
+export const signaturePasswordInvalid = () =>
+  new ForbiddenException({
+    statusCode: 403,
+    code: 'SIGNATURE_PASSWORD_INVALID',
+    message: 'Para firmar escribe tu contraseña. La que escribiste no es correcta.',
+  });
 
 /**
  * Whether a record is final: signed, outside any encounter (signed when saved, or older than

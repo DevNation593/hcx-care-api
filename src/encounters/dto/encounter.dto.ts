@@ -56,6 +56,15 @@ export class CloseEncounterDto {
   @IsOptional()
   @MaxLength(5000)
   summary?: string;
+
+  @ApiProperty({
+    description:
+      'The password of the professional: closing signs the encounter, so who signs is checked again. A wrong or missing one answers 403 SIGNATURE_PASSWORD_INVALID.',
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  password?: string;
 }
 
 export class DeleteEncounterDto {

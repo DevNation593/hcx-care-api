@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@n
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ClinicalActor, CurrentClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalProfileGuard } from '../clinical-access/clinical-profile.guard';
+import { SignerVerificationService } from '../clinical-access/signer-verification.service';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import {
@@ -19,7 +20,10 @@ import { RequirePermission } from '../common/permissions/permission-catalog';
 @UseGuards(ClinicalProfileGuard)
 @Controller('tenants/:tenantId/patients/:patientId/encounters')
 export class EncountersController {
-  constructor(private readonly encountersService: EncountersService) {}
+  constructor(
+    private readonly encountersService: EncountersService,
+    private readonly signer: SignerVerificationService,
+  ) {}
 
   @Get()
   @Roles('MASTER', 'PROFESIONAL')
@@ -72,16 +76,18 @@ export class EncountersController {
   @ApiOperation({
     summary: 'Close an encounter - Author only',
     description:
-      'The sign-off of the professional: the encounter takes no more records and its appointment is completed.',
+      'The signature of the professional, who types their password again (403 SIGNATURE_PASSWORD_INVALID): the encounter, its records, notes and files get their SHA-256, take no more changes, and its appointment is completed.',
   })
   @RequirePermission('clinical_records.update')
-  close(
+  async close(
     @Param('tenantId') tenantId: string,
     @Param('patientId') patientId: string,
     @Param('encounterId') encounterId: string,
     @CurrentClinicalActor() actor: ClinicalActor,
     @Body() dto: CloseEncounterDto,
   ) {
+    // Closing signs the encounter: who signs types their password again.
+    await this.signer.verify(actor.userId, dto.password);
     return this.encountersService.close(tenantId, patientId, encounterId, actor, dto);
   }
 

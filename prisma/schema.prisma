@@ -1013,6 +1013,9 @@ model PatientFile {
   mimeType   String
   sizeBytes  Int
   storageKey String @unique
+  // SHA-256 of the decrypted bytes (`v1:<hex>`), taken when the file is uploaded. Files uploaded
+  // before it existed get theirs when the encounter they belong to is signed.
+  contentHash String?
 
   // Set for photos taken during a treatment session; null for every other file.
   treatmentSessionId String?

@@ -1,3 +1,4 @@
+import { bytesContentHash } from '../src/clinical-access/clinical-signature';
 import { createHash, randomUUID } from 'crypto';
 import type {
   Appointment,
@@ -562,6 +563,7 @@ export async function seedAestheticStudio(ctx: SeedContext): Promise<SeedTenant 
           mimeType: 'image/png',
           sizeBytes: bytes.length,
           storageKey,
+          contentHash: bytesContentHash(bytes),
           createdAt: phase === 'BEFORE' ? openedAt : endedAt,
         },
       });

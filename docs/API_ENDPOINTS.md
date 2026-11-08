@@ -275,7 +275,11 @@ DELETE /tenants/{tenantId}/patients/{patientId}/specialty-records/{recordId}
 # `contentHash`, `amendsRecordId`, `amendmentReason` and `amendedBy: { id, createdAt } | null`.
 POST /tenants/{tenantId}/patients/{patientId}/specialty-records
 { "moduleKey": "general.vital-signs", "schemaVersion": 1, "data": { "weightKg": 69.5, "heightCm": 170 },
-  "amendsRecordId": "...", "amendmentReason": "Peso mal digitado" }
+  "amendsRecordId": "...", "amendmentReason": "Peso mal digitado", "password": "..." }
+
+# Every explicit signature asks the password of the professional again: an addendum and a record
+# saved outside any encounter (both signed as they are saved) carry `password`. Missing or wrong:
+# 403 SIGNATURE_PASSWORD_INVALID, which keeps the session.
 ```
 
 A request without `schemaVersion` comes from a client older than the definitions: it is checked against the legacy version of the module when one exists (the previous required keys, any value), otherwise against the current one. Other codes: `400 CLINICAL_MODULE_UNKNOWN`, `409 CLINICAL_MODULE_VERSION_OUTDATED`.
@@ -309,8 +313,10 @@ GET  /tenants/{tenantId}/patients/{patientId}/encounters
 # Records created with `encounterId` are written into that open encounter (409 ENCOUNTER_CLOSED).
 # Closing is the signature of the professional: the encounter, its records and notes get their
 # SHA-256 (`signedAt`, `signedById`, `contentHash`), take no more changes, and the appointment is
-# COMPLETED. Encounters closed before signatures existed have no hash but are as final.
-POST   /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}/close   { "summary": "..." }
+# COMPLETED. Encounters closed before signatures existed have no hash but are as final. The
+# signature covers the files of the encounter (the SHA-256 of their bytes, taken on upload), which
+# can no longer be removed (409 PATIENT_FILE_SIGNED). `password` is required (403 above).
+POST   /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}/close   { "summary": "...", "password": "..." }
 PATCH  /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         # type or reason, while open
 DELETE /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         { "reason": "..." }  # open and without records (409 ENCOUNTER_SIGNED)
 

@@ -84,6 +84,15 @@ export class CreateSpecialtyRecordDto {
   @MaxLength(500)
   @IsOptional()
   amendmentReason?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The password of the professional, required when the record is signed as it is saved: an addendum, or a record outside any encounter. A wrong or missing one answers 403 SIGNATURE_PASSWORD_INVALID.',
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  password?: string;
 }
 
 export class UpdateSpecialtyRecordDto {
