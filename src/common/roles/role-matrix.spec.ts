@@ -277,6 +277,8 @@ describe('role matrix', () => {
       'AuthController.logoutAll',
       'AuthController.refresh',
       'AuthController.resetPassword',
+      // Public: a visitor of the site asks for a demo; it reads nothing back.
+      'DemoRequestsController.create',
       'DocumentVerificationController.verify',
       'HealthController.checkHealth',
       'InvoicingController.download',

@@ -128,3 +128,46 @@ export function invoiceMail(input: {
     sensitive: true,
   };
 }
+
+/**
+ * Notice to the platform team of a demo request from the public site. It carries the visitor's
+ * contact data, so it is sensitive: never logged.
+ */
+export function demoRequestMail(input: {
+  name: string;
+  clinic: string;
+  email: string;
+  phone: string;
+  teamSize: string;
+  message?: string | null;
+  platformUrl: string;
+}): MailContent {
+  const rows: [string, string][] = [
+    ['Nombre', input.name],
+    ['Consultorio', input.clinic],
+    ['Correo', input.email],
+    ['Teléfono', input.phone],
+    ['Tamaño del equipo', input.teamSize],
+  ];
+  if (input.message) rows.push(['Mensaje', input.message]);
+  const intro = 'Llegó una nueva solicitud de demo desde el sitio público.';
+
+  return {
+    // Fixed: MailService logs the subject even for sensitive messages, and the practice name can
+    // identify a person ("Consultorio Dra. Ana Vega"). The visitor's data stays in the body.
+    subject: 'Nueva solicitud de demo',
+    html: layout(
+      'Nueva solicitud de demo',
+      [intro, ...rows.map(([label, value]) => `<strong>${label}:</strong> ${escapeHtml(value)}`)],
+      { label: 'Ver solicitudes', url: input.platformUrl },
+    ),
+    text: [
+      intro,
+      '',
+      ...rows.map(([label, value]) => `${label}: ${value}`),
+      '',
+      input.platformUrl,
+    ].join('\n'),
+    sensitive: true,
+  };
+}
