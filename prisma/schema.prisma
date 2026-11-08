@@ -2354,3 +2354,29 @@ model InvoiceRequestEvent {
 
   @@index([invoiceRequestId, createdAt])
 }
+
+enum DemoRequestStatus {
+  NEW
+  CONTACTED
+  CLOSED
+}
+
+// A visitor of the public site asking for a demo (/contacto). The platform administrator follows
+// it up from /platform; it belongs to no clinic, so it has no tenant and no row level security.
+model DemoRequest {
+  id                String            @id @default(cuid())
+  name              String
+  clinic            String
+  email             String
+  phone             String
+  teamSize          String
+  message           String?
+  status            DemoRequestStatus @default(NEW)
+  privacyAcceptedAt DateTime
+  // Set when the request leaves NEW.
+  handledAt         DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([status, createdAt])
+}

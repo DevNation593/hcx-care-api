@@ -641,6 +641,14 @@ Every route with `:tenantId` answers `404` if the clinic does not exist or is th
 | `POST /platform/subscription-payments/:paymentId/confirm` | Body `{ reference, note? }`. Applies the payment; idempotent for the same reference. |
 | `POST /platform/subscription-payments/:paymentId/reject` | Body `{ reason }`. Closes the request without changes. |
 
+### Demo requests
+
+| Route | Description |
+|---|---|
+| `POST /demo-requests` | **Public.** Body `{ name, clinic, email, phone, teamSize, message?, acceptPrivacy, website? }`; `teamSize` is `1`, `2-5`, `6-15` or `16+` and `acceptPrivacy` must be `true`. Answers `202 { received: true }` and e-mails `DEMO_REQUEST_NOTIFY_EMAIL` (or the platform ADMINs). `website` is a honeypot: when filled, the request is dropped with the same answer. 3 requests per address every 10 minutes (`429`). |
+| `GET /platform/demo-requests?status=NEW` | Latest 200 requests, newest first; `status` is `NEW`, `CONTACTED` or `CLOSED`. |
+| `PATCH /platform/demo-requests/:id` | Body `{ status }`. `handledAt` keeps the first time it left `NEW`; back to `NEW` clears it. `404 DEMO_REQUEST_NOT_FOUND`. |
+
 ### Legacy provider-managed access
 
 | Route | Description |

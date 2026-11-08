@@ -43,6 +43,7 @@ import { TreatmentSessionsModule } from './treatment-sessions/treatment-sessions
 import { DocumentVerificationModule } from './document-verification/document-verification.module';
 import { PermissionsModule } from './common/permissions/permissions.module';
 import { PlatformModule } from './platform/platform.module';
+import { DemoRequestsModule } from './demo-requests/demo-requests.module';
 import { HealthController } from './health.controller';
 import './common/utils/bigint-json';
 
@@ -121,6 +122,7 @@ const throttleTtlMs = throttleTtlRaw < 1000 ? throttleTtlRaw * 1000 : throttleTt
     CashRegistersModule,
     DocumentVerificationModule,
     PlatformModule,
+    DemoRequestsModule,
   ],
   providers: [
     {
