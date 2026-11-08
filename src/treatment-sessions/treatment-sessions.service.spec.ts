@@ -152,10 +152,12 @@ describe('TreatmentSessionsService', () => {
     },
     specialtyRecord: {
       findFirst: jest.fn(),
+      findMany: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
       count: jest.fn(),
     },
+    clinicalNote: { findMany: jest.fn() },
     formDefinitionVersion: { findFirst: jest.fn() },
     consentDocument: { findMany: jest.fn() },
     tenant: { findUnique: jest.fn() },
@@ -207,6 +209,10 @@ describe('TreatmentSessionsService', () => {
     db.patientFile.findMany.mockResolvedValue([]);
     db.patientFile.count.mockResolvedValue(0);
     db.specialtyRecord.count.mockResolvedValue(0);
+    // Closing the encounter signs what it holds; row locks are granted.
+    db.specialtyRecord.findMany.mockResolvedValue([]);
+    db.clinicalNote.findMany.mockResolvedValue([]);
+    db.$queryRaw.mockResolvedValue([{ id: 'locked' }]);
   });
 
   describe('create', () => {

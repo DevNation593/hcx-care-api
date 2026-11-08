@@ -173,6 +173,10 @@ describe('ConsentDocumentsService', () => {
     consentSignature: { create: jest.fn() },
     consentEvent: { create: jest.fn() },
     auditLog: { createMany: jest.fn() },
+    // Closing an encounter (revoking a consent) signs what it holds.
+    specialtyRecord: { findMany: jest.fn(), update: jest.fn() },
+    clinicalNote: { findMany: jest.fn() },
+    $queryRaw: jest.fn(),
   };
   const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
   const prismaService = prisma as unknown as PrismaService;
@@ -208,6 +212,9 @@ describe('ConsentDocumentsService', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    db.specialtyRecord.findMany.mockResolvedValue([]);
+    db.clinicalNote.findMany.mockResolvedValue([]);
+    db.$queryRaw.mockResolvedValue([{ id: 'locked' }]);
     objects.clear();
     storage.put.mockImplementation(async (key: string, data: Buffer) => {
       if (objects.has(key)) throw new Error('exists');

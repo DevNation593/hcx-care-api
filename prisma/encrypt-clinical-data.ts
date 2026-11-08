@@ -109,7 +109,7 @@ export async function encryptClinicalData(
       client.specialtyRecord,
       {},
       cipher,
-      ['notes', 'deletionReason'],
+      ['notes', 'deletionReason', 'amendmentReason'],
       ['data'],
       dryRun,
     ),

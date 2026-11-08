@@ -33,6 +33,14 @@ describe('SpecialtyRecordsService', () => {
     notes: null,
     version: 1,
     deletedAt: null,
+    // Most cases correct a record of an encounter still open, which is not signed yet.
+    encounterId: 'encounter-1',
+    encounter: { status: 'OPEN' },
+    signedAt: null,
+    contentHash: null,
+    amendsRecordId: null,
+    amendmentReason: null,
+    updatedAt: new Date('2026-10-01T10:00:00Z'),
     ...overrides,
   });
   const customSchema = {
@@ -73,8 +81,10 @@ describe('SpecialtyRecordsService', () => {
       create: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
     },
     auditLog: { createMany: jest.fn() },
+    $queryRaw: jest.fn(),
   };
   const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
   const service = new SpecialtyRecordsService(
@@ -97,7 +107,20 @@ describe('SpecialtyRecordsService', () => {
     db.specialtyRecord.update.mockImplementation(({ data }) =>
       Promise.resolve(record({ ...data, version: 2 })),
     );
+    // The encounter is open: the shared lock on it is granted.
+    db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+    // A conditional correction replaces the version it read, as the database would.
+    db.specialtyRecord.updateMany.mockResolvedValue({ count: 1 });
+    db.specialtyRecord.findUniqueOrThrow.mockImplementation(() =>
+      Promise.resolve(
+        record({
+          ...(db.specialtyRecord.updateMany.mock.calls.at(-1)?.[0].data ?? {}),
+          version: 2,
+        }),
+      ),
+    );
   });
+  const corrected = () => db.specialtyRecord.updateMany.mock.calls[0][0];
 
   describe('list', () => {
     it('lets a professional of another specialty read live records and audits each read', async () => {
@@ -280,8 +303,9 @@ describe('SpecialtyRecordsService', () => {
         },
       ]);
       expect(db.specialtyRecord.findMany.mock.calls[0][0]).toMatchObject({
-        where: { tenantId: 'tenant-1', patientId: 'patient-1', deletedAt: null },
-        orderBy: { recordDate: 'desc' },
+        // A record corrected by an addendum no longer raises alerts: its addendum does.
+        where: { tenantId: 'tenant-1', patientId: 'patient-1', deletedAt: null, amendedBy: null },
+        orderBy: [{ recordDate: 'desc' }, { createdAt: 'desc' }],
       });
       expect(auditRows()).toEqual([
         expect.objectContaining({ action: 'READ', entityId: 'allergy-old', userId: 'psy' }),
@@ -753,8 +777,9 @@ describe('SpecialtyRecordsService', () => {
         patientId: 'patient-1',
         deletedAt: null,
       });
-      expect(db.specialtyRecord.update.mock.calls[0][0]).toMatchObject({
-        where: { id: 'record-1' },
+      // Only the version it read is replaced.
+      expect(corrected()).toMatchObject({
+        where: { id: 'record-1', version: 1 },
         data: { data: { weightKg: 69.5, heightCm: 165, bmi: 25.53 }, version: { increment: 1 } },
       });
       expect(result.version).toBe(2);
@@ -782,7 +807,7 @@ describe('SpecialtyRecordsService', () => {
         changeReason: 'Nota de otro paciente.',
       });
 
-      const { data } = db.specialtyRecord.update.mock.calls[0][0];
+      const { data } = corrected();
       expect(data.notes).toBeNull();
       expect(data).not.toHaveProperty('data');
     });
@@ -839,7 +864,7 @@ describe('SpecialtyRecordsService', () => {
         changeReason: 'x',
       });
 
-      expect(db.specialtyRecord.update).toHaveBeenCalled();
+      expect(db.specialtyRecord.updateMany).toHaveBeenCalled();
     });
 
     it('does not find a removed record or one of another patient', async () => {
@@ -901,6 +926,253 @@ describe('SpecialtyRecordsService', () => {
         service.delete('tenant-1', 'patient-1', 'record-1', psychologist, { reason: 'x' }),
       ).rejects.toMatchObject({ status: 403 });
       expect(db.specialtyRecord.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('signatures', () => {
+    const errorOf = async (promise: Promise<unknown>) => {
+      try {
+        await promise;
+      } catch (error) {
+        return {
+          status: (error as { status: number }).status,
+          ...(error as { response: object }).response,
+        };
+      }
+      throw new Error('expected the call to fail');
+    };
+
+    it('signs a record saved outside any encounter, as it is saved', async () => {
+      const result = await service.create('tenant-1', 'patient-1', nutritionist, dto);
+
+      expect(db.specialtyRecord.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'record-1' },
+          data: expect.objectContaining({
+            signedAt: expect.any(Date),
+            contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/),
+          }),
+        }),
+      );
+      expect(result.signed).toBe(true);
+    });
+
+    it('leaves a record of an open encounter unsigned until the encounter closes', async () => {
+      db.encounter.findFirst.mockResolvedValue({ professionalId: 'nutritionist', status: 'OPEN' });
+
+      const result = await service.create('tenant-1', 'patient-1', nutritionist, {
+        ...dto,
+        encounterId: 'encounter-1',
+      });
+
+      expect(db.$queryRaw).toHaveBeenCalled();
+      expect(db.specialtyRecord.update).not.toHaveBeenCalled();
+      expect(result.signed).toBe(false);
+    });
+
+    it('writes nothing into an encounter closed while the record was on its way', async () => {
+      db.encounter.findFirst.mockResolvedValue({ professionalId: 'nutritionist', status: 'OPEN' });
+      db.$queryRaw.mockResolvedValue([]);
+
+      const error = await errorOf(
+        service.create('tenant-1', 'patient-1', nutritionist, {
+          ...dto,
+          encounterId: 'encounter-1',
+        }),
+      );
+
+      expect(error).toMatchObject({ status: 409, code: 'ENCOUNTER_CLOSED' });
+      expect(db.specialtyRecord.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['signed with its encounter', { signedAt: new Date(), encounter: { status: 'CLOSED' } }],
+      ['in an encounter closed before signatures', { encounter: { status: 'CLOSED' } }],
+      ['outside any encounter', { encounterId: null, encounter: null }],
+    ])('neither corrects nor removes a record %s', async (_case, overrides) => {
+      db.specialtyRecord.findFirst.mockResolvedValue(record(overrides));
+
+      const update = await errorOf(
+        service.update('tenant-1', 'patient-1', 'record-1', nutritionist, {
+          notes: 'x',
+          changeReason: 'x',
+        }),
+      );
+      const removal = await errorOf(
+        service.delete('tenant-1', 'patient-1', 'record-1', nutritionist, { reason: 'x' }),
+      );
+
+      expect(update).toMatchObject({ status: 409, code: 'CLINICAL_RECORD_SIGNED' });
+      expect(removal).toMatchObject({ status: 409, code: 'CLINICAL_RECORD_SIGNED' });
+      expect(db.specialtyRecord.updateMany).not.toHaveBeenCalled();
+      expect(db.specialtyRecord.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses a correction when the encounter is closed while it is being saved', async () => {
+      db.specialtyRecord.findFirst.mockResolvedValue(record());
+      db.$queryRaw.mockResolvedValue([]);
+
+      const error = await errorOf(
+        service.update('tenant-1', 'patient-1', 'record-1', nutritionist, {
+          notes: 'x',
+          changeReason: 'x',
+        }),
+      );
+
+      expect(error).toMatchObject({ status: 409, code: 'CLINICAL_RECORD_SIGNED' });
+      expect(db.specialtyRecord.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('answers a correction of a stale version with a conflict instead of overwriting', async () => {
+      db.specialtyRecord.findFirst.mockResolvedValue(record({ version: 3 }));
+
+      const error = await errorOf(
+        service.update('tenant-1', 'patient-1', 'record-1', nutritionist, {
+          version: 2,
+          notes: 'x',
+          changeReason: 'x',
+        }),
+      );
+
+      expect(error).toMatchObject({
+        status: 409,
+        code: 'CLINICAL_RECORD_VERSION_CONFLICT',
+        currentVersion: 3,
+      });
+      expect(db.specialtyRecord.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('detects a save that slipped in between the read and the write', async () => {
+      db.specialtyRecord.findFirst.mockResolvedValue(record());
+      db.specialtyRecord.updateMany.mockResolvedValue({ count: 0 });
+      db.specialtyRecord.findUnique.mockResolvedValue({ version: 2 });
+
+      const error = await errorOf(
+        service.update('tenant-1', 'patient-1', 'record-1', nutritionist, {
+          notes: 'x',
+          changeReason: 'x',
+        }),
+      );
+
+      expect(error).toMatchObject({ code: 'CLINICAL_RECORD_VERSION_CONFLICT', currentVersion: 2 });
+      expect(db.auditLog.createMany).not.toHaveBeenCalled();
+    });
+
+    describe('addenda', () => {
+      const signedAt = new Date('2026-10-02T10:00:00Z');
+      const original = record({
+        id: 'original',
+        appointmentId: 'appointment-1',
+        signedAt,
+        encounter: { status: 'CLOSED' },
+      });
+      const amendment = {
+        ...dto,
+        schemaVersion: 2,
+        data: { weightKg: 71, heightCm: 170 },
+        amendsRecordId: 'original',
+        amendmentReason: 'Peso mal digitado.',
+      };
+
+      beforeEach(() => {
+        db.specialtyRecord.findFirst.mockResolvedValue(original);
+        db.specialtyRecord.findUnique.mockResolvedValue(null);
+      });
+
+      it('corrects a signed record with a signed addendum that keeps its encounter and date', async () => {
+        const result = await service.create('tenant-1', 'patient-1', nutritionist, amendment);
+
+        expect(created()).toMatchObject({
+          amendsRecordId: 'original',
+          amendmentReason: 'Peso mal digitado.',
+          encounterId: 'encounter-1',
+          appointmentId: 'appointment-1',
+          recordDate: original.recordDate,
+          professionalId: 'nutritionist',
+        });
+        expect(db.specialtyRecord.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ contentHash: expect.stringMatching(/^v1:/) }),
+          }),
+        );
+        expect(result.signed).toBe(true);
+        expect(auditRows()).toEqual([
+          expect.objectContaining({ action: 'CREATE', reason: 'Peso mal digitado.' }),
+        ]);
+        // The original is left exactly as it was signed.
+        expect(db.specialtyRecord.updateMany).not.toHaveBeenCalled();
+      });
+
+      it('asks for the reason and refuses to move the correction to another encounter or date', async () => {
+        expect(
+          await errorOf(
+            service.create('tenant-1', 'patient-1', nutritionist, {
+              ...amendment,
+              amendmentReason: '  ',
+            }),
+          ),
+        ).toMatchObject({ status: 400, code: 'CLINICAL_AMENDMENT_INVALID' });
+        expect(
+          await errorOf(
+            service.create('tenant-1', 'patient-1', nutritionist, {
+              ...amendment,
+              encounterId: 'encounter-2',
+            }),
+          ),
+        ).toMatchObject({ status: 400, code: 'CLINICAL_AMENDMENT_INVALID' });
+        expect(db.specialtyRecord.create).not.toHaveBeenCalled();
+      });
+
+      it('takes a reason only together with the record it corrects', async () => {
+        expect(
+          await errorOf(
+            service.create('tenant-1', 'patient-1', nutritionist, {
+              ...dto,
+              amendmentReason: 'x',
+            }),
+          ),
+        ).toMatchObject({ status: 400, code: 'CLINICAL_AMENDMENT_INVALID' });
+      });
+
+      it('sends a record not yet signed back to be corrected directly', async () => {
+        db.specialtyRecord.findFirst.mockResolvedValue(record({ id: 'original' }));
+
+        expect(
+          await errorOf(service.create('tenant-1', 'patient-1', nutritionist, amendment)),
+        ).toMatchObject({ status: 409, code: 'CLINICAL_RECORD_NOT_SIGNED' });
+      });
+
+      it('takes one addendum per record and points to the one already there', async () => {
+        db.specialtyRecord.findUnique.mockResolvedValue({ id: 'addendum-1' });
+
+        expect(
+          await errorOf(service.create('tenant-1', 'patient-1', nutritionist, amendment)),
+        ).toMatchObject({
+          status: 409,
+          code: 'CLINICAL_RECORD_ALREADY_AMENDED',
+          amendedById: 'addendum-1',
+        });
+        expect(db.specialtyRecord.create).not.toHaveBeenCalled();
+      });
+
+      it('keeps the module of the original and lets only its author correct it', async () => {
+        db.specialtyRecord.findFirst.mockResolvedValue({
+          ...original,
+          moduleKey: 'general.vital-signs',
+        });
+        expect(
+          await errorOf(service.create('tenant-1', 'patient-1', nutritionist, amendment)),
+        ).toMatchObject({ status: 400, code: 'CLINICAL_AMENDMENT_INVALID' });
+
+        db.specialtyRecord.findFirst.mockResolvedValue({
+          ...original,
+          professionalId: 'someone-else',
+        });
+        expect(
+          await errorOf(service.create('tenant-1', 'patient-1', nutritionist, amendment)),
+        ).toMatchObject({ status: 403 });
+        expect(db.specialtyRecord.create).not.toHaveBeenCalled();
+      });
     });
   });
 });

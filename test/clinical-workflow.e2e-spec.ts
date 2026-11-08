@@ -45,6 +45,7 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
   let appointmentId: string;
   let encounterId: string;
   let fileId: string;
+  let vitalsId: string;
   const tokens: Record<string, string> = {};
 
   const server = () => app.getHttpServer();
@@ -330,7 +331,24 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
           encounterId,
         })
         .expect(201);
-      expect(created.body).toMatchObject({ encounterId, data: { bmi: 24.9 } });
+      expect(created.body).toMatchObject({ encounterId, data: { bmi: 24.9 }, signed: false });
+      vitalsId = created.body.id;
+
+      // While the encounter is open the author corrects it; a stale version is a conflict.
+      await request(server())
+        .patch(patientUrl(`specialty-records/${vitalsId}`))
+        .set(as('pro'))
+        .send({ notes: 'Tomada en reposo', changeReason: 'Contexto', version: 1 })
+        .expect(200);
+      const stale = await request(server())
+        .patch(patientUrl(`specialty-records/${vitalsId}`))
+        .set(as('pro'))
+        .send({ notes: 'Otra', changeReason: 'Contexto', version: 1 })
+        .expect(409);
+      expect(stale.body).toMatchObject({
+        code: 'CLINICAL_RECORD_VERSION_CONFLICT',
+        currentVersion: 2,
+      });
 
       const listed = await request(server())
         .get(patientUrl('specialty-records'))
@@ -383,6 +401,43 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
         .post(patientUrl('specialty-records'))
         .set(as('pro'))
         .send({ moduleKey: 'general.vital-signs', data: { weightKg: 70 }, encounterId })
+        .expect(409);
+    });
+
+    it('signs the encounter with what it holds, which takes no more changes', async () => {
+      const row = await prisma.encounter.findUniqueOrThrow({ where: { id: encounterId } });
+      expect(row).toMatchObject({
+        signedById: professionalId,
+        contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/),
+      });
+      expect(row.signedAt).toEqual(row.closedAt);
+      const vitals = await prisma.specialtyRecord.findUniqueOrThrow({ where: { id: vitalsId } });
+      expect(vitals.signedAt).toEqual(row.signedAt);
+      expect(vitals.contentHash).toMatch(/^v1:[0-9a-f]{64}$/);
+
+      const edit = await request(server())
+        .patch(patientUrl(`specialty-records/${vitalsId}`))
+        .set(as('pro'))
+        .send({ notes: 'Tarde', changeReason: 'Tarde' })
+        .expect(409);
+      expect(edit.body.code).toBe('CLINICAL_RECORD_SIGNED');
+      await request(server())
+        .delete(patientUrl(`specialty-records/${vitalsId}`))
+        .set(as('pro'))
+        .send({ reason: 'Tarde' })
+        .expect(409);
+      await request(server())
+        .delete(patientUrl(`encounters/${encounterId}`))
+        .set(as('pro'))
+        .send({ reason: 'Tarde' })
+        .expect(409);
+
+      // The note written in it is final too.
+      const note = await prisma.clinicalNote.findFirstOrThrow({ where: { encounterId } });
+      await request(server())
+        .patch(`${base()}/clinical-notes/${note.id}`)
+        .set(as('pro'))
+        .send({ content: 'Tarde', changeReason: 'Tarde' })
         .expect(409);
     });
 
@@ -852,13 +907,53 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
       await request(server()).get('/api/v1/public/documents/0000-0000-0000-0000').expect(404);
       await request(server()).get('/api/v1/public/documents/not-a-code').expect(404);
 
-      await request(server())
+      // Its encounter closed: the document is signed. It is not withdrawn but corrected with an
+      // addendum, and whoever holds the paper is told it was corrected.
+      const refused = await request(server())
         .delete(patientUrl(`specialty-records/${consentId}`))
         .set(as('pro'))
         .send({ reason: 'Consentimiento retirado por la paciente' })
+        .expect(409);
+      expect(refused.body.code).toBe('CLINICAL_RECORD_SIGNED');
+
+      const signed = await request(server())
+        .get(patientUrl(`specialty-records/${consentId}`))
+        .set(as('pro'))
         .expect(200);
-      const withdrawn = await request(server()).get(`/api/v1/public/documents/${code}`).expect(200);
-      expect(withdrawn.body.status).toBe('WITHDRAWN');
+      expect(signed.body).toMatchObject({ signed: true, amendedBy: null });
+      const addendum = await request(server())
+        .post(patientUrl('specialty-records'))
+        .set(as('pro'))
+        .send({
+          moduleKey: signed.body.moduleKey,
+          schemaVersion: signed.body.schemaVersion,
+          data: signed.body.data,
+          amendsRecordId: consentId,
+          amendmentReason: 'Consentimiento retirado por la paciente',
+        })
+        .expect(201);
+      expect(addendum.body).toMatchObject({
+        signed: true,
+        amendsRecordId: consentId,
+        amendmentReason: 'Consentimiento retirado por la paciente',
+        encounterId: signed.body.encounterId,
+        contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/),
+      });
+      // One addendum per record.
+      await request(server())
+        .post(patientUrl('specialty-records'))
+        .set(as('pro'))
+        .send({
+          moduleKey: signed.body.moduleKey,
+          schemaVersion: signed.body.schemaVersion,
+          data: signed.body.data,
+          amendsRecordId: consentId,
+          amendmentReason: 'Otra vez',
+        })
+        .expect(409);
+
+      const corrected = await request(server()).get(`/api/v1/public/documents/${code}`).expect(200);
+      expect(corrected.body).toMatchObject({ status: 'VALID', correctedAt: expect.any(String) });
     });
   });
 });
