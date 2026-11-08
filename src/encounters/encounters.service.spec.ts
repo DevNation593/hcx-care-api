@@ -382,6 +382,26 @@ describe('EncountersService', () => {
     });
   });
 
+  it('takes the encounter row before reading its state when editing or removing it', async () => {
+    db.encounter.findFirst.mockResolvedValue(encounter());
+
+    await service.update('tenant-1', 'patient-1', 'encounter-1', physio, {
+      reason: 'Otro',
+    } as never);
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.encounter.findFirst.mock.invocationCallOrder[0],
+    );
+
+    jest.clearAllMocks();
+    db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+    db.encounter.findFirst.mockResolvedValue(encounter());
+    db.specialtyRecord.count.mockResolvedValue(0);
+    await service.delete('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' });
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.encounter.findFirst.mock.invocationCallOrder[0],
+    );
+  });
+
   describe('delete', () => {
     it('never removes a closed encounter: it is signed', async () => {
       db.encounter.findFirst.mockResolvedValue(encounter({ status: 'CLOSED' }));

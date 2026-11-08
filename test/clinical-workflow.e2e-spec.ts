@@ -441,6 +441,66 @@ describe('Clinical workflow: branch, appointment, encounter, records and files (
         .expect(409);
     });
 
+    it('does not let an edit or a removal under way slip in after the encounter is signed', async () => {
+      const started = await request(server())
+        .post(patientUrl('encounters'))
+        .set(as('pro'))
+        .send({
+          encounterType: 'FOLLOW_UP',
+          reason: 'Seguimiento',
+          // Before the window of the activity report below, which counts the other encounters.
+          startedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+        })
+        .expect(201);
+      const id = started.body.id as string;
+
+      // A close holds the row while it signs, as the service does. The edit and the removal
+      // arrive meanwhile: they must wait and then find the encounter signed, not write after it.
+      let locked!: () => void;
+      let release!: () => void;
+      const isLocked = new Promise<void>((resolve) => (locked = resolve));
+      const released = new Promise<void>((resolve) => (release = resolve));
+      const closing = prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "Encounter" WHERE "id" = ${id} FOR UPDATE`;
+          locked();
+          await released;
+          await tx.encounter.update({
+            where: { id },
+            data: { status: 'CLOSED', closedAt: new Date(), signedAt: new Date() },
+          });
+        },
+        { timeout: 20000 },
+      );
+      await isLocked;
+      const edit = request(server())
+        .patch(patientUrl(`encounters/${id}`))
+        .set(as('pro'))
+        .send({ reason: 'Escrito tarde' })
+        .then((response) => response);
+      const removal = request(server())
+        .delete(patientUrl(`encounters/${id}`))
+        .set(as('pro'))
+        .send({ reason: 'Tarde' })
+        .then((response) => response);
+      // Both requests are in flight and blocked on the row before the close commits.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      release();
+      await closing;
+
+      expect((await edit).status).toBe(409);
+      expect((await removal).status).toBe(409);
+      const row = await prisma.encounter.findUniqueOrThrow({ where: { id } });
+      expect(row.deletedAt).toBeNull();
+      const decrypted = await request(server())
+        .get(patientUrl('encounters'))
+        .set(as('pro'))
+        .expect(200);
+      expect(decrypted.body.find((encounter: { id: string }) => encounter.id === id).reason).toBe(
+        'Seguimiento',
+      );
+    });
+
     it('appears in the clinical timeline with its records', async () => {
       const timeline = await request(server())
         .get(patientUrl('clinical-timeline'))

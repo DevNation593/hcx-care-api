@@ -101,6 +101,19 @@ export async function assertOpenEncounter(
 }
 
 /**
+ * Takes the encounter row for the rest of the caller's transaction. Changing the encounter
+ * itself (editing, removing, closing and signing it) starts with it, before its state is read:
+ * those operations then run one after the other, and each one sees what the previous one left.
+ */
+async function lockEncounterRow(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  encounterId: string,
+): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "Encounter" WHERE "id" = ${encounterId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+}
+
+/**
  * Holds the encounter open until the caller's transaction ends: it takes a shared lock on the
  * row, so closing (which signs what the encounter holds) waits for writes already under way, and
  * a write that starts after the close sees it closed. Returns false when it is not open.
@@ -264,6 +277,7 @@ export class EncountersService {
     dto: UpdateEncounterDto,
   ) {
     return this.transaction(async (tx) => {
+      await lockEncounterRow(tx, tenantId, encounterId);
       const current = await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'editar');
       assertNotManagedBySession(current);
 
@@ -331,7 +345,7 @@ export class EncountersService {
   ): Promise<Encounter> {
     // Writes into the encounter hold a shared lock on it: closing waits for them to finish, and
     // the ones that come after find it closed. What is signed below is therefore final.
-    await tx.$queryRaw`SELECT "id" FROM "Encounter" WHERE "id" = ${encounterId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+    await lockEncounterRow(tx, tenantId, encounterId);
     const current = await this.findOwnOpen(
       tx,
       tenantId,
@@ -448,6 +462,7 @@ export class EncountersService {
     dto: DeleteEncounterDto,
   ) {
     return this.transaction(async (tx) => {
+      await lockEncounterRow(tx, tenantId, encounterId);
       const current = await this.findOwn(tx, tenantId, patientId, encounterId, actor, 'eliminar');
       assertNotManagedBySession(current);
       if (current.status === 'CLOSED') {
