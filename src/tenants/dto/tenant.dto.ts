@@ -1,24 +1,39 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsEmail, IsOptional, IsBoolean } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsString, IsEmail, IsOptional, IsBoolean, IsNotEmpty, MaxLength } from 'class-validator';
+
+const trimText = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim() : value;
+const trimEmail = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : value;
 
 export class UpdateTenantDto {
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'Consultorio Bienestar' })
+  @Transform(trimText)
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
   @IsOptional()
   name?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'contacto@bienestar.ec' })
+  @Transform(trimEmail)
   @IsEmail()
+  @MaxLength(254)
   @IsOptional()
   email?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'An empty string clears it.' })
+  @Transform(trimText)
   @IsString()
+  @MaxLength(40)
   @IsOptional()
   phone?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'An empty string clears it.' })
+  @Transform(trimText)
   @IsString()
+  @MaxLength(300)
   @IsOptional()
   address?: string;
 
