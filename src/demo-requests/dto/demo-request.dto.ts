@@ -58,7 +58,10 @@ export class CreateDemoRequestDto {
   @MaxLength(500)
   message?: string;
 
-  @ApiProperty({ description: 'The visitor accepted the privacy policy' })
+  @ApiProperty({ description: 'The visitor accepted the privacy policy: only the boolean true' })
+  // Reads the raw body: implicit conversion would turn any non-empty string, "false" included,
+  // into true before the checks below run.
+  @Transform(({ obj }) => obj.acceptPrivacy === true)
   @IsBoolean()
   @Equals(true)
   acceptPrivacy: boolean;

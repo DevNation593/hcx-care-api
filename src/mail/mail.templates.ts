@@ -153,7 +153,9 @@ export function demoRequestMail(input: {
   const intro = 'Llegó una nueva solicitud de demo desde el sitio público.';
 
   return {
-    subject: `Nueva solicitud de demo: ${input.clinic}`,
+    // Fixed: MailService logs the subject even for sensitive messages, and the practice name can
+    // identify a person ("Consultorio Dra. Ana Vega"). The visitor's data stays in the body.
+    subject: 'Nueva solicitud de demo',
     html: layout(
       'Nueva solicitud de demo',
       [intro, ...rows.map(([label, value]) => `<strong>${label}:</strong> ${escapeHtml(value)}`)],

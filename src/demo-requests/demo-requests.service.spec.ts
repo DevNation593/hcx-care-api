@@ -51,7 +51,9 @@ describe('DemoRequestsService', () => {
     expect(mail.send).toHaveBeenCalledTimes(1);
     const [to, content] = mail.send.mock.calls[0];
     expect(to).toBe('admin@platform.test');
-    expect(content.subject).toContain('Centro Vida');
+    // MailService logs the subject even for sensitive mail: it must not name the practice.
+    expect(content.subject).toBe('Nueva solicitud de demo');
+    expect(content.text).toContain('Centro Vida');
     expect(content.text).toContain('ana@example.com');
     expect(content.text).toContain('https://app.test/platform/demo-requests');
     expect(content.sensitive).toBe(true);
