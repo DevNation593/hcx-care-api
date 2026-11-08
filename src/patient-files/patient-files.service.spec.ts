@@ -1,5 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -127,6 +127,7 @@ describe('PatientFilesService', () => {
       aggregate: jest.fn(),
     },
     auditLog: { createMany: jest.fn() },
+    $queryRaw: jest.fn(),
   };
   const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
   const service = new PatientFilesService(
@@ -159,6 +160,57 @@ describe('PatientFilesService', () => {
     db.patientFile.create.mockImplementation(({ data }) =>
       Promise.resolve({ id: 'file-1', createdAt: new Date(), deletedAt: null, ...data }),
     );
+    // Encounters are open unless a case closes one.
+    db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+  });
+
+  describe('signatures', () => {
+    it('keeps the SHA-256 of the bytes as uploaded, not of what is stored encrypted', async () => {
+      await upload();
+
+      expect(created().contentHash).toBe(`v1:${createHash('sha256').update(PDF).digest('hex')}`);
+    });
+
+    it('takes nothing into an encounter closed while the file was on its way', async () => {
+      db.encounter.findFirst.mockResolvedValue({ professionalId: 'dentist', status: 'OPEN' });
+      db.$queryRaw.mockResolvedValue([]);
+      // The encounter is read again under the lock: it is closed now.
+      db.encounter.findFirst
+        .mockResolvedValueOnce({ professionalId: 'dentist', status: 'OPEN' })
+        .mockResolvedValueOnce({ professionalId: 'dentist', status: 'CLOSED' });
+
+      await expect(upload(part(), { encounterId: 'encounter-1' })).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'ENCOUNTER_CLOSED' },
+      });
+      expect(db.patientFile.create).not.toHaveBeenCalled();
+      // The bytes already stored are removed: nothing refers to them.
+      expect(blobs.size).toBe(0);
+    });
+
+    it('never removes a file of a signed encounter, and still removes one of an open encounter', async () => {
+      const inEncounter = {
+        id: 'file-1',
+        tenantId: 'tenant-1',
+        patientId: 'patient-1',
+        uploadedById: 'dentist',
+        encounterId: 'encounter-1',
+        fileName: 'hemograma.pdf',
+        description: null,
+        storageKey: 'tenant-1/patient-1/blob',
+      };
+      db.patientFile.findFirst.mockResolvedValue(inEncounter);
+      db.$queryRaw.mockResolvedValue([]);
+
+      await expect(
+        service.delete('tenant-1', 'patient-1', 'file-1', dentist, { reason: 'x' }),
+      ).rejects.toMatchObject({ status: 409, response: { code: 'PATIENT_FILE_SIGNED' } });
+      expect(db.patientFile.update).not.toHaveBeenCalled();
+
+      db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+      await service.delete('tenant-1', 'patient-1', 'file-1', dentist, { reason: 'x' });
+      expect(db.patientFile.update).toHaveBeenCalled();
+    });
   });
 
   describe('upload', () => {

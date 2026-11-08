@@ -257,13 +257,29 @@ GET /tenants/{tenantId}/patients/{patientId}/specialty-records?moduleKey=...
 # Standing alerts of the patient: every allergy record and the latest record of each other module.
 GET /tenants/{tenantId}/patients/{patientId}/specialty-records/alerts
 
-# Correct (author only): validated against the version the record was written under.
+# Correct (author only) while the record is not signed, that is, in an encounter still open:
+# validated against the version the record was written under. With `version`, a save made by
+# someone else since answers 409 CLINICAL_RECORD_VERSION_CONFLICT { currentVersion }.
 PATCH /tenants/{tenantId}/patients/{patientId}/specialty-records/{recordId}
-{ "data": { "weightKg": 69.5, "heightCm": 170 }, "changeReason": "Peso mal digitado" }
+{ "data": { "weightKg": 69.5, "heightCm": 170 }, "changeReason": "Peso mal digitado", "version": 1 }
 
-# Remove (author only): soft delete with a mandatory reason.
+# Remove (author only, not signed): soft delete with a mandatory reason.
 DELETE /tenants/{tenantId}/patients/{patientId}/specialty-records/{recordId}
 { "reason": "Paciente equivocado" }
+
+# A signed record (its encounter closed, or saved outside any encounter) is never changed nor
+# removed: 409 CLINICAL_RECORD_SIGNED. Its author corrects it with an addendum, a new signed
+# record of the same module in the encounter, appointment and date of the original. One addendum
+# per record (409 CLINICAL_RECORD_ALREADY_AMENDED { amendedById }); a record not signed yet is
+# corrected directly (409 CLINICAL_RECORD_NOT_SIGNED). Records carry `signed`, `signedAt`,
+# `contentHash`, `amendsRecordId`, `amendmentReason` and `amendedBy: { id, createdAt } | null`.
+POST /tenants/{tenantId}/patients/{patientId}/specialty-records
+{ "moduleKey": "general.vital-signs", "schemaVersion": 1, "data": { "weightKg": 69.5, "heightCm": 170 },
+  "amendsRecordId": "...", "amendmentReason": "Peso mal digitado", "password": "..." }
+
+# Every explicit signature asks the password of the professional again: an addendum and a record
+# saved outside any encounter (both signed as they are saved) carry `password`. Missing or wrong:
+# 403 SIGNATURE_PASSWORD_INVALID, which keeps the session.
 ```
 
 A request without `schemaVersion` comes from a client older than the definitions: it is checked against the legacy version of the module when one exists (the previous required keys, any value), otherwise against the current one. Other codes: `400 CLINICAL_MODULE_UNKNOWN`, `409 CLINICAL_MODULE_VERSION_OUTDATED`.
@@ -295,10 +311,14 @@ POST /tenants/{tenantId}/patients/{patientId}/encounters
 GET  /tenants/{tenantId}/patients/{patientId}/encounters
 
 # Records created with `encounterId` are written into that open encounter (409 ENCOUNTER_CLOSED).
-# Closing is the sign-off of the professional: no more records, and the appointment is COMPLETED.
-POST   /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}/close   { "summary": "..." }
+# Closing is the signature of the professional: the encounter, its records and notes get their
+# SHA-256 (`signedAt`, `signedById`, `contentHash`), take no more changes, and the appointment is
+# COMPLETED. Encounters closed before signatures existed have no hash but are as final. The
+# signature covers the files of the encounter (the SHA-256 of their bytes, taken on upload), which
+# can no longer be removed (409 PATIENT_FILE_SIGNED). `password` is required (403 above).
+POST   /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}/close   { "summary": "...", "password": "..." }
 PATCH  /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         # type or reason, while open
-DELETE /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         { "reason": "..." }  # only without records
+DELETE /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         { "reason": "..." }  # open and without records (409 ENCOUNTER_SIGNED)
 
 # Branches. Every clinic has a main one. A PERSONAL tenant has a single active branch.
 GET   /tenants/{tenantId}/branches

@@ -226,6 +226,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .post(patientUrl('Mateo', 'specialty-records'))
       .set(as('odonto'))
       .send({
+        password: DEMO_PASSWORD,
         moduleKey: 'general.soap-note',
         data: { subjective: 'Dolor 8/10.', assessment: 'Pulpitis.', plan: 'Pulpotomía.' },
         encounterId: encounters.body[0].id,
@@ -235,6 +236,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .post(patientUrl('Mateo', 'specialty-records'))
       .set(as('nutri'))
       .send({
+        password: DEMO_PASSWORD,
         moduleKey: 'general.vital-signs',
         data: { weightKg: 30 },
         encounterId: encounters.body[0].id,
@@ -243,7 +245,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
     const closed = await request(server())
       .post(patientUrl('Mateo', `encounters/${encounters.body[0].id}/close`))
       .set(as('odonto'))
-      .send({ summary: 'Pulpotomía realizada.' })
+      .send({ password: DEMO_PASSWORD, summary: 'Pulpotomía realizada.' })
       .expect(201);
     expect(closed.body.status).toBe('CLOSED');
   });
@@ -293,6 +295,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .post(patientUrl('Lucía', 'specialty-records'))
       .set(as('gineco'))
       .send({
+        password: DEMO_PASSWORD,
         moduleKey: 'gynecology.menstrual-history',
         schemaVersion: 1,
         data: { lmpCertainty: 'DESCONOCIDA', cycleRegular: 'DESCONOCIDO' },
@@ -310,7 +313,12 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
     await request(server())
       .post(patientUrl('Lucía', 'specialty-records'))
       .set(as('medicina'))
-      .send({ moduleKey: 'gynecology.menstrual-history', schemaVersion: 1, data: {} })
+      .send({
+        password: DEMO_PASSWORD,
+        moduleKey: 'gynecology.menstrual-history',
+        schemaVersion: 1,
+        data: {},
+      })
       .expect(403);
   });
 
@@ -343,7 +351,11 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
     await request(server())
       .post(patientUrl('Thomas', 'specialty-records'))
       .set(as('nutri'))
-      .send({ moduleKey: form[0].moduleKey, data: { sport: 'Natación', level: 'RECREATIVO' } })
+      .send({
+        password: DEMO_PASSWORD,
+        moduleKey: form[0].moduleKey,
+        data: { sport: 'Natación', level: 'RECREATIVO' },
+      })
       .expect(403);
   });
 
@@ -545,6 +557,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
         .post(studioUrl(`patients/${studio.mariana}/specialty-records`))
         .set(asCosmetologist())
         .send({
+          password: DEMO_PASSWORD,
           moduleKey: 'general.soap-note',
           data: { subjective: 'Refiere', assessment: 'A', plan: 'P' },
         })

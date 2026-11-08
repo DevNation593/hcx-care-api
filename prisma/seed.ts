@@ -22,6 +22,7 @@ import {
 } from './seed-helpers';
 import { seedAestheticStudio } from './seed-aesthetic-studio';
 import { seedClinicalWorkflow } from './seed-clinical-workflow';
+import { signSeededClinicalContent } from './seed-signatures';
 
 export const DEMO_PASSWORD = 'Password123!';
 const PLATFORM_ADMIN_EMAIL = 'admin@plataforma.test';
@@ -310,6 +311,8 @@ export async function seedDatabase(
 
   await seedClinicalWorkflow(ctx);
   await seedAestheticStudio(ctx);
+  // Signed as the API signs them, over the plain text, before it is encrypted below.
+  await signSeededClinicalContent(db);
 
   // The rows above are written as plain text; with a key configured they are stored as the
   // API stores them, so the demo data is readable by the API and nothing else.

@@ -521,7 +521,7 @@ model TenantSubscription {
   // Resource Limits
   maxActivePatients              Int     @default(10)
   maxBranches                    Int     @default(1)
-  storageGB                    Int     @default(1) // every plan has a finite quota
+  storageGB                      Int     @default(1) // every plan has a finite quota
   monthlyNotificationsLimit      Int     @default(100)
   includedSpecialties            Int     @default(1)
   specialtyPrice                 Decimal @default(15) @db.Decimal(10, 2)
@@ -915,6 +915,19 @@ model SpecialtyRecord {
   deletedById    String?
   deletionReason String?
 
+  // Signed when its encounter closes, or when it is saved if it belongs to no encounter: from
+  // then on it is never changed nor removed, only corrected by an addendum. `contentHash` is the
+  // SHA-256 of its content at signing. Records of encounters closed before signatures existed
+  // are as final, without a hash.
+  signedAt        DateTime?
+  contentHash     String?
+  // An addendum corrects one signed record; the original stays as it was signed.
+  amendsRecordId  String?          @unique
+  amends          SpecialtyRecord? @relation("RecordAmendment", fields: [amendsRecordId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  amendedBy       SpecialtyRecord? @relation("RecordAmendment")
+  // Stored encrypted.
+  amendmentReason String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -952,9 +965,14 @@ model Encounter {
   reason  String
   summary String?
 
-  startedAt DateTime  @default(now())
+  startedAt   DateTime  @default(now())
   // Closing is the professional's sign-off: no record is added afterwards.
-  closedAt  DateTime?
+  closedAt    DateTime?
+  // The signature taken when it closes: who signed and the SHA-256 of the encounter with the
+  // hashes of its records and notes. Null for encounters closed before signatures existed.
+  signedAt    DateTime?
+  signedById  String?
+  contentHash String?
 
   version        Int       @default(1)
   deletedAt      DateTime?
@@ -995,6 +1013,9 @@ model PatientFile {
   mimeType   String
   sizeBytes  Int
   storageKey String @unique
+  // SHA-256 of the decrypted bytes (`v1:<hex>`), taken when the file is uploaded. Files uploaded
+  // before it existed get theirs when the encounter they belong to is signed.
+  contentHash String?
 
   // Set for photos taken during a treatment session; null for every other file.
   treatmentSessionId String?

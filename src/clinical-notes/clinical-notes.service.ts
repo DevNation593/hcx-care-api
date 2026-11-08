@@ -2,7 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { LEGACY_BILLING_OMIT } from '../patients/legacy-billing';
 import { ClinicalNote, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { assertOpenEncounter } from '../encounters/encounters.service';
+import { assertOpenEncounter, lockOpenEncounter } from '../encounters/encounters.service';
+import { clinicalRecordSigned } from '../clinical-access/clinical-signature';
 import { PUBLIC_USER_SELECT } from '../common/utils/public-user-select';
 import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
@@ -16,17 +17,11 @@ import {
   DeleteClinicalNoteDto,
   UpdateClinicalNoteDto,
 } from './dto/clinical-note.dto';
+import { ENCRYPTED_NOTE_FIELDS } from './encrypted-note-fields';
+
+export { ENCRYPTED_NOTE_FIELDS };
 
 const personSelect = { id: true, firstName: true, lastName: true } as const;
-
-/** Stored encrypted; everything outside this service works with the decrypted note. */
-export const ENCRYPTED_NOTE_FIELDS = [
-  'content',
-  'diagnosis',
-  'treatment',
-  'observations',
-  'deletionReason',
-] as const;
 
 /** The clinical state of a note, stored in the audit log before and after every change. */
 export function snapshotClinicalNote(note: ClinicalNote) {
@@ -85,6 +80,10 @@ export class ClinicalNotesService {
     }
 
     return this.transaction(async (tx) => {
+      // Holds the encounter open until the note is in: a close running now waits for it.
+      if (encounterId && !(await lockOpenEncounter(tx, tenantId, encounterId))) {
+        await assertOpenEncounter(tx, tenantId, patientId, encounterId, actor);
+      }
       const stored = await tx.clinicalNote.create({
         data: {
           ...this.encrypt(tenantId, noteData),
@@ -194,6 +193,7 @@ export class ClinicalNotesService {
 
     return this.transaction(async (tx) => {
       const note = await this.findOwnNote(tx, tenantId, noteId, actor, 'editar');
+      await this.assertNotSigned(tx, tenantId, note);
 
       const updated = this.decrypt(
         await tx.clinicalNote.update({
@@ -234,6 +234,7 @@ export class ClinicalNotesService {
   async delete(tenantId: string, noteId: string, actor: ClinicalActor, dto: DeleteClinicalNoteDto) {
     return this.transaction(async (tx) => {
       const note = await this.findOwnNote(tx, tenantId, noteId, actor, 'eliminar');
+      await this.assertNotSigned(tx, tenantId, note);
 
       // The row stays for audit; it only stops being listed.
       await tx.clinicalNote.update({
@@ -286,6 +287,20 @@ export class ClinicalNotesService {
     }
 
     return note;
+  }
+
+  /**
+   * A note written in an encounter is signed with it when it closes: from then on it is final.
+   * While the encounter is open, it stays open until the change is in.
+   */
+  private async assertNotSigned(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    note: Pick<ClinicalNote, 'encounterId'>,
+  ) {
+    if (note.encounterId && !(await lockOpenEncounter(tx, tenantId, note.encounterId))) {
+      throw clinicalRecordSigned();
+    }
   }
 
   private encrypt<T extends Partial<ClinicalNote>>(tenantId: string, fields: T): T {

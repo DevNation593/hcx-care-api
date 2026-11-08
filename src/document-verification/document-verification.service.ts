@@ -45,6 +45,7 @@ export class DocumentVerificationService {
         version: true,
         updatedAt: true,
         deletedAt: true,
+        amendedBy: { select: { createdAt: true } },
         tenant: { select: { name: true } },
         specialty: { select: { name: true } },
         patient: { select: { firstName: true, lastName: true } },
@@ -70,8 +71,9 @@ export class DocumentVerificationService {
       status: record.deletedAt ? ('WITHDRAWN' as const) : ('VALID' as const),
       documentType: documentType ?? 'Documento clínico',
       issuedAt: record.recordDate,
-      // The paper may predate a correction: the holder is told to ask for the current one.
-      correctedAt: record.version > 1 ? record.updatedAt : null,
+      // The paper may predate a correction, made in place before signatures or by an addendum
+      // since: the holder is told to ask for the current one.
+      correctedAt: record.amendedBy?.createdAt ?? (record.version > 1 ? record.updatedAt : null),
       withdrawnAt: record.deletedAt,
       clinic: record.tenant.name,
       specialty: record.specialty?.name ?? null,

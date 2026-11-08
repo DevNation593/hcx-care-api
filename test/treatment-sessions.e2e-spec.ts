@@ -713,7 +713,7 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     const response = await request(server())
       .post(`${base()}/patients/${patientId}/encounters/${session.encounterId}/close`)
       .set(as('pro'))
-      .send({})
+      .send({ password: TEST_PASSWORD })
       .expect(409);
     expect(response.body.code).toBe('ENCOUNTER_MANAGED_BY_SESSION');
     expect(response.body.treatmentSessionId).toBe(session.id);

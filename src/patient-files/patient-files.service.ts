@@ -14,7 +14,8 @@ import {
   clinicalRecordForbidden,
   clinicalRecordNotFound,
 } from '../clinical-access/clinical-errors';
-import { assertOpenEncounter } from '../encounters/encounters.service';
+import { bytesContentHash, patientFileSigned } from '../clinical-access/clinical-signature';
+import { assertOpenEncounter, lockOpenEncounter } from '../encounters/encounters.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DeletePatientFileDto, UploadPatientFileDto } from './dto/patient-file.dto';
 import { FILE_STORAGE, FileStorage } from './file-storage';
@@ -61,6 +62,7 @@ export function snapshotPatientFile(file: PatientFile) {
     description: file.description,
     mimeType: file.mimeType,
     sizeBytes: file.sizeBytes,
+    contentHash: file.contentHash,
     treatmentSessionId: file.treatmentSessionId,
     phase: file.phase,
   };
@@ -145,6 +147,10 @@ export class PatientFilesService {
 
     try {
       return await this.transaction(async (tx) => {
+        // Holds the encounter open until the file is in: a close running now waits for it.
+        if (dto.encounterId && !(await lockOpenEncounter(tx, tenantId, dto.encounterId))) {
+          await assertOpenEncounter(tx, tenantId, patientId, dto.encounterId, actor);
+        }
         await this.reserveSpace(tx, tenantId, actor, sizeBytes);
 
         const stored = await tx.patientFile.create({
@@ -161,6 +167,8 @@ export class PatientFilesService {
             mimeType: part.mimetype,
             sizeBytes,
             storageKey,
+            // Over the bytes as uploaded, so it never depends on the encryption key.
+            contentHash: bytesContentHash(part.buffer),
             treatmentSessionId: session?.treatmentSessionId,
             phase: session?.phase,
           },
@@ -224,6 +232,10 @@ export class PatientFilesService {
       if (!stored) throw clinicalRecordNotFound('Archivo no encontrado');
       if (stored.uploadedById !== actor.userId) {
         throw clinicalRecordForbidden('Solo puedes eliminar los archivos que subiste');
+      }
+      // A file of an encounter is part of its signature; while it is open, it stays open.
+      if (stored.encounterId && !(await lockOpenEncounter(tx, tenantId, stored.encounterId))) {
+        throw patientFileSigned();
       }
 
       await tx.patientFile.update({

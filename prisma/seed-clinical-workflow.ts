@@ -1,3 +1,4 @@
+import { bytesContentHash } from '../src/clinical-access/clinical-signature';
 import type {
   Appointment,
   Encounter,
@@ -669,6 +670,8 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
         mimeType: input.mimeType,
         sizeBytes: input.bytes.length,
         storageKey,
+        // As the API keeps it: the SHA-256 of the bytes as uploaded.
+        contentHash: bytesContentHash(input.bytes),
         createdAt: input.at,
       },
     });

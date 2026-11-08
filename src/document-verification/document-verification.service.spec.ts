@@ -11,6 +11,7 @@ describe('DocumentVerificationService', () => {
     version: 1,
     updatedAt: new Date('2026-10-03T15:00:00.000Z'),
     deletedAt: null,
+    amendedBy: null,
     tenant: { name: 'Centro Bienestar' },
     specialty: { name: 'Psicología' },
     patient: { firstName: 'ana maría', lastName: 'Pérez Luna' },
@@ -71,6 +72,18 @@ describe('DocumentVerificationService', () => {
     await expect(service.verify('ABCDEFGHJKMNPQRS')).resolves.toMatchObject({
       status: 'VALID',
       correctedAt: updatedAt,
+    });
+  });
+
+  it('tells the holder of a signed document that an addendum corrected it', async () => {
+    const amendedAt = new Date('2026-10-06T10:00:00.000Z');
+    prisma.specialtyRecord.findUnique.mockResolvedValueOnce(
+      stored({ amendedBy: { createdAt: amendedAt } }),
+    );
+
+    await expect(service.verify('ABCDEFGHJKMNPQRS')).resolves.toMatchObject({
+      status: 'VALID',
+      correctedAt: amendedAt,
     });
   });
 

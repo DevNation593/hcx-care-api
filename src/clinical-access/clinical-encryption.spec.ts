@@ -25,7 +25,7 @@ describe('clinical data at rest', () => {
       findFirst: jest.fn(),
       update: jest.fn(),
     },
-    specialtyRecord: { create: jest.fn(), findMany: jest.fn() },
+    specialtyRecord: { create: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     encounter: { findMany: jest.fn() },
     auditLog: { createMany: jest.fn(), findMany: jest.fn() },
   };

@@ -13,12 +13,26 @@
 | Tabla | Columnas |
 | --- | --- |
 | `ClinicalNote` | `content`, `diagnosis`, `treatment`, `observations`, `deletionReason` |
-| `SpecialtyRecord` | `data` (JSON), `notes` |
+| `SpecialtyRecord` | `data` (JSON), `notes`, `amendmentReason` |
 | `AuditLog` de notas y registros | `changes` (instantáneas anterior/posterior), `reason` |
 
 No se cifra lo que la base necesita para filtrar, ordenar o relacionar: identificadores, `tenantId`, `patientId`, autor, especialidad, `moduleKey`, fechas, duración y versión.
 
 **Fuera de este alcance, todavía en texto plano:** planes de próxima sesión (`NextSessionPlan`), tareas, y los campos médicos básicos de `Patient` (`allergies`, `currentMedication`, `notes`). La búsqueda de pacientes filtra por nombre y correo, por eso la ficha demográfica no se cifra en esta entrega.
+
+## Firma y adendas
+
+La historia no se reescribe una vez firmada.
+
+- **Cerrar una atención es firmarla.** Se guardan `signedAt`, `signedById` y `contentHash`: el SHA-256 (`v1:<hex>`) del contenido de la atención junto con la huella de cada registro y nota que contiene. Cada registro de la atención guarda también su propia huella y hora de firma.
+- **Un registro fuera de toda atención** (un certificado o una receta sueltos) **se firma al guardarse.**
+- **Lo firmado no se edita ni se elimina** (`409 CLINICAL_RECORD_SIGNED`). Se corrige con una **adenda**: un registro nuevo del mismo formulario, con `amendsRecordId` y un motivo obligatorio, que queda en la misma atención, cita y fecha del original. El original no cambia y se muestra como corregido; un registro admite una sola adenda (para volver a corregir, se corrige la adenda). La página pública de verificación avisa que el documento fue corregido.
+- **Atenciones cerradas antes de este cambio:** quedan igual de definitivas, sin huella. No se calcula una huella retroactiva.
+- La huella se calcula sobre el **texto descifrado**, con las claves de los objetos ordenadas y las fechas en ISO, así que rotar la clave de cifrado no la altera. Código: `src/clinical-access/clinical-signature.ts`.
+- **Concurrencia:** escribir en una atención toma un bloqueo compartido sobre su fila y cerrarla toma uno exclusivo, así que nada entra en una atención después de firmada. Una corrección mientras la atención está abierta solo reemplaza la versión que leyó; si alguien guardó antes, responde `409 CLINICAL_RECORD_VERSION_CONFLICT` con `currentVersion`. El cliente puede enviar `version` para detectarlo desde el formulario.
+- **Notas clínicas:** una nota dentro de una atención firmada tampoco se edita ni se elimina. Las notas sueltas (sin atención) mantienen la corrección auditada de siempre.
+- **Archivos adjuntos:** al subir un archivo se guarda el SHA-256 de sus bytes descifrados (`PatientFile.contentHash`). La firma de la atención cubre cada archivo que contiene: categoría, nombre, descripción, tipo, tamaño y esa huella. Un archivo subido antes de que existiera la huella se lee del almacenamiento y se le calcula al firmar su atención. Un archivo de una atención firmada no se elimina (`409 PATIENT_FILE_SIGNED`); los archivos sueltos siguen eliminándose con motivo.
+- **Identidad de quien firma:** toda firma explícita pide la contraseña del profesional aunque la sesión sea válida: cerrar una atención, guardar una adenda y guardar un registro fuera de toda atención. Una contraseña ausente o incorrecta responde `403 SIGNATURE_PASSWORD_INVALID` (nunca 401, para no cerrar la sesión). La contraseña solo se compara con bcrypt: no se guarda ni se registra. Las atenciones que una sesión de tratamiento cierra por sí misma no la piden.
 
 ## Cómo funciona
 
