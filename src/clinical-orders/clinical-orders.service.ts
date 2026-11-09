@@ -19,6 +19,7 @@ import {
   resultContentHash,
 } from '../clinical-access/clinical-signature';
 import { assertOpenEncounter, lockOpenEncounter } from '../encounters/encounters.service';
+import { lockPatientFileRow } from '../patient-files/patient-files.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   assertAssignableProfessional,
@@ -226,6 +227,8 @@ export class ClinicalOrdersService {
     }
 
     return this.command(tenantId, orderId, actor, dto.version, 'addResult', async (tx, current) => {
+      // Its author may be removing it right now: whoever takes the row first decides.
+      if (dto.fileId) await lockPatientFileRow(tx, tenantId, dto.fileId);
       const file = dto.fileId
         ? await tx.patientFile.findFirst({
             where: { id: dto.fileId, tenantId, patientId: current.patientId, deletedAt: null },

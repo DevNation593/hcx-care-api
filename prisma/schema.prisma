@@ -764,6 +764,9 @@ model User {
   mfaEnabledAt     DateTime?
   mfaRecoveryCodes String[]  @default([])
   mfaLastStep      Int?
+  // Every token carries the version it was issued under; enabling or resetting the second factor
+  // bumps it, and from then on the tokens of an earlier version are refused.
+  sessionVersion   Int       @default(0)
 
   // Push notifications
   fcmToken String? // Firebase Cloud Messaging token

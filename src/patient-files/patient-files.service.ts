@@ -96,6 +96,19 @@ function cleanFileName(original: string): string {
   return (base || 'archivo').slice(0, 200);
 }
 
+/**
+ * Takes the file row for the rest of the caller's transaction. Removing a file and making it the
+ * report of a result both start with it, then read its state: one waits for the other and sees
+ * what it left, so a result never ends up with a removed report.
+ */
+export async function lockPatientFileRow(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  fileId: string,
+): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "PatientFile" WHERE "id" = ${fileId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+}
+
 @Injectable()
 export class PatientFilesService {
   private readonly logger = new Logger(PatientFilesService.name);
@@ -272,6 +285,7 @@ export class PatientFilesService {
     dto: DeletePatientFileDto,
   ) {
     return this.transaction(async (tx) => {
+      await lockPatientFileRow(tx, tenantId, fileId);
       const stored = await tx.patientFile.findFirst({
         where: { id: fileId, tenantId, patientId, deletedAt: null },
         include: { clinicalResult: { select: { id: true } } },

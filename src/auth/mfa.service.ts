@@ -14,6 +14,7 @@ import * as QRCode from 'qrcode';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
 import { PrismaService } from '../prisma/prisma.service';
+import { nextSessionVersion } from './session-version';
 import {
   generateRecoveryCodes,
   generateTotpSecret,
@@ -144,6 +145,7 @@ export class MfaService {
           mfaEnabledAt: new Date(),
           mfaLastStep: step,
           mfaRecoveryCodes: recoveryCodes.map(hashRecoveryCode),
+          ...nextSessionVersion,
         },
       });
       await tx.refreshToken.updateMany({
@@ -204,7 +206,11 @@ export class MfaService {
     const user = await this.prisma.user.findFirst({ where: { id: userId, tenantId } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
     await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({ where: { id: user.id }, data: this.cleared() });
+      // Ends the sessions as the access tokens see them too, not only the refresh tokens.
+      await tx.user.update({
+        where: { id: user.id },
+        data: { ...this.cleared(), ...nextSessionVersion },
+      });
       await tx.refreshToken.updateMany({
         where: { userId: user.id, isRevoked: false },
         data: { isRevoked: true },
