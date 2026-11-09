@@ -356,14 +356,20 @@ POST /tenants/{tenantId}/clinical-orders/{orderId}/cancel     { "version": 1, "s
 # Follow-ups close only explicitly; cancelling an appointment never closes them.
 GET   /tenants/{tenantId}/patients/{patientId}/clinical-follow-ups
 POST  /tenants/{tenantId}/patients/{patientId}/clinical-follow-ups   { "title": "...", "dueDate": "...", "assignedToId": "..." }
-GET   /tenants/{tenantId}/clinical-follow-ups?status=OPEN&scope=mine|all
+# { items, total, page, pageSize }: 200 per page, the nearest date first.
+GET   /tenants/{tenantId}/clinical-follow-ups?status=OPEN&scope=mine|all&page=1
+# Editing a follow-up needs clinical_records.update; closing it, clinical_records.create.
+# Its responsible must be an active professional of a health specialty (400 FOLLOW_UP_ASSIGNEE_INVALID).
 PATCH /tenants/{tenantId}/clinical-follow-ups/{followUpId}           { "version": 1, "dueDate": "...", "assignedToId": "..." }
 POST  /tenants/{tenantId}/clinical-follow-ups/{followUpId}/close     { "version": 1, "status": "DONE", "note": "..." }
 
 # What waits: results to review, orders without a result, reviewed results not communicated and
 # open follow-ups, each `overdue` past the thresholds of the clinic (TenantSettings
 # resultReviewAlertDays, orderResultAlertDays). scope=mine (default) or all.
-GET /tenants/{tenantId}/clinical-inbox?scope=mine
+# Each list holds 200 items per page, the oldest first; `totals` counts all of them and `page`
+# brings the next ones.
+GET /tenants/{tenantId}/clinical-inbox?scope=mine&page=1
+# A file that is the report of a result is never removed: 409 PATIENT_FILE_IN_RESULT.
 ```
 
 ```bash

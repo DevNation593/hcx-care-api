@@ -31,13 +31,17 @@ ORDERED -> SAMPLE_COLLECTED -> SENT_TO_LAB -> PENDING_REVIEW -> REVIEWED -> PATI
 
 La solicitud de la orden (tipo, estudio, indicación, prioridad, profesional y fecha) se firma igual que un registro: con su atención al cerrarla, o al guardarla si no pertenece a ninguna, para lo cual se pide la contraseña. La huella de la atención incluye las de sus órdenes solo cuando tiene órdenes, de modo que las atenciones firmadas antes conservan la suya. El avance posterior (muestra, resultados, revisión) no forma parte de lo firmado; cada versión de resultado guarda su propia huella SHA-256 al registrarse. Una atención con órdenes ya no se puede eliminar.
 
+## Archivos de resultados
+
+Un archivo que es el informe de un resultado no se puede eliminar (`409 PATIENT_FILE_IN_RESULT`): el resultado se quedaría sin su informe.
+
 ## Seguimientos
 
-Se crean desde una revisión o a mano (por ejemplo, un control preventivo). Solo se cierran explícitamente, como realizados o cancelados y siempre con una nota. Cancelar, reprogramar o completar una cita no los toca (RB-02, CA-008), y la orden conserva sus resultados aunque la cita cambie (RB-03).
+Se crean desde una revisión o a mano (por ejemplo, un control preventivo). El responsable es un profesional activo de una especialidad de salud, que es quien puede abrir la bandeja. Cambiar su texto, fecha o responsable exige `clinical_records.update`, como corregir una nota. Solo se cierran explícitamente, como realizados o cancelados y siempre con una nota. Cancelar, reprogramar o completar una cita no los toca (RB-02, CA-008), y la orden conserva sus resultados aunque la cita cambie (RB-03).
 
 ## Pendientes clínicos
 
-`GET /clinical-inbox` reúne, del profesional (`scope=mine`) o de todo el consultorio (`scope=all`): resultados por revisar, órdenes sin resultado, resultados revisados sin comunicación y seguimientos abiertos. Marca como vencido:
+`GET /clinical-inbox` reúne, del profesional (`scope=mine`) o de todo el consultorio (`scope=all`): resultados por revisar, órdenes sin resultado, resultados revisados sin comunicación y seguimientos abiertos. Cada lista trae 200 elementos por página, los más antiguos primero; `totals` dice cuántos hay en total y `page` trae los siguientes. Marca como vencido:
 
 - un resultado sin revisar más de `TenantSettings.resultReviewAlertDays` días (por defecto 3);
 - una orden sin resultado pasada su `resultDueAt`, que por defecto es la fecha de la orden más `orderResultAlertDays` (por defecto 15).

@@ -128,9 +128,12 @@ function memoryDb() {
       findUnique: jest.fn(async () => ({ resultReviewAlertDays: 3, orderResultAlertDays: 10 })),
     },
     professionalProfile: {
-      findFirst: jest.fn(async ({ where }: Row) =>
-        ['gyn', 'gyn-2'].includes(where.userId) ? { userId: where.userId } : null,
-      ),
+      findFirst: jest.fn(async ({ where }: Row) => {
+        const code = { gyn: 'GYNECOLOGY', 'gyn-2': 'GYNECOLOGY', cosmetologist: 'AESTHETICS' }[
+          where.userId as string
+        ];
+        return code ? { userId: where.userId, specialty: { code } } : null;
+      }),
     },
     $queryRaw: jest.fn(async () => [{ id: 'locked' }]),
   };
@@ -403,8 +406,21 @@ describe('ClinicalOrdersService', () => {
       );
     });
 
-    it('assigns a follow-up only to an active professional of the clinic', async () => {
+    it('assigns a follow-up only to an active professional of a health specialty', async () => {
       const { resultId } = await received();
+
+      // Estética does not reach the clinical inbox: it could never open the follow-up.
+      await expect(
+        orders.review('tenant-1', resultId, gyn, {
+          decision: 'FOLLOW_UP_REQUIRED',
+          note: 'Control',
+          followUp: {
+            title: 'Control',
+            dueDate: '2026-12-08T00:00:00.000Z',
+            assignedToId: 'cosmetologist',
+          },
+        }),
+      ).rejects.toMatchObject({ response: { code: 'FOLLOW_UP_ASSIGNEE_INVALID' } });
 
       await expect(
         orders.review('tenant-1', resultId, gyn, {
@@ -577,7 +593,7 @@ describe('ClinicalOrdersService', () => {
       });
       db.tables.auditLog.length = 0;
 
-      const inbox = await followUps.inbox('tenant-1', gyn, 'mine');
+      const inbox = await followUps.inbox('tenant-1', gyn, { scope: 'mine' });
 
       expect(inbox.pendingReview).toEqual([
         expect.objectContaining({
@@ -595,8 +611,16 @@ describe('ClinicalOrdersService', () => {
       expect(audits().every(({ action }) => action === 'READ')).toBe(true);
       expect(audits()).toHaveLength(3);
 
-      const all = await followUps.inbox('tenant-1', gyn, 'all');
+      const all = await followUps.inbox('tenant-1', gyn, { scope: 'all' });
       expect(all.awaitingResult).toHaveLength(2);
+      // Each list says how many there are, so a client can tell when a page does not hold them all.
+      expect(all.totals).toEqual({
+        pendingReview: 1,
+        awaitingResult: 2,
+        toCommunicate: 0,
+        followUps: 1,
+      });
+      expect(all).toMatchObject({ page: 1, pageSize: 200 });
     });
   });
 });

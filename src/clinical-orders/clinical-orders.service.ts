@@ -334,6 +334,9 @@ export class ClinicalOrdersService {
       if (result.status !== 'PENDING_REVIEW') {
         throw conflict('CLINICAL_RESULT_ALREADY_REVIEWED', 'Este resultado ya fue revisado.');
       }
+      // Checked before anything is written.
+      const assignedToId = dto.followUp?.assignedToId ?? actor.userId;
+      if (needsFollowUp) await assertAssignableProfessional(tx, tenantId, assignedToId);
 
       const reviewNote = dto.note.trim();
       const reviewed = await tx.clinicalResult.update({
@@ -360,8 +363,6 @@ export class ClinicalOrdersService {
       ];
 
       if (needsFollowUp && dto.followUp) {
-        const assignedToId = dto.followUp.assignedToId ?? actor.userId;
-        await assertAssignableProfessional(tx, tenantId, assignedToId);
         const plain = {
           title: dto.followUp.title.trim(),
           description: cleanText(dto.followUp.description),

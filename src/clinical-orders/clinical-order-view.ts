@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { ClinicalFollowUp, ClinicalOrder, ClinicalResult, Prisma } from '@prisma/client';
 import { ClinicalCipher } from '../clinical-access/clinical-cipher';
+import { isHealthSpecialty } from '../clinical-modules/clinical-module-registry';
 
 /** Stored encrypted; everything outside this module works with the decrypted values. */
 export const ENCRYPTED_ORDER_FIELDS = [
@@ -171,7 +172,10 @@ export const cleanText = (value: string | undefined | null): string | null => {
 
 type Db = Prisma.TransactionClient;
 
-/** A follow-up is assigned to a professional of the clinic who can read the clinical record. */
+/**
+ * A follow-up is assigned to a professional of the clinic who can open it: an active profile of a
+ * health specialty, as the routes of the clinical inbox require (not Estética).
+ */
 export async function assertAssignableProfessional(
   db: Db,
   tenantId: string,
@@ -179,9 +183,9 @@ export async function assertAssignableProfessional(
 ): Promise<void> {
   const profile = await db.professionalProfile.findFirst({
     where: { userId, isActive: true, user: { tenantId, isActive: true } },
-    select: { userId: true },
+    select: { userId: true, specialty: { select: { code: true } } },
   });
-  if (!profile) {
+  if (!profile || !isHealthSpecialty(profile.specialty?.code)) {
     throw new BadRequestException({
       statusCode: 400,
       code: 'FOLLOW_UP_ASSIGNEE_INVALID',
