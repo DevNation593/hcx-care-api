@@ -145,6 +145,9 @@ enum AuditEntity {
   STOCK_RECEIPT
   STOCK_ADJUSTMENT
   STOCK_TRANSFER
+  CLINICAL_ORDER
+  CLINICAL_RESULT
+  CLINICAL_FOLLOW_UP
 }
 
 enum EncounterType {
@@ -162,6 +165,65 @@ enum EncounterType {
 enum EncounterStatus {
   OPEN
   CLOSED
+}
+
+enum ClinicalOrderType {
+  LABORATORY
+  IMAGING
+  PATHOLOGY
+  PROCEDURE
+  THERAPY
+  INTERCONSULTATION
+  OTHER
+}
+
+enum ClinicalOrderPriority {
+  ROUTINE
+  PREFERENTIAL
+  URGENT
+}
+
+// ORDERED -> SAMPLE_COLLECTED -> SENT_TO_LAB -> PENDING_REVIEW -> REVIEWED -> PATIENT_CONTACTED
+// -> COMPLETED. Steps the study does not need are skipped, but a received result is never
+// completed without a review. CANCELLED and NOT_PERFORMED end an order that got no result.
+enum ClinicalOrderStatus {
+  ORDERED
+  SAMPLE_COLLECTED
+  SENT_TO_LAB
+  PENDING_REVIEW
+  REVIEWED
+  PATIENT_CONTACTED
+  COMPLETED
+  CANCELLED
+  NOT_PERFORMED
+}
+
+enum ClinicalResultStatus {
+  PENDING_REVIEW
+  REVIEWED
+  // A newer version of the report replaced it before it was reviewed. It is kept as received.
+  SUPERSEDED
+}
+
+// What the reviewing professional decided. The system records it; it never derives it.
+enum ResultReviewDecision {
+  NO_FURTHER_ACTION
+  FOLLOW_UP_REQUIRED
+  REPEAT_REQUIRED
+}
+
+enum PatientContactChannel {
+  IN_PERSON
+  PHONE
+  VIDEO_CALL
+  MESSAGE
+  OTHER
+}
+
+enum ClinicalFollowUpStatus {
+  OPEN
+  DONE
+  CANCELLED
 }
 
 enum InvoiceStatus {
@@ -304,6 +366,9 @@ model Tenant {
   stockTransfers          StockTransfer[]
   stockMovements          StockMovement[]
   orderItemLots           OrderItemLot[]
+  clinicalOrders          ClinicalOrder[]
+  clinicalResults         ClinicalResult[]
+  clinicalFollowUps       ClinicalFollowUp[]
 
   @@index([isActive])
 }
@@ -448,6 +513,11 @@ model TenantSettings {
   // Locale & timezone
   timezone String @default("America/Mexico_City")
   locale   String @default("es-MX")
+
+  // Clinical inbox: a result unreviewed for this many days, and an order without a result for
+  // this many days, show as overdue. Set by the clinic, not by the system.
+  resultReviewAlertDays Int @default(3)
+  orderResultAlertDays  Int @default(15)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -708,44 +778,49 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Relations
-  refreshTokens            RefreshToken[]
-  assignedAppointments     Appointment[]           @relation("LegacyAppointmentPsychologist")
-  professionalAppointments Appointment[]           @relation("AppointmentProfessional")
-  patientAssignments       PatientProfessional[]   @relation("PatientTeamProfessional")
-  patientAssignmentsMade   PatientProfessional[]   @relation("PatientTeamAssigner")
-  assignedPatients         Patient[]               @relation("AssignedPatients")
-  clinicalNotes            ClinicalNote[]
-  tasksCreated             Task[]                  @relation("TaskCreator")
-  tasksAssigned            Task[]                  @relation("TaskAssignee")
-  nextSessionPlans         NextSessionPlan[]
-  notifications            NotificationLog[]
-  notificationPreference   NotificationPreference?
-  pushSubscriptions        PushSubscription[]
-  auditLogs                AuditLog[]
-  subscriptionEvents       SubscriptionEvent[]
-  professionalSpecialties  ProfessionalSpecialty[]
-  professionalProfile      ProfessionalProfile?
-  specialtyRecords         SpecialtyRecord[]
-  encounters               Encounter[]
-  permissionOverrides      UserPermission[]        @relation("UserPermissionOverrides")
-  branchAssignments        ProfessionalBranch[]
-  uploadedFiles            PatientFile[]
-  issuedInvoices           Invoice[]               @relation("IssuedInvoices")
-  treatmentSessions        TreatmentSession[]
-  consentEvents            ConsentEvent[]
-  createdBillingProfiles   BillingProfile[]        @relation("BillingProfileCreatedBy")
-  openedCashRegisters      CashRegisterSession[]   @relation("CashRegisterOpenedBy")
-  closedCashRegisters      CashRegisterSession[]   @relation("CashRegisterClosedBy")
-  createdOrders            Order[]                 @relation("OrderCreatedBy")
-  cancelledOrders          Order[]                 @relation("OrderCancelledBy")
-  createdOrderItems        OrderItem[]             @relation("OrderItemCreatedBy")
-  receivedPayments         Payment[]               @relation("PaymentReceivedBy")
-  refundedPayments         Payment[]               @relation("PaymentRefundedBy")
-  createdProducts          Product[]               @relation("ProductCreatedBy")
-  createdStockReceipts     StockReceipt[]          @relation("StockReceiptCreatedBy")
-  createdStockTransfers    StockTransfer[]         @relation("StockTransferCreatedBy")
-  createdStockMovements    StockMovement[]         @relation("StockMovementCreatedBy")
-  consentSignaturesTaken   ConsentSignature[]
+  refreshTokens             RefreshToken[]
+  assignedAppointments      Appointment[]           @relation("LegacyAppointmentPsychologist")
+  professionalAppointments  Appointment[]           @relation("AppointmentProfessional")
+  patientAssignments        PatientProfessional[]   @relation("PatientTeamProfessional")
+  patientAssignmentsMade    PatientProfessional[]   @relation("PatientTeamAssigner")
+  assignedPatients          Patient[]               @relation("AssignedPatients")
+  clinicalNotes             ClinicalNote[]
+  tasksCreated              Task[]                  @relation("TaskCreator")
+  tasksAssigned             Task[]                  @relation("TaskAssignee")
+  nextSessionPlans          NextSessionPlan[]
+  notifications             NotificationLog[]
+  notificationPreference    NotificationPreference?
+  pushSubscriptions         PushSubscription[]
+  auditLogs                 AuditLog[]
+  subscriptionEvents        SubscriptionEvent[]
+  professionalSpecialties   ProfessionalSpecialty[]
+  professionalProfile       ProfessionalProfile?
+  specialtyRecords          SpecialtyRecord[]
+  encounters                Encounter[]
+  permissionOverrides       UserPermission[]        @relation("UserPermissionOverrides")
+  branchAssignments         ProfessionalBranch[]
+  uploadedFiles             PatientFile[]
+  issuedInvoices            Invoice[]               @relation("IssuedInvoices")
+  treatmentSessions         TreatmentSession[]
+  consentEvents             ConsentEvent[]
+  createdBillingProfiles    BillingProfile[]        @relation("BillingProfileCreatedBy")
+  openedCashRegisters       CashRegisterSession[]   @relation("CashRegisterOpenedBy")
+  closedCashRegisters       CashRegisterSession[]   @relation("CashRegisterClosedBy")
+  createdOrders             Order[]                 @relation("OrderCreatedBy")
+  cancelledOrders           Order[]                 @relation("OrderCancelledBy")
+  createdOrderItems         OrderItem[]             @relation("OrderItemCreatedBy")
+  receivedPayments          Payment[]               @relation("PaymentReceivedBy")
+  refundedPayments          Payment[]               @relation("PaymentRefundedBy")
+  createdProducts           Product[]               @relation("ProductCreatedBy")
+  createdStockReceipts      StockReceipt[]          @relation("StockReceiptCreatedBy")
+  createdStockTransfers     StockTransfer[]         @relation("StockTransferCreatedBy")
+  createdStockMovements     StockMovement[]         @relation("StockMovementCreatedBy")
+  consentSignaturesTaken    ConsentSignature[]
+  clinicalOrders            ClinicalOrder[]         @relation("ClinicalOrderOrderedBy")
+  clinicalResultsEntered    ClinicalResult[]        @relation("ClinicalResultEnteredBy")
+  clinicalResultsReviewed   ClinicalResult[]        @relation("ClinicalResultReviewedBy")
+  clinicalFollowUpsAssigned ClinicalFollowUp[]      @relation("ClinicalFollowUpAssignedTo")
+  clinicalFollowUpsCreated  ClinicalFollowUp[]      @relation("ClinicalFollowUpCreatedBy")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -847,6 +922,9 @@ model Patient {
   billingProfiles         PatientBillingProfile[]
   orderItems              OrderItem[]
   consentDocuments        ConsentDocument[]
+  clinicalOrders          ClinicalOrder[]
+  clinicalResults         ClinicalResult[]
+  clinicalFollowUps       ClinicalFollowUp[]
 
   @@index([tenantId])
   @@index([tenantId, isActive])
@@ -952,6 +1030,7 @@ model SpecialtyRecord {
   updatedAt DateTime @updatedAt
 
   treatmentSession TreatmentSession?
+  clinicalResult   ClinicalResult?
 
   @@index([tenantId, patientId, recordDate])
   @@index([tenantId, specialtyId, moduleKey])
@@ -1006,6 +1085,7 @@ model Encounter {
   notes            ClinicalNote[]
   files            PatientFile[]
   treatmentSession TreatmentSession?
+  clinicalOrders   ClinicalOrder[]
   consentDocuments ConsentDocument[]
 
   @@index([tenantId, patientId, startedAt])
@@ -1042,6 +1122,7 @@ model PatientFile {
   treatmentSessionId String?
   treatmentSession   TreatmentSession?  @relation(fields: [treatmentSessionId], references: [id], onDelete: SetNull)
   phase              SessionMediaPhase?
+  clinicalResult     ClinicalResult?
 
   scanStatus FileScanStatus @default(NOT_SCANNED)
   scannedAt  DateTime?
@@ -1058,6 +1139,165 @@ model PatientFile {
   @@index([tenantId, patientId, createdAt])
   @@index([encounterId])
   @@index([treatmentSessionId])
+}
+
+// A study or procedure a professional orders for a patient: a lab test, an image, a biopsy.
+// The request itself (type, study, indication, priority) never changes after it is saved; it is
+// signed with its encounter, or when it is saved if it belongs to none. Its status only moves
+// through commands, and every command checks `version` so two people never overwrite each other.
+model ClinicalOrder {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  patientId   String
+  patient     Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  orderedById String
+  orderedBy   User       @relation("ClinicalOrderOrderedBy", fields: [orderedById], references: [id], onDelete: Restrict)
+  encounterId String?
+  encounter   Encounter? @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+
+  orderType         ClinicalOrderType
+  priority          ClinicalOrderPriority @default(ROUTINE)
+  // Stored encrypted: the study and why it is ordered say what the patient may have.
+  studyName         String
+  indication        String?
+  // Stored encrypted: the laboratory or provider, and the folio it gave.
+  provider          String?
+  externalReference String?
+
+  status      ClinicalOrderStatus @default(ORDERED)
+  orderedAt   DateTime            @default(now())
+  // When a result is expected; past it, the order shows as overdue in the clinical inbox.
+  resultDueAt DateTime?
+
+  sampleCollectedAt DateTime?
+  // Stored encrypted.
+  sampleNotes       String?
+  sentAt            DateTime?
+
+  completedAt    DateTime?
+  completedById  String?
+  // Stored encrypted. Required when the order is completed without a contact with the patient.
+  completionNote String?
+
+  cancelledAt        DateTime?
+  cancelledById      String?
+  // Stored encrypted.
+  cancellationReason String?
+
+  signedAt    DateTime?
+  contentHash String?
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  results   ClinicalResult[]
+  followUps ClinicalFollowUp[]
+
+  @@index([tenantId, patientId, orderedAt])
+  @@index([tenantId, status])
+  @@index([tenantId, orderedById, status])
+  @@index([encounterId])
+}
+
+// One version of the report of an order. A corrected report from the laboratory is a new version;
+// the earlier one stays as it was received. Receiving a result never marks it reviewed nor the
+// patient informed: those are separate, recorded steps.
+model ClinicalResult {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  patientId String
+  patient   Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  orderId   String
+  order     ClinicalOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  version   Int
+
+  enteredById String
+  enteredBy   User      @relation("ClinicalResultEnteredBy", fields: [enteredById], references: [id], onDelete: Restrict)
+  receivedAt  DateTime  @default(now())
+  studyDate   DateTime?
+  // Stored encrypted: who issued the report and what it says, as the laboratory wrote it.
+  issuedBy    String?
+  content     String?
+
+  // The report as a file of the patient, and the structured record of the study when there is one.
+  fileId   String?          @unique
+  file     PatientFile?     @relation(fields: [fileId], references: [id], onDelete: Restrict)
+  recordId String?          @unique
+  record   SpecialtyRecord? @relation(fields: [recordId], references: [id], onDelete: Restrict)
+
+  // SHA-256 of the result as it was entered.
+  contentHash String
+
+  status ClinicalResultStatus @default(PENDING_REVIEW)
+
+  reviewedAt        DateTime?
+  reviewedById      String?
+  reviewedBy        User?                 @relation("ClinicalResultReviewedBy", fields: [reviewedById], references: [id], onDelete: Restrict)
+  reviewDecision    ResultReviewDecision?
+  // Stored encrypted: the conduct the professional decided.
+  reviewNote        String?
+  appointmentNeeded Boolean               @default(false)
+
+  communicatedAt       DateTime?
+  communicatedById     String?
+  communicationChannel PatientContactChannel?
+  // Stored encrypted.
+  communicationNote    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  followUps ClinicalFollowUp[]
+
+  @@unique([orderId, version])
+  @@index([tenantId, status])
+  @@index([tenantId, patientId])
+}
+
+// A pending clinical action with a responsible and a target date: repeat a study, call the
+// patient, a preventive control. It is closed only explicitly, with what was done: cancelling or
+// completing an appointment never closes it.
+model ClinicalFollowUp {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  patientId String
+  patient   Patient         @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  orderId   String?
+  order     ClinicalOrder?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  resultId  String?
+  result    ClinicalResult? @relation(fields: [resultId], references: [id], onDelete: SetNull)
+
+  // Stored encrypted.
+  title       String
+  description String?
+
+  assignedToId String
+  assignedTo   User     @relation("ClinicalFollowUpAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
+  createdById  String
+  createdBy    User     @relation("ClinicalFollowUpCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  dueDate      DateTime
+
+  status      ClinicalFollowUpStatus @default(OPEN)
+  closedAt    DateTime?
+  closedById  String?
+  // Stored encrypted: what was done, or why it is no longer needed.
+  closureNote String?
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, status, dueDate])
+  @@index([tenantId, assignedToId, status])
+  @@index([tenantId, patientId])
+  @@index([orderId])
 }
 
 // Diagnosis classification shared by every clinic (CIE-10, CIE-11).

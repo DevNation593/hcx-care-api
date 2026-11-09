@@ -116,6 +116,67 @@ export function fileContentHash(file: SignableFile): string {
   });
 }
 
+/**
+ * The request of a clinical order, decrypted: what was ordered, why and by whom. Its progress
+ * (sample, laboratory, results) comes later and is not part of what the professional signed.
+ */
+export interface SignableOrder {
+  id: string;
+  patientId: string;
+  orderedById: string;
+  encounterId: string | null;
+  orderType: string;
+  priority: string;
+  studyName: string;
+  indication: string | null;
+  orderedAt: Date;
+}
+
+export function orderContentHash(order: SignableOrder): string {
+  return sha256({
+    id: order.id,
+    patientId: order.patientId,
+    orderedById: order.orderedById,
+    encounterId: order.encounterId,
+    orderType: order.orderType,
+    priority: order.priority,
+    studyName: order.studyName,
+    indication: order.indication,
+    orderedAt: order.orderedAt,
+  });
+}
+
+/** One version of a result as it was entered, decrypted, with the hash of its file if any. */
+export interface SignableResult {
+  id: string;
+  orderId: string;
+  version: number;
+  enteredById: string;
+  receivedAt: Date;
+  studyDate: Date | null;
+  issuedBy: string | null;
+  content: string | null;
+  fileId: string | null;
+  fileContentHash: string | null;
+  recordId: string | null;
+}
+
+export function resultContentHash(result: SignableResult): string {
+  return sha256({
+    id: result.id,
+    orderId: result.orderId,
+    version: result.version,
+    enteredById: result.enteredById,
+    receivedAt: result.receivedAt,
+    studyDate: result.studyDate,
+    issuedBy: result.issuedBy,
+    content: result.content,
+    fileId: result.fileId,
+    file: result.fileContentHash,
+    recordId: result.recordId,
+  });
+}
+
 /** The decrypted encounter, with the hashes of everything written in it. */
 export function encounterContentHash(
   encounter: {
@@ -134,6 +195,7 @@ export function encounterContentHash(
   records: { id: string; contentHash: string }[],
   notes: { id: string; contentHash: string }[],
   files: { id: string; contentHash: string }[] = [],
+  orders: { id: string; contentHash: string }[] = [],
 ): string {
   const byId = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
   return sha256({
@@ -154,6 +216,8 @@ export function encounterContentHash(
     notes: [...notes].sort(byId),
     // Only when there are files: encounters without them keep the hash the first version gave.
     ...(files.length ? { files: [...files].sort(byId) } : {}),
+    // Likewise for the orders: an encounter without orders keeps the hash it had before them.
+    ...(orders.length ? { orders: [...orders].sort(byId) } : {}),
   });
 }
 

@@ -19,6 +19,7 @@ import {
   encounterContentHash,
   fileContentHash,
   noteContentHash,
+  orderContentHash,
   recordContentHash,
 } from '../clinical-access/clinical-signature';
 import { ENCRYPTED_NOTE_FIELDS } from '../clinical-notes/encrypted-note-fields';
@@ -479,7 +480,21 @@ export class EncountersService {
       });
     }
 
-    return encounterContentHash(encounter, recordHashes, noteHashes, fileHashes);
+    const orders = await tx.clinicalOrder.findMany({ where: { tenantId, encounterId } });
+    const orderHashes: { id: string; contentHash: string }[] = [];
+    for (const stored of orders) {
+      const order = this.crypto.decryptFields(tenantId, stored, ['studyName', 'indication']);
+      const contentHash = orderContentHash(order);
+      orderHashes.push({ id: order.id, contentHash });
+      if (!stored.signedAt) {
+        await tx.clinicalOrder.update({
+          where: { id: stored.id },
+          data: { signedAt, contentHash, updatedAt: stored.updatedAt },
+        });
+      }
+    }
+
+    return encounterContentHash(encounter, recordHashes, noteHashes, fileHashes, orderHashes);
   }
 
   /** An encounter started by mistake. It must hold no records; the row stays for audit. */
@@ -502,10 +517,11 @@ export class EncountersService {
       }
 
       const records = await tx.specialtyRecord.count({ where: { encounterId, deletedAt: null } });
-      if (records > 0) {
+      const orders = await tx.clinicalOrder.count({ where: { tenantId, encounterId } });
+      if (records + orders > 0) {
         throw conflict(
           'ENCOUNTER_HAS_RECORDS',
-          'La atención tiene registros. Elimínalos antes de eliminar la atención.',
+          'La atención tiene registros u órdenes. Elimina sus registros; si tiene órdenes, ciérrala en lugar de eliminarla.',
         );
       }
 

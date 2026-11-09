@@ -23,6 +23,9 @@ export type EncryptionReport = Record<
   | 'specialtyRecords'
   | 'encounters'
   | 'patientFiles'
+  | 'clinicalOrders'
+  | 'clinicalResults'
+  | 'clinicalFollowUps'
   | 'consentDocuments'
   | 'consentSignatures'
   | 'mfaSecrets'
@@ -40,6 +43,9 @@ type EncryptionClient = Record<
   | 'specialtyRecord'
   | 'encounter'
   | 'patientFile'
+  | 'clinicalOrder'
+  | 'clinicalResult'
+  | 'clinicalFollowUp'
   | 'consentDocument'
   | 'consentSignature'
   | 'user'
@@ -145,6 +151,38 @@ export async function encryptClinicalData(
       [],
       dryRun,
     ),
+    clinicalOrders: await processTable(
+      client.clinicalOrder,
+      {},
+      cipher,
+      [
+        'studyName',
+        'indication',
+        'provider',
+        'externalReference',
+        'sampleNotes',
+        'completionNote',
+        'cancellationReason',
+      ],
+      [],
+      dryRun,
+    ),
+    clinicalResults: await processTable(
+      client.clinicalResult,
+      {},
+      cipher,
+      ['issuedBy', 'content', 'reviewNote', 'communicationNote'],
+      [],
+      dryRun,
+    ),
+    clinicalFollowUps: await processTable(
+      client.clinicalFollowUp,
+      {},
+      cipher,
+      ['title', 'description', 'closureNote'],
+      [],
+      dryRun,
+    ),
     consentDocuments: await processTable(
       client.consentDocument,
       {},
@@ -172,7 +210,19 @@ export async function encryptClinicalData(
     ),
     auditLogs: await processTable(
       client.auditLog,
-      { entity: { in: ['CLINICAL_NOTE', 'SPECIALTY_RECORD', 'ENCOUNTER', 'PATIENT_FILE'] } },
+      {
+        entity: {
+          in: [
+            'CLINICAL_NOTE',
+            'SPECIALTY_RECORD',
+            'ENCOUNTER',
+            'PATIENT_FILE',
+            'CLINICAL_ORDER',
+            'CLINICAL_RESULT',
+            'CLINICAL_FOLLOW_UP',
+          ],
+        },
+      },
       cipher,
       ['reason'],
       ['changes'],

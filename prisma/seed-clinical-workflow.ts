@@ -1,5 +1,5 @@
+import { bytesContentHash, resultContentHash } from '../src/clinical-access/clinical-signature';
 import { consentChecksum } from '../src/consents/consent-text';
-import { bytesContentHash } from '../src/clinical-access/clinical-signature';
 import type {
   Appointment,
   Encounter,
@@ -1458,6 +1458,84 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
       sampleType: 'Cervical',
       laboratory: 'Laboratorio de demostración',
       laboratoryReference: 'DEMO-0001',
+    },
+  });
+  // The cytology is also an order of the encounter: its report arrived yesterday and waits in
+  // the professional's inbox for a review. Nobody has told the patient anything yet.
+  const cytologyOrder = await db.clinicalOrder.create({
+    data: {
+      tenantId,
+      patientId: lucia.id,
+      orderedById: gabriela.id,
+      encounterId: gynecologyEncounter.id,
+      orderType: 'PATHOLOGY',
+      priority: 'ROUTINE',
+      studyName: 'Citología cervicovaginal en base líquida',
+      indication: 'Tamizaje según criterio de la profesional.',
+      provider: 'Laboratorio de demostración',
+      externalReference: 'DEMO-0001',
+      status: 'PENDING_REVIEW',
+      orderedAt: luciaControl.startTime,
+      resultDueAt: clock.days(10),
+      sampleCollectedAt: luciaControl.startTime,
+      sentAt: new Date(luciaControl.startTime.getTime() + 60 * 60 * 1000),
+      version: 4,
+      createdAt: luciaControl.startTime,
+    },
+  });
+  const cytologyResult = {
+    id: randomUUID(),
+    orderId: cytologyOrder.id,
+    version: 1,
+    enteredById: gabriela.id,
+    receivedAt: clock.days(-1),
+    studyDate: luciaControl.startTime,
+    issuedBy: 'Laboratorio de demostración',
+    content:
+      'Informe sintético de demostración. Calidad de la muestra: satisfactoria. Lectura según la clasificación del laboratorio.',
+    fileId: null,
+    recordId: null,
+  };
+  await db.clinicalResult.create({
+    data: {
+      ...cytologyResult,
+      tenantId,
+      patientId: lucia.id,
+      contentHash: resultContentHash({ ...cytologyResult, fileContentHash: null }),
+      createdAt: cytologyResult.receivedAt,
+    },
+  });
+  // An ultrasound ordered at the same control whose report is past the date it was expected.
+  await db.clinicalOrder.create({
+    data: {
+      tenantId,
+      patientId: lucia.id,
+      orderedById: gabriela.id,
+      encounterId: gynecologyEncounter.id,
+      orderType: 'IMAGING',
+      priority: 'PREFERENTIAL',
+      studyName: 'Ecografía ginecológica transvaginal',
+      indication: 'Control del DIU.',
+      provider: 'Centro de imagen de demostración',
+      status: 'SENT_TO_LAB',
+      orderedAt: luciaControl.startTime,
+      resultDueAt: clock.days(-1),
+      sentAt: luciaControl.startTime,
+      version: 2,
+      createdAt: luciaControl.startTime,
+    },
+  });
+  // A preventive control that comes from no order: open until someone records it.
+  await db.clinicalFollowUp.create({
+    data: {
+      tenantId,
+      patientId: lucia.id,
+      title: 'Control ginecológico anual',
+      description: 'Plan preventivo acordado con la paciente.',
+      assignedToId: gabriela.id,
+      createdById: gabriela.id,
+      dueDate: clock.days(360),
+      createdAt: luciaControl.startTime,
     },
   });
   await closeEncounter(

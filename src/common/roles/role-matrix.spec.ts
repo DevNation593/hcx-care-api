@@ -17,6 +17,10 @@ import { ClinicalModulesController } from '../../clinical-modules/clinical-modul
 import { EncountersController } from '../../encounters/encounters.controller';
 import { ProcedureConsentsController } from '../../procedure-consents/procedure-consents.controller';
 import {
+  ClinicalOrdersController,
+  PatientClinicalOrdersController,
+} from '../../clinical-orders/clinical-orders.controller';
+import {
   PatientFilesController,
   StorageController,
 } from '../../patient-files/patient-files.controller';
@@ -146,6 +150,8 @@ describe('role matrix', () => {
     [PlatformPaymentsController, ['ADMIN']],
     [PlatformLegacyAccessController, ['ADMIN']],
     [ClinicalTimelineController, CLINICAL],
+    [ClinicalOrdersController, CLINICAL],
+    [PatientClinicalOrdersController, CLINICAL],
     [ProcedureConsentsController, CLINICAL],
     [AppointmentsController, TEAM],
     [PatientTeamController, TEAM],
@@ -162,6 +168,8 @@ describe('role matrix', () => {
     ClinicalModulesController,
     ClinicalNotesController,
     EncountersController,
+    ClinicalOrdersController,
+    PatientClinicalOrdersController,
     ProcedureConsentsController,
     ClinicalTimelineController,
     NextSessionPlansController,

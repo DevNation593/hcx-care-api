@@ -165,6 +165,7 @@ describe('TreatmentSessionsService', () => {
     consentDocument: { findMany: jest.fn() },
     tenant: { findUnique: jest.fn() },
     patientFile: { findMany: jest.fn(), count: jest.fn() },
+    clinicalOrder: { findMany: jest.fn(), update: jest.fn() },
     auditLog: { createMany: jest.fn() },
     invoiceRequest: { findFirst: jest.fn() },
     $queryRaw: jest.fn(),
@@ -210,6 +211,7 @@ describe('TreatmentSessionsService', () => {
     db.consentDocument.findMany.mockResolvedValue([]);
     db.tenant.findUnique.mockResolvedValue({ settings: { timezone: 'America/Guayaquil' } });
     db.patientFile.findMany.mockResolvedValue([]);
+    db.clinicalOrder.findMany.mockResolvedValue([]);
     db.patientFile.count.mockResolvedValue(0);
     db.specialtyRecord.count.mockResolvedValue(0);
     // Closing the encounter signs what it holds; row locks are granted.
@@ -217,6 +219,7 @@ describe('TreatmentSessionsService', () => {
     db.clinicalNote.findMany.mockResolvedValue([]);
     db.$queryRaw.mockResolvedValue([{ id: 'locked' }]);
     db.patientFile.findMany.mockResolvedValue([]);
+    db.clinicalOrder.findMany.mockResolvedValue([]);
   });
 
   describe('create', () => {
