@@ -304,27 +304,94 @@ describe("Invoice in the patient's own name (E2E)", () => {
     expect(response.body.code).toBe('PATIENT_IDENTIFICATION_TAKEN');
   });
 
-  it('lets the cashier bill a complete patient but not complete the record', async () => {
+  it('refuses the cashier, who never reads patient records, even with complete data', async () => {
     const complete = await newPatient({
       identificationType: 'PASSPORT',
       identificationNumber: `PC${Date.now()}`,
       email: 'f@example.test',
     });
-    await request(server()).post(own(complete)).set(as('cashier')).send({}).expect(201);
-
     const incomplete = await newPatient();
+
+    for (const [patientId, body] of [
+      [complete, {}],
+      [incomplete, { identificationType: 'PASSPORT', identificationNumber: `PI${Date.now()}` }],
+    ] as const) {
+      const refused = await request(server())
+        .post(own(patientId))
+        .set(as('cashier'))
+        .send(body)
+        .expect(403);
+      expect(refused.body.code).toBe('PATIENT_ACCESS_REQUIRED');
+      expect(await prisma.patientBillingProfile.count({ where: { patientId } })).toBe(0);
+    }
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: incomplete } });
+    expect(patient.identificationNumber).toBeNull();
+  });
+
+  it('completes the record only with patients.update', async () => {
+    // An assistant granted billing.create whose patients.update was withdrawn by the platform.
+    await prisma.tenantRolePermission.createMany({
+      data: [
+        { tenantId, role: 'ASISTENTE', permission: 'billing.create', granted: true },
+        { tenantId, role: 'ASISTENTE', permission: 'patients.update', granted: false },
+      ],
+    });
+    await request(server())
+      .post(`${base()}/users`)
+      .set(as('master'))
+      .send({
+        email: 'asistente-own@tenant.test',
+        password: TEST_PASSWORD,
+        firstName: 'Asistente',
+        lastName: 'Factura',
+        role: 'ASISTENTE',
+      })
+      .expect(201);
+    const assistant = { Authorization: `Bearer ${await login('asistente-own@tenant.test')}` };
+    const patientId = await newPatient();
+    const complete = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: `PA${Date.now()}`,
+      email: 'assistant@example.test',
+    });
+
     const refused = await request(server())
-      .post(own(incomplete))
-      .set(as('cashier'))
+      .post(own(patientId))
+      .set(assistant)
       .send({
         identificationType: 'PASSPORT',
-        identificationNumber: `PI${Date.now()}`,
-        email: 'g@example.test',
+        identificationNumber: `PW${Date.now()}`,
+        email: 'w@example.test',
       })
       .expect(403);
     expect(refused.body.code).toBe('PERMISSION_DENIED');
-    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: incomplete } });
-    expect(patient.identificationNumber).toBeNull();
+    await request(server()).post(own(complete)).set(assistant).send({}).expect(201);
+  });
+
+  it("bills the patient's own identity, not a third party kept in the legacy fiscal fields", async () => {
+    const idNumber = `PT${Date.now()}`;
+    const patientId = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: idNumber,
+      email: 'own@example.test',
+    });
+    // A third party registered in the legacy billing columns, with an invalid RUC.
+    await prisma.patient.update({
+      where: { id: patientId },
+      data: {
+        billingName: 'Empresa Tercera',
+        billingTaxIdType: 'RUC',
+        billingTaxId: '1790000000002',
+      },
+    });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(201);
+    expect(response.body).toMatchObject({ idType: '06', idNumber, email: 'own@example.test' });
+    expect(response.body.legalName).toMatch(/^Ana Factura \d+$/);
   });
 
   it("answers 404 to another clinic's master", async () => {
