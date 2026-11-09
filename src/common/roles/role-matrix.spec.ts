@@ -16,6 +16,10 @@ import { CatalogsController } from '../../catalogs/catalogs.controller';
 import { ClinicalModulesController } from '../../clinical-modules/clinical-modules.controller';
 import { EncountersController } from '../../encounters/encounters.controller';
 import {
+  ClinicalOrdersController,
+  PatientClinicalOrdersController,
+} from '../../clinical-orders/clinical-orders.controller';
+import {
   PatientFilesController,
   StorageController,
 } from '../../patient-files/patient-files.controller';
@@ -145,6 +149,8 @@ describe('role matrix', () => {
     [PlatformPaymentsController, ['ADMIN']],
     [PlatformLegacyAccessController, ['ADMIN']],
     [ClinicalTimelineController, CLINICAL],
+    [ClinicalOrdersController, CLINICAL],
+    [PatientClinicalOrdersController, CLINICAL],
     [AppointmentsController, TEAM],
     [PatientTeamController, TEAM],
   ] as [Controller, string[]][])('%p requires %j on every handler', (controller, expected) => {
@@ -160,6 +166,8 @@ describe('role matrix', () => {
     ClinicalModulesController,
     ClinicalNotesController,
     EncountersController,
+    ClinicalOrdersController,
+    PatientClinicalOrdersController,
     ClinicalTimelineController,
     NextSessionPlansController,
     PatientFilesController,

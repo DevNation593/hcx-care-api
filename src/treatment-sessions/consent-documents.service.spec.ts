@@ -180,6 +180,7 @@ describe('ConsentDocumentsService', () => {
     specialtyRecord: { findMany: jest.fn(), update: jest.fn() },
     clinicalNote: { findMany: jest.fn() },
     patientFile: { findMany: jest.fn(), update: jest.fn() },
+    clinicalOrder: { findMany: jest.fn(), update: jest.fn() },
     $queryRaw: jest.fn(),
   };
   const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
@@ -219,6 +220,7 @@ describe('ConsentDocumentsService', () => {
     db.specialtyRecord.findMany.mockResolvedValue([]);
     db.clinicalNote.findMany.mockResolvedValue([]);
     db.patientFile.findMany.mockResolvedValue([]);
+    db.clinicalOrder.findMany.mockResolvedValue([]);
     db.$queryRaw.mockResolvedValue([{ id: 'locked' }]);
     objects.clear();
     storage.put.mockImplementation(async (key: string, data: Buffer) => {

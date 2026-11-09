@@ -20,6 +20,11 @@ import { PermissionChecker } from './common/permissions/permission-checker.servi
 import { PermissionsModule } from './common/permissions/permissions.module';
 import { EncountersController } from './encounters/encounters.controller';
 import { EncountersModule } from './encounters/encounters.module';
+import {
+  ClinicalOrdersController,
+  PatientClinicalOrdersController,
+} from './clinical-orders/clinical-orders.controller';
+import { ClinicalOrdersModule } from './clinical-orders/clinical-orders.module';
 import { FILE_STORAGE } from './patient-files/file-storage';
 import { PatientFilesController } from './patient-files/patient-files.controller';
 import { PatientFilesModule } from './patient-files/patient-files.module';
@@ -52,6 +57,7 @@ describe('module wiring', () => {
         CatalogsModule,
         ClinicalModulesModule,
         EncountersModule,
+        ClinicalOrdersModule,
         PatientFilesModule,
         ReportsModule,
         RecordDocumentsModule,
@@ -75,6 +81,8 @@ describe('module wiring', () => {
       CatalogsController,
       ClinicalModulesController,
       EncountersController,
+      ClinicalOrdersController,
+      PatientClinicalOrdersController,
       PatientFilesController,
       SpecialtyRecordsController,
       TreatmentSessionsController,

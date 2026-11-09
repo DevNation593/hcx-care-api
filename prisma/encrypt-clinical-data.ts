@@ -19,7 +19,14 @@ const NOTE_FIELDS = [
 const BATCH_SIZE = 200;
 
 export type EncryptionReport = Record<
-  'clinicalNotes' | 'specialtyRecords' | 'encounters' | 'patientFiles' | 'auditLogs',
+  | 'clinicalNotes'
+  | 'specialtyRecords'
+  | 'encounters'
+  | 'patientFiles'
+  | 'clinicalOrders'
+  | 'clinicalResults'
+  | 'clinicalFollowUps'
+  | 'auditLogs',
   { scanned: number; updated: number }
 >;
 
@@ -29,7 +36,14 @@ type Delegate = {
   update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<unknown>;
 };
 type EncryptionClient = Record<
-  'clinicalNote' | 'specialtyRecord' | 'encounter' | 'patientFile' | 'auditLog',
+  | 'clinicalNote'
+  | 'specialtyRecord'
+  | 'encounter'
+  | 'patientFile'
+  | 'clinicalOrder'
+  | 'clinicalResult'
+  | 'clinicalFollowUp'
+  | 'auditLog',
   Delegate
 >;
 
@@ -131,9 +145,53 @@ export async function encryptClinicalData(
       [],
       dryRun,
     ),
+    clinicalOrders: await processTable(
+      client.clinicalOrder,
+      {},
+      cipher,
+      [
+        'studyName',
+        'indication',
+        'provider',
+        'externalReference',
+        'sampleNotes',
+        'completionNote',
+        'cancellationReason',
+      ],
+      [],
+      dryRun,
+    ),
+    clinicalResults: await processTable(
+      client.clinicalResult,
+      {},
+      cipher,
+      ['issuedBy', 'content', 'reviewNote', 'communicationNote'],
+      [],
+      dryRun,
+    ),
+    clinicalFollowUps: await processTable(
+      client.clinicalFollowUp,
+      {},
+      cipher,
+      ['title', 'description', 'closureNote'],
+      [],
+      dryRun,
+    ),
     auditLogs: await processTable(
       client.auditLog,
-      { entity: { in: ['CLINICAL_NOTE', 'SPECIALTY_RECORD', 'ENCOUNTER', 'PATIENT_FILE'] } },
+      {
+        entity: {
+          in: [
+            'CLINICAL_NOTE',
+            'SPECIALTY_RECORD',
+            'ENCOUNTER',
+            'PATIENT_FILE',
+            'CLINICAL_ORDER',
+            'CLINICAL_RESULT',
+            'CLINICAL_FOLLOW_UP',
+          ],
+        },
+      },
       cipher,
       ['reason'],
       ['changes'],

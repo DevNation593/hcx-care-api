@@ -81,6 +81,11 @@ describe('clinical signatures', () => {
     expect(
       encounterContentHash(encounter, records, [{ id: 'note-1', contentHash: 'v1:n' }]),
     ).not.toBe(hash);
+    // Encounters without files or orders keep the hash they had before those were signed.
+    expect(encounterContentHash(encounter, records, [], [], [])).toBe(hash);
+    expect(
+      encounterContentHash(encounter, records, [], [], [{ id: 'order-1', contentHash: 'v1:o' }]),
+    ).not.toBe(hash);
   });
 
   it('treats as final a signed record, one outside any encounter and one of a closed encounter', () => {
