@@ -121,6 +121,23 @@ export class ProcedureConsentsService {
   }
 
   /**
+   * One procedure consent with the text the patient read, to show it again: a document presented
+   * and not yet decided is taken up where it was left. The read is audited.
+   */
+  async findOne(tenantId: string, documentId: string, actor: ClinicalActor) {
+    const document = await this.findDocument(this.prisma, tenantId, documentId);
+    await this.audit.record(tenantId, actor, [
+      {
+        action: 'READ',
+        entity: 'CONSENT_DOCUMENT',
+        entityId: documentId,
+        patientId: document.patientId,
+      },
+    ]);
+    return this.view(document, true);
+  }
+
+  /**
    * Presents the latest published version of a template in an open encounter of the caller,
    * filled with the patient, the procedure, the professional and the clinic's date. A document of
    * the same template still waiting for its decision in that encounter is returned instead.

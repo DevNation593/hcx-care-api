@@ -174,6 +174,19 @@ describe('Procedure consents, antivirus and two-factor sign-in (E2E)', () => {
       expect(presented.body.body).toContain('a realizar Inserción de dispositivo intrauterino.');
       expect(presented.body.checksum).toMatch(/^[0-9a-f]{64}$/);
 
+      // A presented document can be taken up again with its text, by any professional who reads it.
+      const reopened = await request(server())
+        .get(`${base()}/procedure-consents/${documentId}`)
+        .set(as('colleague'))
+        .expect(200);
+      expect(reopened.body).toMatchObject({ id: documentId, status: 'PRESENTED' });
+      expect(reopened.body.body).toBe(presented.body.body);
+      // The templates route is not taken for a document id.
+      await request(server())
+        .get(`${base()}/procedure-consents/templates`)
+        .set(as('pro'))
+        .expect(200);
+
       const stored = await prisma.consentDocument.findUniqueOrThrow({ where: { id: documentId } });
       expect(stored.body).not.toContain('Lucía');
       expect(stored.procedureName).not.toContain('intrauterino');

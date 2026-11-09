@@ -10,7 +10,10 @@ export const CONSENT_VARIABLES = [
   'fecha',
 ] as const;
 
-export type ConsentValues = Record<Exclude<(typeof CONSENT_VARIABLES)[number], 'procedimiento'>, string> & {
+export type ConsentValues = Record<
+  Exclude<(typeof CONSENT_VARIABLES)[number], 'procedimiento'>,
+  string
+> & {
   procedimiento?: string;
 };
 

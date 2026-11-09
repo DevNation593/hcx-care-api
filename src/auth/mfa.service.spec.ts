@@ -41,6 +41,12 @@ describe('MfaService', () => {
       }),
     },
     refreshToken: { updateMany: jest.fn() },
+    // The conditional removal of one recovery code: array_remove(codes, hash) WHERE hash = ANY(codes).
+    $executeRaw: jest.fn(async (_sql: TemplateStringsArray, hash: string, id: string) => {
+      if (id !== user.id || !user.mfaRecoveryCodes.includes(hash)) return 0;
+      user.mfaRecoveryCodes = user.mfaRecoveryCodes.filter((stored: string) => stored !== hash);
+      return 1;
+    }),
     auditLog: { create: jest.fn(async ({ data }: Row) => audits.push(data)) },
     $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
   };
@@ -120,6 +126,22 @@ describe('MfaService', () => {
     ).toBe(true);
     expect(user.mfaRecoveryCodes).toHaveLength(9);
     expect(await service.verify(user as never, { recoveryCode: recoveryCodes[3] })).toBe(false);
+  });
+
+  it('removes a used recovery code in one statement, so no request can put it back', async () => {
+    const { recoveryCodes } = await enrol();
+
+    const [first, second] = await Promise.all([
+      service.verify(user as never, { recoveryCode: recoveryCodes[0] }),
+      service.verify(user as never, { recoveryCode: recoveryCodes[1] }),
+    ]);
+
+    expect([first, second]).toEqual([true, true]);
+    expect(user.mfaRecoveryCodes).toEqual(recoveryCodes.slice(2).map(hashRecoveryCode));
+    // The update names the hash to remove; it never writes back a list it read before.
+    const sql = (prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray).join('?');
+    expect(sql).toContain('array_remove');
+    expect(sql).toContain('= ANY(');
   });
 
   it('cannot be turned off while the clinic requires it', async () => {

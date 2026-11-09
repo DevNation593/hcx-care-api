@@ -58,6 +58,21 @@ export class ProcedureConsentsController {
     return this.consents.present(tenantId, patientId, encounterId, actor, dto);
   }
 
+  // Declared after `procedure-consents/templates`, which therefore keeps its own route.
+  @Get('procedure-consents/:id')
+  @ApiOperation({
+    summary: 'One procedure consent with its text',
+    description: 'To take up a presented consent that was not signed nor refused. Audited.',
+  })
+  @RequirePermission('clinical_records.view')
+  findOne(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+  ) {
+    return this.consents.findOne(tenantId, id, actor);
+  }
+
   @Post('procedure-consents/:id/sign')
   @ApiOperation({
     summary: 'Sign a presented procedure consent',

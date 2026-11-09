@@ -256,16 +256,13 @@ export class MfaService {
     }
     if (input.recoveryCode) {
       const hash = hashRecoveryCode(input.recoveryCode);
-      const current = await this.prisma.user.findUnique({
-        where: { id: user.id },
-        select: { mfaRecoveryCodes: true },
-      });
-      if (!current?.mfaRecoveryCodes.includes(hash)) return false;
-      const claimed = await this.prisma.user.updateMany({
-        where: { id: user.id, mfaRecoveryCodes: { has: hash } },
-        data: { mfaRecoveryCodes: current.mfaRecoveryCodes.filter((stored) => stored !== hash) },
-      });
-      return claimed.count === 1;
+      // One statement removes exactly this hash, and only while it is still there: two requests,
+      // with the same code or with different ones, never put back a code the other one used.
+      const removed = await this.prisma.$executeRaw`
+        UPDATE "User"
+        SET "mfaRecoveryCodes" = array_remove("mfaRecoveryCodes", ${hash})
+        WHERE "id" = ${user.id} AND ${hash} = ANY("mfaRecoveryCodes")`;
+      return removed === 1;
     }
     return false;
   }
