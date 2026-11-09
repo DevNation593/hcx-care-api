@@ -2,8 +2,10 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   PayloadTooLargeException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { PatientFile, Prisma, SessionMediaPhase } from '@prisma/client';
 import { randomUUID } from 'crypto';
@@ -18,6 +20,7 @@ import { bytesContentHash, patientFileSigned } from '../clinical-access/clinical
 import { assertOpenEncounter, lockOpenEncounter } from '../encounters/encounters.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DeletePatientFileDto, UploadPatientFileDto } from './dto/patient-file.dto';
+import { FILE_SCANNER, FileScanner } from './file-scanner';
 import { FILE_STORAGE, FileStorage } from './file-storage';
 
 export const MAX_PATIENT_FILE_BYTES = 10 * 1024 * 1024;
@@ -68,6 +71,15 @@ export function snapshotPatientFile(file: PatientFile) {
   };
 }
 
+/** A file the antivirus flagged: refused on upload, never served on download. */
+const infectedFile = () =>
+  new UnprocessableEntityException({
+    statusCode: 422,
+    code: 'PATIENT_FILE_INFECTED',
+    message:
+      'El antivirus detectó contenido malicioso en el archivo: no se guardó ni puede abrirse.',
+  });
+
 const invalidFile = (message: string) =>
   new BadRequestException({ statusCode: 400, code: 'PATIENT_FILE_INVALID', message });
 
@@ -85,11 +97,14 @@ function cleanFileName(original: string): string {
 
 @Injectable()
 export class PatientFilesService {
+  private readonly logger = new Logger(PatientFilesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: ClinicalAuditService,
     private readonly crypto: ClinicalCryptoService,
     @Inject(FILE_STORAGE) private readonly storage: FileStorage,
+    @Inject(FILE_SCANNER) private readonly scanner: FileScanner,
   ) {}
 
   async list(tenantId: string, patientId: string, actor: ClinicalActor) {
@@ -141,6 +156,15 @@ export class PatientFilesService {
       await assertOpenEncounter(this.prisma, tenantId, patientId, dto.encounterId, actor);
     }
 
+    // Scanned before anything is stored: an infected file never reaches the storage, and when
+    // the antivirus cannot answer nothing is stored either (503 FILE_SCAN_UNAVAILABLE).
+    const scan = await this.scanner.scan(part.buffer);
+    if (scan.status === 'INFECTED') {
+      // The signature name and the tenant only: never the file name nor the patient.
+      this.logger.warn(`Rejected an infected upload in tenant ${tenantId}: ${scan.signature}`);
+      throw infectedFile();
+    }
+
     const storageKey = `${tenantId}/${patientId}/${randomUUID()}`;
     const sizeBytes = part.buffer.length;
     await this.storage.put(storageKey, this.crypto.encryptBuffer(tenantId, part.buffer));
@@ -171,6 +195,8 @@ export class PatientFilesService {
             contentHash: bytesContentHash(part.buffer),
             treatmentSessionId: session?.treatmentSessionId,
             phase: session?.phase,
+            scanStatus: scan.status,
+            ...(scan.status === 'CLEAN' ? { scannedAt: new Date(), scanEngine: scan.engine } : {}),
           },
           include: fileInclude,
         });
@@ -206,9 +232,28 @@ export class PatientFilesService {
       where: { id: fileId, tenantId, patientId, deletedAt: null },
     });
     if (!stored) throw clinicalRecordNotFound('Archivo no encontrado');
+    if (stored.scanStatus === 'INFECTED') throw infectedFile();
     const file = this.decrypt(stored);
 
     const data = this.crypto.decryptBuffer(tenantId, await this.storage.get(file.storageKey));
+
+    // A file stored before scanning existed is scanned the first time it is read again.
+    if (stored.scanStatus === 'NOT_SCANNED' && this.scanner.enabled) {
+      const scan = await this.scanner.scan(data);
+      await this.prisma.patientFile.update({
+        where: { id: stored.id },
+        data: {
+          scanStatus: scan.status,
+          ...(scan.status === 'NOT_SCANNED'
+            ? {}
+            : { scannedAt: new Date(), scanEngine: scan.engine }),
+        },
+      });
+      if (scan.status === 'INFECTED') {
+        this.logger.warn(`Quarantined a stored file in tenant ${tenantId}: ${scan.signature}`);
+        throw infectedFile();
+      }
+    }
 
     await this.audit.record(tenantId, actor, [
       { action: 'READ', entity: 'PATIENT_FILE', entityId: fileId, patientId },

@@ -4,11 +4,15 @@ export const CONSENT_VARIABLES = [
   'paciente',
   'identificacion',
   'tratamiento',
+  // What a procedure consent is for; in a treatment session it is the treatment.
+  'procedimiento',
   'profesional',
   'fecha',
 ] as const;
 
-export type ConsentValues = Record<(typeof CONSENT_VARIABLES)[number], string>;
+export type ConsentValues = Record<Exclude<(typeof CONSENT_VARIABLES)[number], 'procedimiento'>, string> & {
+  procedimiento?: string;
+};
 
 const VARIABLE = /\{\{\s*([A-Za-z_]+)\s*\}\}/g;
 
@@ -19,7 +23,7 @@ const VARIABLE = /\{\{\s*([A-Za-z_]+)\s*\}\}/g;
 export function renderConsentText(text: string, values: ConsentValues): string {
   return text.replace(VARIABLE, (placeholder, name: string) =>
     (CONSENT_VARIABLES as readonly string[]).includes(name)
-      ? values[name as keyof ConsentValues]
+      ? (values[name as keyof ConsentValues] ?? values.tratamiento)
       : placeholder,
   );
 }

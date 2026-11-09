@@ -1,3 +1,5 @@
+import { AuthResponseDto } from './dto/auth.dto';
+import { MfaService } from './mfa.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -31,6 +33,7 @@ describe('AuthService own password change and session flag', () => {
     new JwtService({}),
     { get: (name: string) => config[name] } as unknown as ConfigService,
     {} as MailService,
+    { enrollmentRequired: () => false } as unknown as MfaService,
   );
 
   beforeEach(async () => {
@@ -86,7 +89,10 @@ describe('AuthService own password change and session flag', () => {
   });
 
   it('returns mustChangePassword in the login response', async () => {
-    const response = await service.login({ email: 'ana@example.com', password: 'Temporary1!' });
+    const response = (await service.login({
+      email: 'ana@example.com',
+      password: 'Temporary1!',
+    })) as AuthResponseDto;
 
     expect(response.user.mustChangePassword).toBe(true);
   });

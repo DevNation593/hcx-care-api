@@ -1,3 +1,4 @@
+import { NoFileScanner } from '../patient-files/file-scanner';
 import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCipher } from '../clinical-access/clinical-cipher';
@@ -110,7 +111,7 @@ describe('SessionMediaService', () => {
   const service = new SessionMediaService(
     prismaService,
     sessions,
-    new PatientFilesService(prismaService, audit, plain, storage),
+    new PatientFilesService(prismaService, audit, plain, storage, new NoFileScanner()),
   );
 
   const part = (overrides: Partial<UploadedFilePart> = {}): UploadedFilePart => ({

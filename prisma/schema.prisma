@@ -216,6 +216,14 @@ enum TreatmentSessionStatus {
   BILLING_FAILED
 }
 
+// What the antivirus said about a patient file. A file found infected on upload is never stored;
+// INFECTED marks a file stored before scanning existed that a later scan caught: never served.
+enum FileScanStatus {
+  NOT_SCANNED
+  CLEAN
+  INFECTED
+}
+
 // Where in the procedure a session photo was taken.
 enum SessionMediaPhase {
   BEFORE
@@ -429,6 +437,9 @@ model TenantSettings {
   // Appointment settings
   defaultAppointmentDuration Int     @default(60) // minutes
   allowDoubleBooking         Boolean @default(false)
+
+  // Two-factor sign-in required for the account holder and the professionals.
+  requireMfa Boolean @default(false)
 
   // Reminder settings
   reminderRules   String[] @default(["24h", "2h"]) // e.g., ["24h", "2h", "30m"]
@@ -674,6 +685,15 @@ model User {
   // Provider-managed access (for PSYCHOLOGIST role in CLINIC tenants)
   // When true, only the system provider (OWNER) can grant/revoke access
   managedByProvider Boolean @default(false)
+
+  // Two-factor sign-in (TOTP). The secrets are stored encrypted; the recovery codes as SHA-256
+  // hashes, each removed when used. `mfaLastStep` is the last 30-second step accepted, so a code
+  // is never accepted twice.
+  mfaSecret        String?
+  mfaPendingSecret String?
+  mfaEnabledAt     DateTime?
+  mfaRecoveryCodes String[]  @default([])
+  mfaLastStep      Int?
 
   // Push notifications
   fcmToken String? // Firebase Cloud Messaging token
@@ -986,6 +1006,7 @@ model Encounter {
   notes            ClinicalNote[]
   files            PatientFile[]
   treatmentSession TreatmentSession?
+  consentDocuments ConsentDocument[]
 
   @@index([tenantId, patientId, startedAt])
   @@index([tenantId, professionalId, status])
@@ -1010,9 +1031,9 @@ model PatientFile {
   fileName    String
   description String?
 
-  mimeType   String
-  sizeBytes  Int
-  storageKey String @unique
+  mimeType    String
+  sizeBytes   Int
+  storageKey  String  @unique
   // SHA-256 of the decrypted bytes (`v1:<hex>`), taken when the file is uploaded. Files uploaded
   // before it existed get theirs when the encounter they belong to is signed.
   contentHash String?
@@ -1021,6 +1042,11 @@ model PatientFile {
   treatmentSessionId String?
   treatmentSession   TreatmentSession?  @relation(fields: [treatmentSessionId], references: [id], onDelete: SetNull)
   phase              SessionMediaPhase?
+
+  scanStatus FileScanStatus @default(NOT_SCANNED)
+  scannedAt  DateTime?
+  // The engine and signature database that scanned it, e.g. "ClamAV 1.4.1/27450".
+  scanEngine String?
 
   // Clinical files are never removed physically: removal sets deletedAt.
   deletedAt      DateTime?
@@ -1655,8 +1681,14 @@ model ConsentDocument {
   patientId String
   patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
 
-  treatmentSessionId String
-  treatmentSession   TreatmentSession @relation("ConsentDocumentPresentedIn", fields: [treatmentSessionId], references: [id], onDelete: Cascade)
+  // A document belongs to a treatment session, or to a clinical encounter for a procedure
+  // (an IUD insertion, a biopsy). Exactly one of the two is set.
+  treatmentSessionId String?
+  treatmentSession   TreatmentSession? @relation("ConsentDocumentPresentedIn", fields: [treatmentSessionId], references: [id], onDelete: Cascade)
+  encounterId        String?
+  encounter          Encounter?        @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  // Stored encrypted: the procedure the consent is for, when it belongs to an encounter.
+  procedureName      String?
 
   templateVersionId String
   templateVersion   ConsentTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
@@ -1686,6 +1718,7 @@ model ConsentDocument {
 
   @@index([tenantId, patientId, createdAt])
   @@index([treatmentSessionId])
+  @@index([encounterId])
   @@index([templateVersionId])
 }
 
@@ -1712,6 +1745,8 @@ model ConsentSignature {
 
   // The signature drawing as a PNG, encrypted in the file storage.
   signatureStorageKey String
+  // Stored encrypted: the witness present at the signature, when there was one.
+  witnessName         String?
 
   operatorId String
   operator   User     @relation(fields: [operatorId], references: [id], onDelete: Restrict)

@@ -19,7 +19,14 @@ const NOTE_FIELDS = [
 const BATCH_SIZE = 200;
 
 export type EncryptionReport = Record<
-  'clinicalNotes' | 'specialtyRecords' | 'encounters' | 'patientFiles' | 'auditLogs',
+  | 'clinicalNotes'
+  | 'specialtyRecords'
+  | 'encounters'
+  | 'patientFiles'
+  | 'consentDocuments'
+  | 'consentSignatures'
+  | 'mfaSecrets'
+  | 'auditLogs',
   { scanned: number; updated: number }
 >;
 
@@ -29,7 +36,14 @@ type Delegate = {
   update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<unknown>;
 };
 type EncryptionClient = Record<
-  'clinicalNote' | 'specialtyRecord' | 'encounter' | 'patientFile' | 'auditLog',
+  | 'clinicalNote'
+  | 'specialtyRecord'
+  | 'encounter'
+  | 'patientFile'
+  | 'consentDocument'
+  | 'consentSignature'
+  | 'user'
+  | 'auditLog',
   Delegate
 >;
 
@@ -128,6 +142,31 @@ export async function encryptClinicalData(
       {},
       cipher,
       ['fileName', 'description', 'deletionReason'],
+      [],
+      dryRun,
+    ),
+    consentDocuments: await processTable(
+      client.consentDocument,
+      {},
+      cipher,
+      ['title', 'body', 'procedureName'],
+      [],
+      dryRun,
+    ),
+    consentSignatures: await processTable(
+      client.consentSignature,
+      {},
+      cipher,
+      ['signerName', 'signerIdentification', 'relationship', 'witnessName'],
+      [],
+      dryRun,
+    ),
+    // Two-factor secrets are encrypted with the same keys: rotating them must carry these along.
+    mfaSecrets: await processTable(
+      client.user,
+      { OR: [{ mfaSecret: { not: null } }, { mfaPendingSecret: { not: null } }] },
+      cipher,
+      ['mfaSecret', 'mfaPendingSecret'],
       [],
       dryRun,
     ),

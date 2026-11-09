@@ -4,6 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActivityWriteIntervalMs, getInactivityTimeoutMs } from '../session-inactivity';
+import { MfaService } from '../mfa.service';
 
 interface JwtPayload {
   sub: string; // userId
@@ -17,6 +18,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
+    private mfa: MfaService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -36,7 +38,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       () =>
         this.prisma.user.findUnique({
           where: { id: payload.sub },
-          include: { tenant: true },
+          include: { tenant: { include: { settings: { select: { requireMfa: true } } } } },
         }),
     );
 
@@ -68,6 +70,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       role: user.role,
       isPlatformTenant: user.tenant.isPlatform,
       mustChangePassword: user.mustChangePassword,
+      mfaEnrollmentRequired: this.mfa.enrollmentRequired(user),
     };
   }
 }

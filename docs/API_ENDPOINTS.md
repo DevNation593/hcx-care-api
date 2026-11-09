@@ -300,6 +300,36 @@ PATCH /tenants/{tenantId}/form-definitions/{formId}
 
 Field types: `text`, `textarea`, `integer`, `decimal`, `date`, `time`, `checkbox`, `radio`, `select`, `multiselect`, `scale`, `table` (scalar columns) and `calculated`. Formulas and alert conditions use a small expression language that is parsed, never evaluated as code: field keys, numbers, `'text'`, `+ - * / ^`, comparisons, `and` / `or` / `not`, and `sum`, `avg`, `min`, `max`, `round`, `abs`. An invalid definition answers `400 FORM_DEFINITION_INVALID` with one issue per problem.
 
+#### Procedure consents, antivirus and two-factor sign-in
+
+Details in `docs/CLINICAL_SECURITY.md`.
+
+```bash
+# Consents of clinical procedures, in an open encounter of the caller (core.clinical.specialties).
+GET  /tenants/{tenantId}/procedure-consents/templates
+GET  /tenants/{tenantId}/patients/{patientId}/procedure-consents
+POST /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}/procedure-consents
+{ "templateId": "...", "procedureName": "Inserción de DIU" }
+POST /tenants/{tenantId}/procedure-consents/{id}/sign     # SignConsentDto + optional witnessName
+POST /tenants/{tenantId}/procedure-consents/{id}/refuse   { "reason": "..." }
+POST /tenants/{tenantId}/procedure-consents/{id}/revoke   { "reason": "..." }
+GET  /tenants/{tenantId}/procedure-consents/{id}/pdf
+
+# Patient files carry scanStatus (NOT_SCANNED, CLEAN, INFECTED). With FILE_SCAN_DRIVER=clamav an
+# upload answers 422 PATIENT_FILE_INFECTED or 503 FILE_SCAN_UNAVAILABLE and stores nothing.
+
+# Two-factor sign-in. Login of an account with it: { mfaRequired: true, mfaToken }.
+POST /auth/mfa/verify          { "mfaToken": "...", "code": "123456" }   # or "recoveryCode"
+GET  /auth/mfa                 # { enabled, required, recoveryCodesLeft }
+POST /auth/mfa/setup           { "password": "..." }   # { secret, otpauthUrl, qrCodeDataUrl }
+POST /auth/mfa/enable          { "code": "123456" }    # { recoveryCodes } once
+POST /auth/mfa/disable         { "password": "...", "code": "123456" }   # 409 MFA_REQUIRED_BY_POLICY
+POST /auth/mfa/recovery-codes  { "code": "123456" }
+POST /tenants/{tenantId}/users/{userId}/mfa/reset    # MASTER, for a lost phone
+# PATCH /tenants/{tenantId}/settings { "requireMfa": true } makes the MASTER and the professionals
+# enrol: 403 MFA_ENROLLMENT_REQUIRED on every route but their session routes until they do.
+```
+
 #### Encounters, branches, catalogs and permissions
 
 ```bash

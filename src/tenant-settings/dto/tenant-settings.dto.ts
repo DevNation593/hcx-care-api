@@ -98,6 +98,14 @@ export class UpdateTenantSettingsDto {
   @IsOptional()
   reminderEnabled?: boolean;
 
+  @ApiPropertyOptional({
+    example: true,
+    description: 'Require two-factor sign-in for the account holder and the professionals',
+  })
+  @IsBoolean()
+  @IsOptional()
+  requireMfa?: boolean;
+
   // Locale & timezone
   @ApiPropertyOptional({
     example: 'America/Mexico_City',

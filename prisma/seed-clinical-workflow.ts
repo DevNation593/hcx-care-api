@@ -1,3 +1,4 @@
+import { consentChecksum } from '../src/consents/consent-text';
 import { bytesContentHash } from '../src/clinical-access/clinical-signature';
 import type {
   Appointment,
@@ -1324,6 +1325,34 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     status: 'SCHEDULED',
     title: 'Primera consulta de psicología',
     data: { branchId: mainBranch.id, location: 'Consultorio 1' },
+  });
+
+  // A consent template for the procedures of gynecology, published: presented from an open
+  // encounter (Registros clínicos › Consentimientos de procedimientos). Synthetic text.
+  const iudConsent = {
+    title: 'Consentimiento informado para {{procedimiento}}',
+    body:
+      'Yo, {{paciente}}, con identificación {{identificacion}}, declaro que {{profesional}} me explicó en qué ' +
+      'consiste {{procedimiento}}, sus beneficios, sus riesgos frecuentes y graves, y las alternativas, y que pude ' +
+      'hacer preguntas. Sé que puedo retirar este consentimiento antes del procedimiento.\n\n' +
+      'Texto de demostración: debe ser revisado por la profesional y por asesoría jurídica antes de usarse.',
+  };
+  const iudTemplate = await db.consentTemplate.create({
+    data: { tenantId, name: 'Procedimiento ginecológico', createdAt: clock.days(-30) },
+  });
+  await db.consentTemplateVersion.create({
+    data: {
+      tenantId,
+      templateId: iudTemplate.id,
+      version: 1,
+      title: iudConsent.title,
+      body: iudConsent.body,
+      checksum: consentChecksum(iudConsent.title, iudConsent.body),
+      status: 'PUBLISHED',
+      publishedAt: clock.days(-29),
+      createdById: clinic.master.id,
+      createdAt: clock.days(-30),
+    },
   });
 
   // ------------------------------------------------------------------ Lucía: gynecology

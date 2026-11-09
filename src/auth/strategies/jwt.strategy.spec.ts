@@ -1,3 +1,4 @@
+import { MfaService } from '../mfa.service';
 import { ConfigService } from '@nestjs/config';
 import { ExecutionContext, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -45,6 +46,7 @@ describe('JwtStrategy current account authority', () => {
     strategy = new JwtStrategy(
       { get: jest.fn().mockReturnValue('test-jwt-secret') } as unknown as ConfigService,
       db as PrismaService,
+      { enrollmentRequired: () => false } as unknown as MfaService,
     );
   });
 
@@ -56,11 +58,12 @@ describe('JwtStrategy current account authority', () => {
       tenantId: 'tenant-1',
       role: 'ASISTENTE',
       isPlatformTenant: false,
+      mfaEnrollmentRequired: false,
       mustChangePassword: true,
     });
     expect(db.user.findUnique).toHaveBeenCalledWith({
       where: { id: 'member-1' },
-      include: { tenant: true },
+      include: { tenant: { include: { settings: { select: { requireMfa: true } } } } },
     });
     expect(() =>
       new RolesGuard(new Reflector()).canActivate(adminCreateContext(principal)),

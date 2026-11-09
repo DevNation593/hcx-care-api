@@ -15,6 +15,7 @@ import { DocumentTemplatesController } from '../../document-templates/document-t
 import { CatalogsController } from '../../catalogs/catalogs.controller';
 import { ClinicalModulesController } from '../../clinical-modules/clinical-modules.controller';
 import { EncountersController } from '../../encounters/encounters.controller';
+import { ProcedureConsentsController } from '../../procedure-consents/procedure-consents.controller';
 import {
   PatientFilesController,
   StorageController,
@@ -145,6 +146,7 @@ describe('role matrix', () => {
     [PlatformPaymentsController, ['ADMIN']],
     [PlatformLegacyAccessController, ['ADMIN']],
     [ClinicalTimelineController, CLINICAL],
+    [ProcedureConsentsController, CLINICAL],
     [AppointmentsController, TEAM],
     [PatientTeamController, TEAM],
   ] as [Controller, string[]][])('%p requires %j on every handler', (controller, expected) => {
@@ -160,6 +162,7 @@ describe('role matrix', () => {
     ClinicalModulesController,
     ClinicalNotesController,
     EncountersController,
+    ProcedureConsentsController,
     ClinicalTimelineController,
     NextSessionPlansController,
     PatientFilesController,
@@ -271,12 +274,18 @@ describe('role matrix', () => {
     // clinical, treatment or file data: a new open route must be added here on purpose.
     expect(open.sort()).toEqual([
       'AuthController.changePassword',
+      'AuthController.disableMfa',
+      'AuthController.enableMfa',
       'AuthController.forgotPassword',
       'AuthController.login',
       'AuthController.logout',
       'AuthController.logoutAll',
+      'AuthController.mfaStatus',
       'AuthController.refresh',
+      'AuthController.regenerateRecoveryCodes',
       'AuthController.resetPassword',
+      'AuthController.setupMfa',
+      'AuthController.verifyMfa',
       // Public: a visitor of the site asks for a demo; it reads nothing back.
       'DemoRequestsController.create',
       'DocumentVerificationController.verify',

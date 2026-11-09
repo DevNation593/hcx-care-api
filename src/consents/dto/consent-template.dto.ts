@@ -16,7 +16,7 @@ export class SaveConsentDraftDto {
   @ApiProperty({
     example: 'Yo, {{paciente}}, con identificación {{identificacion}}, autorizo {{tratamiento}}.',
     description:
-      'Text the patient signs. Variables: {{paciente}}, {{identificacion}}, {{tratamiento}}, {{profesional}}, {{fecha}}.',
+      'Text the patient signs. Variables: {{paciente}}, {{identificacion}}, {{tratamiento}}, {{procedimiento}}, {{profesional}}, {{fecha}}.',
   })
   @Transform(trimText)
   @IsString()

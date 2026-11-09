@@ -8,6 +8,7 @@ import { ClinicalAuditService } from '../clinical-access/clinical-audit.service'
 import { ClinicalCipher, parseClinicalKeys } from '../clinical-access/clinical-cipher';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_PLANS } from '../plans/default-plans';
+import { fileScanUnavailable } from './file-scanner';
 import { FileStorage, LocalFileStorage } from './file-storage';
 import { PatientFilesService, UploadedFilePart } from './patient-files.service';
 
@@ -130,11 +131,14 @@ describe('PatientFilesService', () => {
     $queryRaw: jest.fn(),
   };
   const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
+  // The antivirus: off unless a case turns it on.
+  const scanner = { enabled: false, scan: jest.fn() };
   const service = new PatientFilesService(
     prisma as unknown as PrismaService,
     new ClinicalAuditService(prisma as unknown as PrismaService, cipher),
     cipher,
     storage,
+    scanner,
   );
   const part = (overrides: Partial<UploadedFilePart> = {}): UploadedFilePart => ({
     // As multer hands it over: the UTF-8 name read as latin1.
@@ -147,6 +151,21 @@ describe('PatientFilesService', () => {
   const upload = (file: UploadedFilePart | undefined = part(), dto = {}) =>
     service.upload('tenant-1', 'patient-1', dentist, file, { category: 'EXAMEN', ...dto } as never);
   const created = () => db.patientFile.create.mock.calls[0][0].data;
+  const stored = (overrides = {}) => ({
+    id: 'file-1',
+    tenantId: 'tenant-1',
+    patientId: 'patient-1',
+    uploadedById: 'dentist',
+    fileName: cipher.encrypt('tenant-1', 'hemograma.pdf'),
+    description: null,
+    mimeType: 'application/pdf',
+    sizeBytes: PDF.length,
+    storageKey: 'tenant-1/patient-1/blob',
+    createdAt: new Date('2026-10-03T10:00:00Z'),
+    uploadedBy: { id: 'dentist', firstName: 'Carlos', lastName: 'Vera' },
+    patient: { id: 'patient-1', firstName: 'Lucía', lastName: 'Torres' },
+    ...overrides,
+  });
   const auditRows = () => db.auditLog.createMany.mock.calls.flatMap(([args]) => args.data);
 
   beforeEach(() => {
@@ -162,6 +181,83 @@ describe('PatientFilesService', () => {
     );
     // Encounters are open unless a case closes one.
     db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+    scanner.enabled = false;
+    scanner.scan.mockResolvedValue({ status: 'NOT_SCANNED' });
+  });
+
+  describe('antivirus', () => {
+    it('records a clean scan with its engine', async () => {
+      scanner.enabled = true;
+      scanner.scan.mockResolvedValue({ status: 'CLEAN', engine: 'ClamAV 1.4.1/27450' });
+
+      await upload();
+
+      expect(scanner.scan).toHaveBeenCalledWith(PDF);
+      expect(created()).toMatchObject({ scanStatus: 'CLEAN', scanEngine: 'ClamAV 1.4.1/27450' });
+      expect(created().scannedAt).toBeInstanceOf(Date);
+    });
+
+    it('stores nothing when the antivirus finds malware', async () => {
+      scanner.enabled = true;
+      scanner.scan.mockResolvedValue({
+        status: 'INFECTED',
+        engine: 'ClamAV',
+        signature: 'Eicar-Test-Signature',
+      });
+
+      await expect(upload()).rejects.toMatchObject({
+        status: 422,
+        response: { code: 'PATIENT_FILE_INFECTED' },
+      });
+      expect(blobs.size).toBe(0);
+      expect(db.patientFile.create).not.toHaveBeenCalled();
+    });
+
+    it('stores nothing when the antivirus cannot answer', async () => {
+      scanner.enabled = true;
+      scanner.scan.mockRejectedValue(fileScanUnavailable());
+
+      await expect(upload()).rejects.toMatchObject({
+        status: 503,
+        response: { code: 'FILE_SCAN_UNAVAILABLE' },
+      });
+      expect(blobs.size).toBe(0);
+    });
+
+    it('marks a file as not scanned when no antivirus is configured', async () => {
+      await upload();
+
+      expect(created()).toMatchObject({ scanStatus: 'NOT_SCANNED' });
+      expect(created().scannedAt).toBeUndefined();
+    });
+
+    it('never serves a quarantined file', async () => {
+      db.patientFile.findFirst.mockResolvedValue(stored({ scanStatus: 'INFECTED' }));
+
+      await expect(
+        service.download('tenant-1', 'patient-1', 'file-1', other),
+      ).rejects.toMatchObject({
+        status: 422,
+      });
+    });
+
+    it('scans an older file on its first download and quarantines it if infected', async () => {
+      scanner.enabled = true;
+      blobs.set('tenant-1/patient-1/blob', cipher.encryptBuffer('tenant-1', PDF));
+      db.patientFile.findFirst.mockResolvedValue(stored({ scanStatus: 'NOT_SCANNED' }));
+      scanner.scan.mockResolvedValue({ status: 'INFECTED', engine: 'ClamAV', signature: 'X' });
+
+      await expect(
+        service.download('tenant-1', 'patient-1', 'file-1', other),
+      ).rejects.toMatchObject({
+        status: 422,
+      });
+      expect(db.patientFile.update).toHaveBeenCalledWith({
+        where: { id: 'file-1' },
+        data: expect.objectContaining({ scanStatus: 'INFECTED', scanEngine: 'ClamAV' }),
+      });
+      expect(auditRows()).toEqual([]);
+    });
   });
 
   describe('signatures', () => {
@@ -392,22 +488,6 @@ describe('PatientFilesService', () => {
   });
 
   describe('reading', () => {
-    const stored = (overrides = {}) => ({
-      id: 'file-1',
-      tenantId: 'tenant-1',
-      patientId: 'patient-1',
-      uploadedById: 'dentist',
-      fileName: cipher.encrypt('tenant-1', 'hemograma.pdf'),
-      description: null,
-      mimeType: 'application/pdf',
-      sizeBytes: PDF.length,
-      storageKey: 'tenant-1/patient-1/blob',
-      createdAt: new Date('2026-10-03T10:00:00Z'),
-      uploadedBy: { id: 'dentist', firstName: 'Carlos', lastName: 'Vera' },
-      patient: { id: 'patient-1', firstName: 'Lucía', lastName: 'Torres' },
-      ...overrides,
-    });
-
     it('lists the live files of the patient and audits each one', async () => {
       db.patientFile.findMany.mockResolvedValue([stored()]);
 
