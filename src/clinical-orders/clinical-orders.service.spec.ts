@@ -317,6 +317,43 @@ describe('ClinicalOrdersService', () => {
       });
     });
 
+    it('refuses a record its author can still change: one of an encounter still open', async () => {
+      const { id } = await order();
+      db.specialtyRecord.findFirst.mockResolvedValue({
+        id: 'record-1',
+        signedAt: null,
+        encounterId: 'encounter-1',
+        encounter: { status: 'OPEN' },
+        clinicalResult: null,
+      });
+
+      await expect(addResult(id, 1, { recordId: 'record-1' })).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'CLINICAL_RESULT_RECORD_NOT_SIGNED' },
+      });
+      expect(db.tables.clinicalResult).toHaveLength(0);
+    });
+
+    it('links a signed record of the same patient', async () => {
+      const { id } = await order();
+      db.specialtyRecord.findFirst.mockResolvedValue({
+        id: 'record-1',
+        signedAt: new Date('2026-11-01T10:00:00Z'),
+        encounterId: 'encounter-1',
+        encounter: { status: 'CLOSED' },
+        clinicalResult: null,
+      });
+
+      const { currentResult } = await addResult(id, 1, { recordId: 'record-1' });
+
+      expect(currentResult).toMatchObject({ recordId: 'record-1' });
+      expect(db.specialtyRecord.findFirst.mock.calls[0][0].where).toMatchObject({
+        tenantId: 'tenant-1',
+        patientId: 'patient-1',
+        deletedAt: null,
+      });
+    });
+
     it('keeps an earlier version as superseded when a corrected report arrives', async () => {
       const { id } = await order();
       await addResult(id, 1);
