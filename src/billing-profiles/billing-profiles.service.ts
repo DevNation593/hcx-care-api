@@ -16,7 +16,15 @@ import {
   ListBillingProfilesQuery,
   UpdateBillingProfileDto,
 } from './dto/billing-profile.dto';
-import { PATIENT_ID_TYPES, patientBillingProfileId } from './patient-billing-profile';
+import { assertSectionInEffect } from '../common/sections/section-in-effect';
+import {
+  PATIENT_BILLING_SELECT,
+  PATIENT_ID_TYPES,
+  patientBillingDraft,
+  patientBillingProfileId,
+  type PatientBillingIssue,
+  type PatientBillingSource,
+} from './patient-billing-profile';
 import {
   assertValidTaxIdentification,
   FINAL_CONSUMER_NAME,
@@ -26,24 +34,6 @@ import {
 
 export type LinkedBillingProfile = BillingProfile & { isDefault: boolean };
 
-/** What a patient record still lacks to issue an invoice in the patient's own name. */
-export type MissingPatientBillingField = 'identification' | 'email';
-
-/** Patient columns that decide whether the record can be its own invoice recipient. */
-interface PatientBillingData {
-  firstName: string;
-  lastName: string;
-  identificationType: string | null;
-  identificationNumber: string | null;
-  email: string | null;
-  address: string | null;
-  phone: string | null;
-  billingTaxId: string | null;
-  billingTaxIdType: string | null;
-  billingName: string | null;
-  billingEmail: string | null;
-}
-
 /** Patient columns an invoice in the patient's name may complete. */
 type PatientFill = Partial<
   Record<'identificationType' | 'identificationNumber' | 'email' | 'address' | 'phone', string>
@@ -51,57 +41,34 @@ type PatientFill = Partial<
 
 const blank = (value: string | null | undefined) => !value?.trim();
 
-/** Whether a patient identification can stand as an SRI recipient identification. */
-function invoiceableIdentification(
-  rawType: string | null,
-  rawNumber: string | null,
-  legalName: string,
-): boolean {
-  const idType = PATIENT_ID_TYPES[rawType?.trim().toUpperCase() ?? ''];
-  if (!idType || blank(rawNumber)) return false;
-  try {
-    assertValidTaxIdentification(idType, normalizeIdNumber(idType, rawNumber ?? ''), legalName);
-    return true;
-  } catch (error) {
-    if (error instanceof UnprocessableEntityException) return false;
-    throw error;
-  }
-}
+const ISSUE_LABELS: Record<PatientBillingIssue, string> = {
+  identification: 'la identificación',
+  legalName: 'el nombre',
+  email: 'el correo',
+  address: 'la dirección',
+  phone: 'el teléfono',
+};
 
-/** Mirrors the choice of patientBillingProfileId: a separate fiscal identity wins. */
-export function missingPatientBillingData(
-  patient: PatientBillingData,
-): MissingPatientBillingField[] {
-  const fiscal = !blank(patient.billingTaxId);
-  const legalName = fiscal
-    ? (patient.billingName?.trim() ?? '')
-    : `${patient.firstName.trim()} ${patient.lastName.trim()}`.trim();
-  const missing: MissingPatientBillingField[] = [];
-  const identified = fiscal
-    ? invoiceableIdentification(patient.billingTaxIdType, patient.billingTaxId, legalName)
-    : invoiceableIdentification(
-        patient.identificationType,
-        patient.identificationNumber,
-        legalName,
-      );
-  if (!identified) missing.push('identification');
-  if (blank(fiscal ? patient.billingEmail : null) && blank(patient.email)) missing.push('email');
-  return missing;
-}
-
-const patientBillingDataIncomplete = (
-  missing: MissingPatientBillingField[],
-  identificationOnFile: boolean,
-) =>
-  new UnprocessableEntityException({
+/**
+ * 422 naming what keeps the record from being its own recipient: `missing` are empty data that
+ * the request may complete; `invalid` are data on file that must be fixed in the record.
+ */
+function patientBillingDataIncomplete(draft: ReturnType<typeof patientBillingDraft>) {
+  const empty = (issue: PatientBillingIssue) =>
+    (issue === 'identification' && blank(draft.data.idNumber)) ||
+    (issue === 'email' && blank(draft.data.email));
+  const missing = draft.issues.filter(empty);
+  const invalid = draft.issues.filter((issue) => !empty(issue));
+  return new UnprocessableEntityException({
     statusCode: 422,
     code: 'PATIENT_BILLING_DATA_INCOMPLETE',
     message:
-      missing.includes('identification') && identificationOnFile
-        ? 'La identificación registrada no sirve para facturar. Corrígela en la ficha antes de facturar a su nombre.'
+      invalid.length > 0
+        ? `Corrige en la ficha ${invalid.map((issue) => ISSUE_LABELS[issue]).join(', ')} antes de facturar a su nombre.`
         : 'Faltan datos para facturar a nombre de esta persona.',
-    details: { missing, identificationOnFile },
+    details: { missing, invalid },
   });
+}
 
 const identificationTaken = () =>
   new ConflictException({
@@ -369,21 +336,14 @@ export class BillingProfilesService {
   ): Promise<LinkedBillingProfile> {
     try {
       return await runSerializableTransaction(this.prisma, tenantId, actorId, async (tx) => {
+        // Completing the record writes to the patient: like PATCH /patients/:id, only while the
+        // clinic has the patient records section on. Billing with the data on file does not.
+        if (Object.values(dto).some((value) => value !== undefined)) {
+          await assertSectionInEffect(tx, tenantId, 'core.patients.records');
+        }
         const patient = await tx.patient.findFirst({
           where: { id: patientId, tenantId, deletedAt: null },
-          select: {
-            firstName: true,
-            lastName: true,
-            identificationType: true,
-            identificationNumber: true,
-            email: true,
-            address: true,
-            phone: true,
-            billingTaxId: true,
-            billingTaxIdType: true,
-            billingName: true,
-            billingEmail: true,
-          },
+          select: PATIENT_BILLING_SELECT,
         });
         if (!patient) throw patientNotFound();
 
@@ -395,11 +355,16 @@ export class BillingProfilesService {
 
         const profileId = await patientBillingProfileId(tx, tenantId, actorId, patientId);
         if (!profileId) {
-          const after = { ...patient, ...fill };
-          const missing = missingPatientBillingData(after);
-          // Complete data that still yields nothing is an existing, deactivated profile.
-          if (missing.length === 0) throw inactive();
-          throw patientBillingDataIncomplete(missing, !blank(after.identificationNumber));
+          const draft = patientBillingDraft({ ...patient, ...fill });
+          if (!draft.issues.includes('identification')) {
+            const { idType, idNumber } = draft.data;
+            const deactivated = await tx.billingProfile.findFirst({
+              where: { tenantId, idType, idNumber, isActive: false },
+              select: { id: true },
+            });
+            if (deactivated) throw inactive();
+          }
+          throw patientBillingDataIncomplete(draft);
         }
 
         const currentDefault = await tx.patientBillingProfile.findFirst({
@@ -446,7 +411,7 @@ export class BillingProfilesService {
     tx: Prisma.TransactionClient,
     tenantId: string,
     patientId: string,
-    patient: PatientBillingData,
+    patient: PatientBillingSource,
     dto: BillAsPatientDto,
   ): Promise<PatientFill> {
     const fill: PatientFill = {};

@@ -102,8 +102,9 @@ export class BillingProfilesController {
     summary: "Bill in the patient's own name, from the patient record",
     description:
       'Creates or reuses the profile with the patient data and links it (default when there is none). ' +
-      'Fields the record lacks may be sent; writing them also needs patients.update. ' +
-      '422 PATIENT_BILLING_DATA_INCOMPLETE (missing), 409 BILLING_PROFILE_INACTIVE or PATIENT_IDENTIFICATION_TAKEN.',
+      'Fields the record lacks may be sent; writing them also needs patients.update and the core.patients.records section. ' +
+      '422 PATIENT_BILLING_DATA_INCOMPLETE (details.missing to complete, details.invalid to fix in the record), ' +
+      '409 BILLING_PROFILE_INACTIVE or PATIENT_IDENTIFICATION_TAKEN.',
   })
   async billAsPatient(
     @Param('tenantId') tenantId: string,

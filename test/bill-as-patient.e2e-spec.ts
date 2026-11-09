@@ -147,7 +147,7 @@ describe("Invoice in the patient's own name (E2E)", () => {
       .expect(422);
     expect(missing.body).toMatchObject({
       code: 'PATIENT_BILLING_DATA_INCOMPLETE',
-      details: { missing: ['identification', 'email'], identificationOnFile: false },
+      details: { missing: ['identification', 'email'], invalid: [] },
     });
 
     const response = await request(server())
@@ -213,8 +213,84 @@ describe("Invoice in the patient's own name (E2E)", () => {
       .expect(422);
     expect(response.body).toMatchObject({
       code: 'PATIENT_BILLING_DATA_INCOMPLETE',
-      details: { missing: ['identification'], identificationOnFile: true },
+      details: { missing: [], invalid: ['identification'] },
     });
+  });
+
+  it('names a datum on file that is too long instead of a deactivated profile', async () => {
+    const patientId = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: `PL${Date.now()}`,
+      email: 'long@example.test',
+      address: 'A'.repeat(301),
+    });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(422);
+    expect(response.body).toMatchObject({
+      code: 'PATIENT_BILLING_DATA_INCOMPLETE',
+      details: { missing: [], invalid: ['address'] },
+    });
+    expect(response.body.message).toContain('la dirección');
+  });
+
+  it('answers 409 only for a profile that really is deactivated', async () => {
+    const idNumber = `PD${Date.now()}`;
+    const patientId = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: idNumber,
+      email: 'off@example.test',
+    });
+    const profile = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(201);
+    await prisma.patientBillingProfile.deleteMany({ where: { patientId } });
+    await prisma.billingProfile.update({
+      where: { id: profile.body.id },
+      data: { isActive: false },
+    });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(409);
+    expect(response.body.code).toBe('BILLING_PROFILE_INACTIVE');
+  });
+
+  it('completes the record only while the patient records section is on', async () => {
+    const patientId = await newPatient();
+    const complete = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: `PS${Date.now()}`,
+      email: 'section@example.test',
+    });
+    const section = { tenantId, moduleKey: 'core.patients.records' };
+    await prisma.tenantModule.updateMany({ where: section, data: { enabled: false } });
+    try {
+      const refused = await request(server())
+        .post(own(patientId))
+        .set(as('master'))
+        .send({
+          identificationType: 'PASSPORT',
+          identificationNumber: `PN${Date.now()}`,
+          email: 'n@example.test',
+        })
+        .expect(403);
+      expect(refused.body.code).toBe('SECTION_NOT_ENABLED');
+      const patient = await prisma.patient.findUniqueOrThrow({ where: { id: patientId } });
+      expect(patient.identificationNumber).toBeNull();
+
+      // Billing with the data already on file does not write to the record.
+      await request(server()).post(own(complete)).set(as('master')).send({}).expect(201);
+    } finally {
+      await prisma.tenantModule.updateMany({ where: section, data: { enabled: true } });
+    }
   });
 
   it('refuses an identification another patient already has', async () => {
