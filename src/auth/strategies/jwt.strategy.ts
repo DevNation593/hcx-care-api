@@ -5,28 +5,14 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActivityWriteIntervalMs, getInactivityTimeoutMs } from '../session-inactivity';
 import { MfaService } from '../mfa.service';
+import { sessionEnded } from '../session-version';
 
 interface JwtPayload {
   sub: string; // userId
   email: string;
   tenantId: string;
   role: string;
-  iat?: number; // seconds
-  issuedAtMs?: number;
-}
-
-/**
- * Whether the token was issued before the account enabled two-factor sign-in: such a session
- * was opened with the password alone and ended then. Tokens without `issuedAtMs` (older than it)
- * fall back to `iat`, rounded down, so they are never taken as newer than they are.
- */
-export function issuedBeforeMfaEnabled(
-  payload: Pick<JwtPayload, 'iat' | 'issuedAtMs'>,
-  mfaEnabledAt: Date | null,
-): boolean {
-  if (!mfaEnabledAt) return false;
-  const issuedAt = payload.issuedAtMs ?? (payload.iat ?? 0) * 1000;
-  return issuedAt < mfaEnabledAt.getTime();
+  sv?: number;
 }
 
 @Injectable()
@@ -62,11 +48,11 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('User or tenant is inactive');
     }
 
-    if (issuedBeforeMfaEnabled(payload, user.mfaEnabledAt)) {
+    if (sessionEnded(payload, user)) {
       throw new UnauthorizedException({
         statusCode: 401,
-        code: 'SESSION_ENDED_BY_MFA',
-        message: 'Se activó la verificación en dos pasos. Inicia sesión otra vez.',
+        code: 'SESSION_ENDED',
+        message: 'Cambió la verificación en dos pasos de tu cuenta. Inicia sesión otra vez.',
       });
     }
 

@@ -103,7 +103,13 @@ describe('MfaService', () => {
 
   it('ends every session of the account when the second factor is enabled', async () => {
     await enrol();
-    // Opened with the password alone: none of them may gain what the second factor gives.
+    // Opened with the password alone: none of them may gain what the second factor gives. The
+    // new version also refuses tokens a sign-in already running issues after this.
+    expect(prisma.user.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ sessionVersion: { increment: 1 } }),
+      }),
+    );
     expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
       where: { userId: 'user-1', isRevoked: false },
       data: { isRevoked: true },
@@ -171,6 +177,12 @@ describe('MfaService', () => {
 
     expect(user.mfaEnabledAt).toBeNull();
     expect(user.mfaSecret).toBeNull();
+    // The access tokens end too, not only the refresh tokens.
+    expect(prisma.user.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ sessionVersion: { increment: 1 } }),
+      }),
+    );
     expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
       where: { userId: 'user-1', isRevoked: false },
       data: { isRevoked: true },

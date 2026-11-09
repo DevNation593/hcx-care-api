@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { LoginDto, AuthResponseDto, MfaChallengeDto, VerifyMfaLoginDto } from './dto/auth.dto';
 import { MfaService } from './mfa.service';
 import { getInactivityTimeoutMs } from './session-inactivity';
+import { sessionEnded } from './session-version';
 import { MailService } from '../mail/mail.service';
 
 type JwtExpiresIn = NonNullable<JwtSignOptions['expiresIn']>;
@@ -174,6 +175,13 @@ export class AuthService {
 
           if (!user.isActive || !user.tenant.isActive) {
             throw new UnauthorizedException('Usuario o tenant inactivo');
+          }
+
+          // Issued under an earlier session version: the second factor was enabled or reset
+          // after it, possibly while the sign-in that created it was still running.
+          if (sessionEnded(payload, user)) {
+            await this.revokeTokenFamily(storedToken.familyId);
+            throw new UnauthorizedException('La sesión terminó');
           }
 
           if (
@@ -362,9 +370,10 @@ export class AuthService {
       email: user.email,
       tenantId: user.tenantId,
       role: user.role,
-      // `iat` counts whole seconds; enabling two-factor sign-in ends the sessions issued before
-      // it, which needs the exact moment (see JwtStrategy).
-      issuedAtMs: Date.now(),
+      // The version of the account read when this sign-in or refresh started. Enabling or
+      // resetting the second factor bumps it, so a token issued from a read made before that is
+      // refused even if it is signed after it (see sessionEnded).
+      sv: user.sessionVersion ?? 0,
     };
 
     const accessToken = this.jwtService.sign(payload, {

@@ -301,6 +301,9 @@ describe('Procedure consents, antivirus and two-factor sign-in (E2E)', () => {
   });
 
   describe('two-factor sign-in', () => {
+    // The session the colleague opens with the second factor, for the reset below.
+    let colleagueSession = '';
+
     it('makes the professionals enrol when the clinic requires it', async () => {
       await request(server())
         .patch(`${base()}/settings`)
@@ -362,6 +365,7 @@ describe('Procedure consents, antivirus and two-factor sign-in (E2E)', () => {
         .send({ mfaToken: challenge.body.mfaToken, code: totpCode(secret, step + 1) })
         .expect(200);
       expect(verified.body.user).toMatchObject({ mfaEnabled: true, mfaEnrollmentRequired: false });
+      colleagueSession = verified.body.accessToken;
       await request(server())
         .get(`${base()}/patients/${patientId}/procedure-consents`)
         .set({ Authorization: `Bearer ${verified.body.accessToken}` })
@@ -402,9 +406,19 @@ describe('Procedure consents, antivirus and two-factor sign-in (E2E)', () => {
 
       await prisma.tenantSettings.update({ where: { tenantId }, data: { requireMfa: false } });
       await request(server())
+        .get('/api/v1/auth/mfa')
+        .set({ Authorization: `Bearer ${colleagueSession}` })
+        .expect(200);
+      await request(server())
         .post(`${base()}/users/${colleague.id}/mfa/reset`)
         .set({ Authorization: `Bearer ${masterLogin.body.accessToken}` })
         .expect(200);
+      // Their sessions end, the access tokens included: not only the refresh tokens.
+      const ended = await request(server())
+        .get('/api/v1/auth/mfa')
+        .set({ Authorization: `Bearer ${colleagueSession}` })
+        .expect(401);
+      expect(ended.body.code).toBe('SESSION_ENDED');
       const plain = await login('colleague@tenant.test');
       expect(plain.body.accessToken).toEqual(expect.any(String));
       expect(
