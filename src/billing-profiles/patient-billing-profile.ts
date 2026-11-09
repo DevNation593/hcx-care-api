@@ -5,7 +5,7 @@ import { recordBillingAudit } from '../common/audit/billing-audit';
 import { CreateBillingProfileDto } from './dto/billing-profile.dto';
 import { assertValidTaxIdentification, normalizeIdNumber, SriIdType } from './tax-identification';
 
-const PATIENT_ID_TYPES: Record<string, SriIdType | undefined> = {
+export const PATIENT_ID_TYPES: Record<string, SriIdType | undefined> = {
   CEDULA: '05',
   RUC: '04',
   PASSPORT: '06',

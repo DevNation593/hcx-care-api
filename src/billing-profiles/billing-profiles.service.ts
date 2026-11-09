@@ -6,14 +6,17 @@ import {
 } from '@nestjs/common';
 import { BillingProfile, Prisma } from '@prisma/client';
 import { recordBillingAudit } from '../common/audit/billing-audit';
+import { mergePatientIdentification } from '../patients/patient-identity';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
 import {
+  BillAsPatientDto,
   CreateBillingProfileDto,
   LinkBillingProfileDto,
   ListBillingProfilesQuery,
   UpdateBillingProfileDto,
 } from './dto/billing-profile.dto';
+import { PATIENT_ID_TYPES, patientBillingProfileId } from './patient-billing-profile';
 import {
   assertValidTaxIdentification,
   FINAL_CONSUMER_NAME,
@@ -22,6 +25,90 @@ import {
 } from './tax-identification';
 
 export type LinkedBillingProfile = BillingProfile & { isDefault: boolean };
+
+/** What a patient record still lacks to issue an invoice in the patient's own name. */
+export type MissingPatientBillingField = 'identification' | 'email';
+
+/** Patient columns that decide whether the record can be its own invoice recipient. */
+interface PatientBillingData {
+  firstName: string;
+  lastName: string;
+  identificationType: string | null;
+  identificationNumber: string | null;
+  email: string | null;
+  address: string | null;
+  phone: string | null;
+  billingTaxId: string | null;
+  billingTaxIdType: string | null;
+  billingName: string | null;
+  billingEmail: string | null;
+}
+
+/** Patient columns an invoice in the patient's name may complete. */
+type PatientFill = Partial<
+  Record<'identificationType' | 'identificationNumber' | 'email' | 'address' | 'phone', string>
+>;
+
+const blank = (value: string | null | undefined) => !value?.trim();
+
+/** Whether a patient identification can stand as an SRI recipient identification. */
+function invoiceableIdentification(
+  rawType: string | null,
+  rawNumber: string | null,
+  legalName: string,
+): boolean {
+  const idType = PATIENT_ID_TYPES[rawType?.trim().toUpperCase() ?? ''];
+  if (!idType || blank(rawNumber)) return false;
+  try {
+    assertValidTaxIdentification(idType, normalizeIdNumber(idType, rawNumber ?? ''), legalName);
+    return true;
+  } catch (error) {
+    if (error instanceof UnprocessableEntityException) return false;
+    throw error;
+  }
+}
+
+/** Mirrors the choice of patientBillingProfileId: a separate fiscal identity wins. */
+export function missingPatientBillingData(
+  patient: PatientBillingData,
+): MissingPatientBillingField[] {
+  const fiscal = !blank(patient.billingTaxId);
+  const legalName = fiscal
+    ? (patient.billingName?.trim() ?? '')
+    : `${patient.firstName.trim()} ${patient.lastName.trim()}`.trim();
+  const missing: MissingPatientBillingField[] = [];
+  const identified = fiscal
+    ? invoiceableIdentification(patient.billingTaxIdType, patient.billingTaxId, legalName)
+    : invoiceableIdentification(
+        patient.identificationType,
+        patient.identificationNumber,
+        legalName,
+      );
+  if (!identified) missing.push('identification');
+  if (blank(fiscal ? patient.billingEmail : null) && blank(patient.email)) missing.push('email');
+  return missing;
+}
+
+const patientBillingDataIncomplete = (
+  missing: MissingPatientBillingField[],
+  identificationOnFile: boolean,
+) =>
+  new UnprocessableEntityException({
+    statusCode: 422,
+    code: 'PATIENT_BILLING_DATA_INCOMPLETE',
+    message:
+      missing.includes('identification') && identificationOnFile
+        ? 'La identificación registrada no sirve para facturar. Corrígela en la ficha antes de facturar a su nombre.'
+        : 'Faltan datos para facturar a nombre de esta persona.',
+    details: { missing, identificationOnFile },
+  });
+
+const identificationTaken = () =>
+  new ConflictException({
+    statusCode: 409,
+    code: 'PATIENT_IDENTIFICATION_TAKEN',
+    message: 'Ya existe un paciente con esa identificación.',
+  });
 
 const DEFAULT_PAGE_SIZE = 20;
 
@@ -265,6 +352,136 @@ export class BillingProfilesService {
         changes: { unlinkedPatientId: patientId },
       });
     });
+  }
+
+  /**
+   * The patient's own billing profile, built from the patient record and linked to it (as the
+   * default when the patient has none yet). Data the record lacks may come in `dto`: it is
+   * written to the patient first, and a field the record already has is never overwritten.
+   * 422 PATIENT_BILLING_DATA_INCOMPLETE names what is still missing; 409 BILLING_PROFILE_INACTIVE
+   * or PATIENT_IDENTIFICATION_TAKEN.
+   */
+  async billAsPatient(
+    tenantId: string,
+    actorId: string,
+    patientId: string,
+    dto: BillAsPatientDto,
+  ): Promise<LinkedBillingProfile> {
+    try {
+      return await runSerializableTransaction(this.prisma, tenantId, actorId, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: patientId, tenantId, deletedAt: null },
+          select: {
+            firstName: true,
+            lastName: true,
+            identificationType: true,
+            identificationNumber: true,
+            email: true,
+            address: true,
+            phone: true,
+            billingTaxId: true,
+            billingTaxIdType: true,
+            billingName: true,
+            billingEmail: true,
+          },
+        });
+        if (!patient) throw patientNotFound();
+
+        const fill = await this.patientFieldsToFill(tx, tenantId, patientId, patient, dto);
+        const completedFields = Object.keys(fill);
+        if (completedFields.length > 0) {
+          await tx.patient.update({ where: { id: patientId }, data: fill, select: { id: true } });
+        }
+
+        const profileId = await patientBillingProfileId(tx, tenantId, actorId, patientId);
+        if (!profileId) {
+          const after = { ...patient, ...fill };
+          const missing = missingPatientBillingData(after);
+          // Complete data that still yields nothing is an existing, deactivated profile.
+          if (missing.length === 0) throw inactive();
+          throw patientBillingDataIncomplete(missing, !blank(after.identificationNumber));
+        }
+
+        const currentDefault = await tx.patientBillingProfile.findFirst({
+          where: { tenantId, patientId, isDefault: true },
+          select: { billingProfileId: true },
+        });
+        if (!currentDefault) {
+          await tx.patientBillingProfile.update({
+            where: { patientId_billingProfileId: { patientId, billingProfileId: profileId } },
+            data: { isDefault: true },
+          });
+        }
+        if (completedFields.length > 0) {
+          await recordBillingAudit(tx, {
+            tenantId,
+            actorId,
+            action: 'UPDATE',
+            entity: 'BILLING_PROFILE',
+            entityId: profileId,
+            changes: { completedPatientId: patientId, completedFields, source: 'PATIENT_DATA' },
+          });
+        }
+
+        const linked = await this.linked(tx, tenantId, patientId);
+        const own = linked.find((profile) => profile.id === profileId);
+        if (!own) throw profileNotFound();
+        return own;
+      });
+    } catch (error) {
+      // The partial unique index on the patient identification backs the check against races.
+      const meta = (error as Prisma.PrismaClientKnownRequestError)?.meta;
+      if (
+        isUniqueViolation(error) &&
+        (meta?.modelName === 'Patient' || String(meta?.target ?? '').includes('identification'))
+      ) {
+        throw identificationTaken();
+      }
+      throw error;
+    }
+  }
+
+  /** The fields of `dto` the patient record does not have yet, validated and normalized. */
+  private async patientFieldsToFill(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    patientId: string,
+    patient: PatientBillingData,
+    dto: BillAsPatientDto,
+  ): Promise<PatientFill> {
+    const fill: PatientFill = {};
+
+    if (dto.identificationNumber && blank(patient.identificationNumber)) {
+      const identification = mergePatientIdentification(null, {
+        identificationType: dto.identificationType,
+        identificationNumber: dto.identificationNumber,
+      });
+      const idType = PATIENT_ID_TYPES[identification.identificationType ?? ''] as SriIdType;
+      const legalName = `${patient.firstName.trim()} ${patient.lastName.trim()}`.trim();
+      assertValidTaxIdentification(
+        idType,
+        normalizeIdNumber(idType, identification.identificationNumber ?? ''),
+        legalName,
+      );
+      const other = await tx.patient.findFirst({
+        where: {
+          tenantId,
+          identificationType: identification.identificationType,
+          identificationNumber: identification.identificationNumber,
+          deletedAt: null,
+          id: { not: patientId },
+        },
+        select: { id: true },
+      });
+      if (other) throw identificationTaken();
+      fill.identificationType = identification.identificationType ?? undefined;
+      fill.identificationNumber = identification.identificationNumber ?? undefined;
+    }
+    for (const field of ['email', 'address', 'phone'] as const) {
+      const value = dto[field]?.trim();
+      if (value && blank(patient[field])) fill[field] = value;
+    }
+    return fill;
   }
 
   private async assertPatient(

@@ -117,6 +117,46 @@ export class LinkBillingProfileDto {
   isDefault?: boolean;
 }
 
+/**
+ * Patient data missing for an invoice in the patient's own name. Only fields the patient does
+ * not have yet are written; a field already on file is kept as it is.
+ */
+export class BillAsPatientDto {
+  @ApiPropertyOptional({ enum: ['CEDULA', 'RUC', 'PASSPORT'] })
+  @ValidateIf((dto: BillAsPatientDto) => dto.identificationNumber !== undefined)
+  @IsIn(['CEDULA', 'RUC', 'PASSPORT'])
+  identificationType?: 'CEDULA' | 'RUC' | 'PASSPORT';
+
+  @ApiPropertyOptional({ example: '1710034065' })
+  @ValidateIf((dto: BillAsPatientDto) => dto.identificationType !== undefined)
+  @Transform(trimText)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(50)
+  identificationNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(trimText)
+  @IsEmail()
+  @MaxLength(254)
+  email?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(trimText)
+  @IsString()
+  @MaxLength(300)
+  address?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(trimText)
+  @IsString()
+  @MaxLength(30)
+  phone?: string;
+}
+
 export class ListBillingProfilesQuery {
   @ApiPropertyOptional({ description: 'Name contains, or identification prefix.' })
   @IsOptional()

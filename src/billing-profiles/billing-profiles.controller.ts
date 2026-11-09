@@ -4,8 +4,10 @@ import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorat
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
+import { PermissionChecker } from '../common/permissions/permission-checker.service';
 import { BillingProfilesService } from './billing-profiles.service';
 import {
+  BillAsPatientDto,
   CreateBillingProfileDto,
   LinkBillingProfileDto,
   ListBillingProfilesQuery,
@@ -17,7 +19,10 @@ import {
 @RequireSection('core.billing.profiles')
 @Controller('tenants/:tenantId')
 export class BillingProfilesController {
-  constructor(private readonly service: BillingProfilesService) {}
+  constructor(
+    private readonly service: BillingProfilesService,
+    private readonly permissions: PermissionChecker,
+  ) {}
 
   @Get('billing-profiles')
   @Roles('MASTER')
@@ -88,6 +93,30 @@ export class BillingProfilesController {
     @Body() dto: LinkBillingProfileDto,
   ) {
     return this.service.linkToPatient(tenantId, user.userId, patientId, dto);
+  }
+
+  @Post('patients/:patientId/billing-profiles/own')
+  @Roles('MASTER')
+  @RequirePermission('billing.create')
+  @ApiOperation({
+    summary: "Bill in the patient's own name, from the patient record",
+    description:
+      'Creates or reuses the profile with the patient data and links it (default when there is none). ' +
+      'Fields the record lacks may be sent; writing them also needs patients.update. ' +
+      '422 PATIENT_BILLING_DATA_INCOMPLETE (missing), 409 BILLING_PROFILE_INACTIVE or PATIENT_IDENTIFICATION_TAKEN.',
+  })
+  async billAsPatient(
+    @Param('tenantId') tenantId: string,
+    @CurrentUser() user: AuthUser,
+    @Param('patientId') patientId: string,
+    @Body() dto: BillAsPatientDto,
+  ) {
+    // Completing the record edits the patient: a role without that permission (the cashier)
+    // can only bill a patient whose data is already complete.
+    if (Object.values(dto).some((value) => value !== undefined)) {
+      await this.permissions.assertAllowed(user, 'patients.update');
+    }
+    return this.service.billAsPatient(tenantId, user.userId, patientId, dto);
   }
 
   @Delete('patients/:patientId/billing-profiles/:profileId')
