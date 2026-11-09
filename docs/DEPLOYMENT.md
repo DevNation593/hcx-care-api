@@ -620,9 +620,9 @@ npm run prisma:generate
 The seed **deletes every row** (and the stored clinical files, session photos and signed consents)
 of the database in `DATABASE_URL`, production included, and loads the demos: Centro Médico Los
 Arrayanes and Estudio Estético Aurora, an Estética clinic on treatments, consents and patient files.
-It prints that database's host when it starts. Every account it creates,
-including `admin@plataforma.test`, uses the demo password; create the real platform administrator
-afterwards with `npm run platform:create-admin`, since the seed deletes it too.
+It prints that database's host when it starts. Every account it creates uses the demo password.
+It creates no platform administrator and keeps the one that exists: create it, before or after
+the seed, only with `npm run platform:create-admin`.
 
 ```bash
 npm run prisma:seed

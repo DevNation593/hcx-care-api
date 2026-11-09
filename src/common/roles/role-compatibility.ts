@@ -30,3 +30,9 @@ export function areRolesEquivalent(actual: string, required: string): boolean {
 export const isMasterRole = (role: string): boolean => role === 'MASTER';
 export const isProfessionalRole = (role: string): boolean => role === 'PROFESIONAL';
 export const isCashierRole = (role: string): boolean => role === 'CAJERO';
+
+/** Roles that read patient records, as PatientsController allows; never the cashier. */
+export const PATIENT_READER_ROLES = ['MASTER', 'ASISTENTE', 'PROFESIONAL'] as const;
+
+export const canReadPatients = (role: string): boolean =>
+  PATIENT_READER_ROLES.some((reader) => areRolesEquivalent(role, reader));
