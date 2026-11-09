@@ -330,6 +330,22 @@ describe('Procedure consents, antivirus and two-factor sign-in (E2E)', () => {
         .send({ code: totpCode(secret, step) })
         .expect(200);
       expect(enabled.body.recoveryCodes).toHaveLength(10);
+      expect(enabled.body.user).toMatchObject({ mfaEnabled: true, mfaEnrollmentRequired: false });
+
+      // The session opened with the password alone ended; the one returned by the enrolment
+      // reaches everything, and its predecessor's refresh token no longer rotates.
+      await request(server())
+        .get(`${base()}/patients/${patientId}/procedure-consents`)
+        .set(as('colleague'))
+        .expect(401);
+      await request(server())
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: signedIn.body.refreshToken })
+        .expect(401);
+      await request(server())
+        .get(`${base()}/patients/${patientId}/procedure-consents`)
+        .set({ Authorization: `Bearer ${enabled.body.accessToken}` })
+        .expect(200);
 
       // The password alone no longer opens a session.
       const challenge = await login('colleague@tenant.test');

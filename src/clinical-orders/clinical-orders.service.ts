@@ -13,7 +13,11 @@ import {
 } from '../clinical-access/clinical-audit.service';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { clinicalRecordNotFound } from '../clinical-access/clinical-errors';
-import { orderContentHash, resultContentHash } from '../clinical-access/clinical-signature';
+import {
+  isRecordSigned,
+  orderContentHash,
+  resultContentHash,
+} from '../clinical-access/clinical-signature';
 import { assertOpenEncounter, lockOpenEncounter } from '../encounters/encounters.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -240,9 +244,23 @@ export class ClinicalOrdersService {
       if (dto.recordId) {
         const record = await tx.specialtyRecord.findFirst({
           where: { id: dto.recordId, tenantId, patientId: current.patientId, deletedAt: null },
-          select: { id: true, clinicalResult: { select: { id: true } } },
+          select: {
+            id: true,
+            signedAt: true,
+            encounterId: true,
+            encounter: { select: { status: true } },
+            clinicalResult: { select: { id: true } },
+          },
         });
         if (!record) throw new BadRequestException('El registro no pertenece al paciente');
+        // The result only names the record: it has to be final, or its author could still change
+        // or remove the study after it was reviewed. A signed record never changes again.
+        if (!isRecordSigned(record)) {
+          throw conflict(
+            'CLINICAL_RESULT_RECORD_NOT_SIGNED',
+            'El registro todavía se puede modificar: cierra su atención antes de vincularlo a un resultado.',
+          );
+        }
         if (record.clinicalResult) {
           throw conflict(
             'CLINICAL_RESULT_RECORD_IN_USE',

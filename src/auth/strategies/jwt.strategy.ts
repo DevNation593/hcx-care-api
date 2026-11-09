@@ -11,6 +11,22 @@ interface JwtPayload {
   email: string;
   tenantId: string;
   role: string;
+  iat?: number; // seconds
+  issuedAtMs?: number;
+}
+
+/**
+ * Whether the token was issued before the account enabled two-factor sign-in: such a session
+ * was opened with the password alone and ended then. Tokens without `issuedAtMs` (older than it)
+ * fall back to `iat`, rounded down, so they are never taken as newer than they are.
+ */
+export function issuedBeforeMfaEnabled(
+  payload: Pick<JwtPayload, 'iat' | 'issuedAtMs'>,
+  mfaEnabledAt: Date | null,
+): boolean {
+  if (!mfaEnabledAt) return false;
+  const issuedAt = payload.issuedAtMs ?? (payload.iat ?? 0) * 1000;
+  return issuedAt < mfaEnabledAt.getTime();
 }
 
 @Injectable()
@@ -44,6 +60,14 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     if (!user || !user.isActive || !user.tenant.isActive || user.tenantId !== payload.tenantId) {
       throw new UnauthorizedException('User or tenant is inactive');
+    }
+
+    if (issuedBeforeMfaEnabled(payload, user.mfaEnabledAt)) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        code: 'SESSION_ENDED_BY_MFA',
+        message: 'Se activó la verificación en dos pasos. Inicia sesión otra vez.',
+      });
     }
 
     const idleMs = user.lastActivityAt ? Date.now() - user.lastActivityAt.getTime() : null;

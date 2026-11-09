@@ -90,6 +90,22 @@ export class AuthService {
     return this.openSession(user);
   }
 
+  /**
+   * A new session for the account that just confirmed its second factor. Enabling it ends every
+   * other session (they never passed it), so the one that confirmed the code continues with this.
+   */
+  async sessionAfterMfaEnrolment(userId: string): Promise<AuthResponseDto> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, isActive: true, tenant: { isActive: true } },
+      include: {
+        tenant: { include: { settings: { select: { requireMfa: true } } } },
+        professionalProfile: { include: { specialty: true } },
+      },
+    });
+    if (!user?.mfaEnabledAt) throw new UnauthorizedException('Usuario no encontrado');
+    return this.openSession(user);
+  }
+
   private async openSession(user: any): Promise<AuthResponseDto> {
     await this.prisma.user.update({
       where: { id: user.id },
@@ -346,6 +362,9 @@ export class AuthService {
       email: user.email,
       tenantId: user.tenantId,
       role: user.role,
+      // `iat` counts whole seconds; enabling two-factor sign-in ends the sessions issued before
+      // it, which needs the exact moment (see JwtStrategy).
+      issuedAtMs: Date.now(),
     };
 
     const accessToken = this.jwtService.sign(payload, {

@@ -101,6 +101,15 @@ describe('MfaService', () => {
     ]);
   });
 
+  it('ends every session of the account when the second factor is enabled', async () => {
+    await enrol();
+    // Opened with the password alone: none of them may gain what the second factor gives.
+    expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', isRevoked: false },
+      data: { isRevoked: true },
+    });
+  });
+
   it('asks the password to start, and a correct code to finish', async () => {
     await expect(service.setup('user-1', 'wrong')).rejects.toMatchObject({
       response: { code: 'MFA_PASSWORD_INVALID' },

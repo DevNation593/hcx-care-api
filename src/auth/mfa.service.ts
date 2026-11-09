@@ -116,7 +116,11 @@ export class MfaService {
     return { secret, otpauthUrl: url, qrCodeDataUrl: await QRCode.toDataURL(url, { margin: 1 }) };
   }
 
-  /** Confirms the enrolment with a code of the new secret and returns the recovery codes, once. */
+  /**
+   * Confirms the enrolment with a code of the new secret and returns the recovery codes, once.
+   * Every session of the account ends: they were opened with the password alone, and must not
+   * gain what the second factor gives. The caller opens a new one for the confirming client.
+   */
   async enable(userId: string, code: string) {
     const user = await this.findUser(userId);
     if (!user.mfaPendingSecret) {
@@ -141,6 +145,10 @@ export class MfaService {
           mfaLastStep: step,
           mfaRecoveryCodes: recoveryCodes.map(hashRecoveryCode),
         },
+      });
+      await tx.refreshToken.updateMany({
+        where: { userId: user.id, isRevoked: false },
+        data: { isRevoked: true },
       });
       await this.auditUser(tx, user, user.id, 'Verificación en dos pasos activada');
     });

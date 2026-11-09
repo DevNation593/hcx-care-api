@@ -524,6 +524,21 @@ export class EncountersService {
           'La atención tiene registros u órdenes. Elimina sus registros; si tiene órdenes, ciérrala en lugar de eliminarla.',
         );
       }
+      // Notes and files of a removed encounter could not be changed nor removed any more (they
+      // follow its state, and it is no longer open), and a consent stays as it was signed.
+      const notes = await tx.clinicalNote.count({
+        where: { tenantId, encounterId, deletedAt: null },
+      });
+      const files = await tx.patientFile.count({
+        where: { tenantId, encounterId, deletedAt: null },
+      });
+      const consents = await tx.consentDocument.count({ where: { tenantId, encounterId } });
+      if (notes + files + consents > 0) {
+        throw conflict(
+          'ENCOUNTER_HAS_RECORDS',
+          'La atención tiene notas, archivos o consentimientos. Elimina sus notas y archivos; si tiene consentimientos, ciérrala en lugar de eliminarla.',
+        );
+      }
 
       await tx.encounter.update({
         where: { id: encounterId },

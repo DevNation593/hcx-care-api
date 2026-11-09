@@ -48,9 +48,10 @@ describe('EncountersService', () => {
     appointment: { findFirst: jest.fn(), updateMany: jest.fn() },
     encounter: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
     specialtyRecord: { count: jest.fn(), findMany: jest.fn(), update: jest.fn() },
-    clinicalNote: { findMany: jest.fn() },
-    patientFile: { findMany: jest.fn(), update: jest.fn() },
+    clinicalNote: { findMany: jest.fn(), count: jest.fn() },
+    patientFile: { findMany: jest.fn(), update: jest.fn(), count: jest.fn() },
     clinicalOrder: { findMany: jest.fn(), count: jest.fn(), update: jest.fn() },
+    consentDocument: { count: jest.fn() },
     auditLog: { createMany: jest.fn() },
     $queryRaw: jest.fn(),
   };
@@ -504,6 +505,18 @@ describe('EncountersService', () => {
   });
 
   describe('delete', () => {
+    beforeEach(() => {
+      for (const counter of [
+        db.specialtyRecord.count,
+        db.clinicalOrder.count,
+        db.clinicalNote.count,
+        db.patientFile.count,
+        db.consentDocument.count,
+      ]) {
+        counter.mockResolvedValue(0);
+      }
+    });
+
     it('never removes a closed encounter: it is signed', async () => {
       db.encounter.findFirst.mockResolvedValue(encounter({ status: 'CLOSED' }));
 
@@ -561,6 +574,25 @@ describe('EncountersService', () => {
       ).rejects.toMatchObject({ status: 409, response: { code: 'ENCOUNTER_HAS_RECORDS' } });
       expect(db.specialtyRecord.count).toHaveBeenCalledWith({
         where: { encounterId: 'encounter-1', deletedAt: null },
+      });
+      expect(db.encounter.update).not.toHaveBeenCalled();
+    });
+
+    // Their notes and files would follow a state that no longer opens: they could never be
+    // corrected nor removed again.
+    it.each([
+      ['notes', () => db.clinicalNote.count],
+      ['files', () => db.patientFile.count],
+      ['procedure consents', () => db.consentDocument.count],
+    ])('is refused while the encounter holds %s', async (_what, counter) => {
+      db.encounter.findFirst.mockResolvedValue(encounter());
+      counter().mockResolvedValue(1);
+
+      await expect(
+        service.delete('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' }),
+      ).rejects.toMatchObject({ status: 409, response: { code: 'ENCOUNTER_HAS_RECORDS' } });
+      expect(counter()).toHaveBeenCalledWith({
+        where: expect.objectContaining({ tenantId: 'tenant-1', encounterId: 'encounter-1' }),
       });
       expect(db.encounter.update).not.toHaveBeenCalled();
     });
