@@ -292,6 +292,9 @@ export class CloseClinicalFollowUpDto extends VersionedDto {
   note: string;
 }
 
+/** How many items each list of the inbox, and of follow-ups, returns per page. */
+export const INBOX_PAGE_SIZE = 200;
+
 export const INBOX_SCOPES = ['mine', 'all'] as const;
 export type InboxScope = (typeof INBOX_SCOPES)[number];
 
@@ -304,6 +307,16 @@ export class ClinicalInboxQueryDto {
   @IsIn(INBOX_SCOPES)
   @IsOptional()
   scope?: InboxScope;
+
+  @ApiPropertyOptional({
+    default: 1,
+    description: 'Each list returns at most 200 items, oldest first; page 2 brings the next ones.',
+  })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  page?: number;
 }
 
 export class ListFollowUpsQueryDto extends ClinicalInboxQueryDto {

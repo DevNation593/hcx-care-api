@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -273,10 +274,19 @@ export class PatientFilesService {
     return this.transaction(async (tx) => {
       const stored = await tx.patientFile.findFirst({
         where: { id: fileId, tenantId, patientId, deletedAt: null },
+        include: { clinicalResult: { select: { id: true } } },
       });
       if (!stored) throw clinicalRecordNotFound('Archivo no encontrado');
       if (stored.uploadedById !== actor.userId) {
         throw clinicalRecordForbidden('Solo puedes eliminar los archivos que subiste');
+      }
+      // The report of a clinical result: removing it would leave the result without its report.
+      if (stored.clinicalResult) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'PATIENT_FILE_IN_RESULT',
+          message: 'El archivo es el informe de un resultado clínico: no se puede eliminar.',
+        });
       }
       // A file of an encounter is part of its signature; while it is open, it stays open.
       if (stored.encounterId && !(await lockOpenEncounter(tx, tenantId, stored.encounterId))) {

@@ -18,8 +18,10 @@ import {
   snapshotFollowUp,
 } from './clinical-order-view';
 import {
+  ClinicalInboxQueryDto,
   CloseClinicalFollowUpDto,
   CreateClinicalFollowUpDto,
+  INBOX_PAGE_SIZE,
   InboxScope,
   ListFollowUpsQueryDto,
   UpdateClinicalFollowUpDto,
@@ -33,10 +35,10 @@ import {
 
 type Tx = Prisma.TransactionClient;
 
-const followUpNotFound = () => clinicalRecordNotFound('Seguimiento no encontrado');
+/** The rows of one page of a list of the inbox. */
+const pageOf = (page: number) => ({ skip: (page - 1) * INBOX_PAGE_SIZE, take: INBOX_PAGE_SIZE });
 
-/** How many items each list of the inbox returns at most, the oldest first. */
-const INBOX_LIMIT = 200;
+const followUpNotFound = () => clinicalRecordNotFound('Seguimiento no encontrado');
 
 const patientSelect = { id: true, firstName: true, lastName: true } as const;
 
@@ -68,24 +70,34 @@ export class ClinicalFollowUpsService {
     return stored.map((followUp) => decryptFollowUp(this.crypto, tenantId, followUp));
   }
 
-  /** Follow-ups of the clinic, or the caller's, by status. Audited. */
+  /** Follow-ups of the clinic, or the caller's, by status, a page at a time. Audited. */
   async list(tenantId: string, actor: ClinicalActor, query: ListFollowUpsQueryDto) {
-    const stored = await this.prisma.clinicalFollowUp.findMany({
-      where: {
-        tenantId,
-        status: query.status ?? 'OPEN',
-        ...(this.scope(query.scope) === 'mine' ? { assignedToId: actor.userId } : {}),
-      },
-      include: followUpInclude,
-      orderBy: { dueDate: 'asc' },
-      take: INBOX_LIMIT,
-    });
+    const where: Prisma.ClinicalFollowUpWhereInput = {
+      tenantId,
+      status: query.status ?? 'OPEN',
+      ...(this.scope(query.scope) === 'mine' ? { assignedToId: actor.userId } : {}),
+    };
+    const page = query.page ?? 1;
+    const [stored, total] = await Promise.all([
+      this.prisma.clinicalFollowUp.findMany({
+        where,
+        include: followUpInclude,
+        orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+        ...pageOf(page),
+      }),
+      this.prisma.clinicalFollowUp.count({ where }),
+    ]);
     await this.auditReads(tenantId, actor, stored);
     const now = new Date();
-    return stored.map((followUp) => ({
-      ...decryptFollowUp(this.crypto, tenantId, followUp),
-      overdue: followUp.status === 'OPEN' && followUp.dueDate < now,
-    }));
+    return {
+      items: stored.map((followUp) => ({
+        ...decryptFollowUp(this.crypto, tenantId, followUp),
+        overdue: followUp.status === 'OPEN' && followUp.dueDate < now,
+      })),
+      total,
+      page,
+      pageSize: INBOX_PAGE_SIZE,
+    };
   }
 
   /** A follow-up that comes from no result: a preventive control, a call, a pending study. */
@@ -186,8 +198,9 @@ export class ClinicalFollowUpsService {
    * orders the caller placed and the follow-ups to the ones assigned to them. Each item says
    * whether it passed the clinic's threshold; nothing here is a clinical judgement.
    */
-  async inbox(tenantId: string, actor: ClinicalActor, scopeQuery?: InboxScope) {
-    const scope = this.scope(scopeQuery);
+  async inbox(tenantId: string, actor: ClinicalActor, query: ClinicalInboxQueryDto = {}) {
+    const scope = this.scope(query.scope);
+    const page = query.page ?? 1;
     const mine = scope === 'mine' ? { orderedById: actor.userId } : {};
     const { resultReviewAlertDays, orderResultAlertDays } = await inboxThresholds(
       this.prisma,
@@ -210,35 +223,59 @@ export class ClinicalFollowUpsService {
       patient: { select: patientSelect },
     } as const;
 
-    const [pendingResults, awaiting, toContact, followUps] = await Promise.all([
+    const where = {
+      pendingReview: {
+        tenantId,
+        status: 'PENDING_REVIEW',
+        order: mine,
+      } satisfies Prisma.ClinicalResultWhereInput,
+      awaitingResult: {
+        tenantId,
+        status: { in: [...AWAITING_RESULT] },
+        ...mine,
+      } satisfies Prisma.ClinicalOrderWhereInput,
+      toCommunicate: {
+        tenantId,
+        status: 'REVIEWED',
+        ...mine,
+      } satisfies Prisma.ClinicalOrderWhereInput,
+      followUps: {
+        tenantId,
+        status: 'OPEN',
+        ...(scope === 'mine' ? { assignedToId: actor.userId } : {}),
+      } satisfies Prisma.ClinicalFollowUpWhereInput,
+    };
+    // Each list a page at a time, the oldest first (the id breaks ties so pages never overlap),
+    // with its total so the client can tell there is more.
+    const [pendingResults, awaiting, toContact, followUps, ...totals] = await Promise.all([
       this.prisma.clinicalResult.findMany({
-        where: { tenantId, status: 'PENDING_REVIEW', order: mine },
+        where: where.pendingReview,
         include: { ...resultInclude, order: { select: orderSelect } },
-        orderBy: { receivedAt: 'asc' },
-        take: INBOX_LIMIT,
+        orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
+        ...pageOf(page),
       }),
       this.prisma.clinicalOrder.findMany({
-        where: { tenantId, status: { in: [...AWAITING_RESULT] }, ...mine },
+        where: where.awaitingResult,
         select: orderSelect,
-        orderBy: { orderedAt: 'asc' },
-        take: INBOX_LIMIT,
+        orderBy: [{ orderedAt: 'asc' }, { id: 'asc' }],
+        ...pageOf(page),
       }),
       this.prisma.clinicalOrder.findMany({
-        where: { tenantId, status: 'REVIEWED', ...mine },
+        where: where.toCommunicate,
         select: orderSelect,
-        orderBy: { updatedAt: 'asc' },
-        take: INBOX_LIMIT,
+        orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+        ...pageOf(page),
       }),
       this.prisma.clinicalFollowUp.findMany({
-        where: {
-          tenantId,
-          status: 'OPEN',
-          ...(scope === 'mine' ? { assignedToId: actor.userId } : {}),
-        },
+        where: where.followUps,
         include: followUpInclude,
-        orderBy: { dueDate: 'asc' },
-        take: INBOX_LIMIT,
+        orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+        ...pageOf(page),
       }),
+      this.prisma.clinicalResult.count({ where: where.pendingReview }),
+      this.prisma.clinicalOrder.count({ where: where.awaitingResult }),
+      this.prisma.clinicalOrder.count({ where: where.toCommunicate }),
+      this.prisma.clinicalFollowUp.count({ where: where.followUps }),
     ]);
 
     const orderIds = new Set([
@@ -273,8 +310,17 @@ export class ClinicalFollowUpsService {
       order: T,
     ): T => this.crypto.decryptFields(tenantId, order, INBOX_ORDER_FIELDS);
 
+    const [pendingReviewTotal, awaitingResultTotal, toCommunicateTotal, followUpsTotal] = totals;
     return {
       scope,
+      page,
+      pageSize: INBOX_PAGE_SIZE,
+      totals: {
+        pendingReview: pendingReviewTotal,
+        awaitingResult: awaitingResultTotal,
+        toCommunicate: toCommunicateTotal,
+        followUps: followUpsTotal,
+      },
       thresholds: { resultReviewAlertDays, orderResultAlertDays },
       pendingReview: pendingResults.map(({ order, ...result }) => ({
         ...decryptResult(this.crypto, tenantId, result),

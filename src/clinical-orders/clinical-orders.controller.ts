@@ -118,7 +118,7 @@ export class ClinicalOrdersController {
     @CurrentClinicalActor() actor: ClinicalActor,
     @Query() query: ClinicalInboxQueryDto,
   ) {
-    return this.followUps.inbox(tenantId, actor, query.scope);
+    return this.followUps.inbox(tenantId, actor, query);
   }
 
   @Get('clinical-orders/:orderId')
@@ -240,7 +240,8 @@ export class ClinicalOrdersController {
 
   @Patch('clinical-follow-ups/:followUpId')
   @ApiOperation({ summary: 'Change the date, responsible or wording of an open follow-up' })
-  @RequirePermission('clinical_records.create')
+  // Editing what was written, like correcting a note or a record.
+  @RequirePermission('clinical_records.update')
   updateFollowUp(
     @Param('tenantId') tenantId: string,
     @Param('followUpId') followUpId: string,
