@@ -317,6 +317,26 @@ describe('ClinicalOrdersService', () => {
       });
     });
 
+    it('takes the file row before reading it, as removing the file does', async () => {
+      const { id } = await order();
+      db.patientFile.findFirst.mockResolvedValue({
+        id: 'file-1',
+        contentHash: 'v1:abc',
+        clinicalResult: null,
+      });
+      db.$queryRaw.mockClear();
+
+      await addResult(id, 1, { fileId: 'file-1' });
+
+      const calls = db.$queryRaw.mock.calls as unknown as [TemplateStringsArray, ...unknown[]][];
+      const lock = calls.findIndex(([sql]) => sql.join('?').includes('FROM "PatientFile"'));
+      expect(lock).toBeGreaterThanOrEqual(0);
+      expect(calls[lock].slice(1)).toEqual(['file-1', 'tenant-1']);
+      expect(db.$queryRaw.mock.invocationCallOrder[lock]).toBeLessThan(
+        db.patientFile.findFirst.mock.invocationCallOrder[0],
+      );
+    });
+
     it('refuses a record its author can still change: one of an encounter still open', async () => {
       const { id } = await order();
       db.specialtyRecord.findFirst.mockResolvedValue({

@@ -609,5 +609,21 @@ describe('PatientFilesService', () => {
       ).rejects.toMatchObject({ status: 409, response: { code: 'PATIENT_FILE_IN_RESULT' } });
       expect(db.patientFile.update).not.toHaveBeenCalled();
     });
+
+    it('takes the file row before reading it, as linking it to a result does', async () => {
+      db.patientFile.findFirst.mockResolvedValue(row);
+
+      await service.delete('tenant-1', 'patient-1', 'file-1', dentist, { reason: 'x' });
+
+      const lock = db.$queryRaw.mock.calls.findIndex(([sql]: [TemplateStringsArray]) =>
+        sql.join('?').includes('FROM "PatientFile"'),
+      );
+      expect(lock).toBeGreaterThanOrEqual(0);
+      expect(db.$queryRaw.mock.calls[lock][0].join('?')).toContain('FOR UPDATE');
+      expect(db.$queryRaw.mock.calls[lock].slice(1)).toEqual(['file-1', 'tenant-1']);
+      expect(db.$queryRaw.mock.invocationCallOrder[lock]).toBeLessThan(
+        db.patientFile.findFirst.mock.invocationCallOrder[0],
+      );
+    });
   });
 });
