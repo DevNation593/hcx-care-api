@@ -76,9 +76,10 @@ After deploying the migration, apply it with `npx prisma migrate deploy`.
 - `npm run prisma:generate`: Prisma client
 - `npm run prisma:migrate`: create/apply dev migrations
 - `npm run prisma:seed`: **deletes every row** of the database in `DATABASE_URL`, production
-  included, and loads the demos: the platform admin, Centro Médico Los Arrayanes and Estudio
-  Estético Aurora, a clinic with the Estética specialty that runs its procedures as treatment
-  sessions; prints the demo logins when done
+  included, except the platform account and its administrators, and loads the demos: Centro
+  Médico Los Arrayanes and Estudio Estético Aurora, a clinic with the Estética specialty that runs
+  its procedures as treatment sessions; prints the demo logins when done. It never creates the
+  platform administrator: that is `npm run platform:create-admin`
 - `npm run platform:create-admin -- --email <email> --first-name <name> --last-name <surname>`:
   creates a platform administrator. `--password` is optional; without it a password is generated
   and printed once. Each flag can come from its `PLATFORM_ADMIN_*` variable instead

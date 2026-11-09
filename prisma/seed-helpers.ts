@@ -154,7 +154,8 @@ export interface SeedContext {
   /** The default plans, by code. */
   plans: Map<string, SeedPlan>;
   hashedPassword: string;
-  platformAdminId: string;
+  /** The administrator created with `npm run platform:create-admin`; absent until it exists. */
+  platformAdminId?: string;
   logins: SeedLogin[];
   /** Things worth trying that are not a login; printed when the seed finishes. */
   highlights: string[];
@@ -543,7 +544,7 @@ export async function writeAudit(
   ctx: SeedContext,
   clinic: SeedTenant,
   entry: {
-    actor: User | { id: string };
+    actor: User | { id: string | undefined };
     action: AuditAction;
     entity: AuditEntity;
     entityId: string;

@@ -11,7 +11,8 @@ import { ageInYears } from '../src/patients/patient-identity';
 import { normalizeVerificationCode } from '../src/specialty-records/verification-code';
 import { DEMO_DOCUMENT_CODES } from '../prisma/seed-clinical-workflow';
 import { BILLING_RULES } from '../src/subscription/subscription-billing.rules';
-import { seedDatabase } from '../prisma/seed';
+import { createPlatformAdmin } from '../prisma/create-platform-admin';
+import { seedDatabase, SeedResult } from '../prisma/seed';
 import {
   CLINICAL_MODULES,
   CUSTOM_MODULE_PREFIX,
@@ -65,11 +66,15 @@ function createMemoryDatabase() {
   };
 
   const matches = (row: Row, where: Row = {}) =>
-    Object.entries(where).every(([key, expected]) =>
-      expected !== null && typeof expected === 'object' && 'equals' in expected
-        ? String(row[key]).toLowerCase() === String(expected.equals).toLowerCase()
-        : row[key] === expected,
-    );
+    Object.entries(where).every(([key, expected]) => {
+      if (expected !== null && typeof expected === 'object' && 'equals' in expected) {
+        return String(row[key]).toLowerCase() === String(expected.equals).toLowerCase();
+      }
+      if (expected !== null && typeof expected === 'object' && 'notIn' in expected) {
+        return !expected.notIn.includes(row[key]);
+      }
+      return row[key] === expected;
+    });
 
   const find = (model: string, where: Row) => rows(model).find((row) => matches(row, where));
 
@@ -95,9 +100,10 @@ function createMemoryDatabase() {
       rows(model).forEach((row) => Object.assign(row, data));
       return { count: rows(model).length };
     },
-    deleteMany: async () => {
-      const count = rows(model).length;
-      tables.set(model, []);
+    deleteMany: async ({ where }: { where?: Row } = {}) => {
+      const kept = rows(model).filter((row) => !matches(row, where));
+      const count = rows(model).length - kept.length;
+      tables.set(model, kept);
       return { count };
     },
   });
@@ -117,16 +123,46 @@ function createMemoryDatabase() {
 const NOW = new Date('2026-10-02T15:30:00.000Z');
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+describe('demo seed without a platform administrator', () => {
+  let rows: (model: string) => Row[];
+  let result: SeedResult;
+
+  beforeAll(async () => {
+    const memory = createMemoryDatabase();
+    result = await seedDatabase(memory.db, { now: NOW });
+    rows = memory.rows;
+  });
+
+  it('creates no platform administrator: only the command does', () => {
+    expect(rows('user').filter((user) => user.role === 'ADMIN')).toEqual([]);
+    expect(rows('tenant').filter((tenant) => tenant.isPlatform)).toEqual([]);
+    expect(result.logins.map((login) => login.role)).not.toContain('ADMIN');
+  });
+
+  it('says how to create the platform administrator', () => {
+    expect(result.highlights.join('\n')).toContain('npm run platform:create-admin');
+  });
+});
+
 describe('demo seed', () => {
   let rows: (model: string) => Row[];
   let byId: (model: string) => Map<string, Row>;
+  let platformAdmin: { tenantId: string; userId: string };
+  let result: SeedResult;
 
   // The bytes of the seeded clinical files, by storage key.
   const stored = new Map<string, Buffer>();
 
   beforeAll(async () => {
     const memory = createMemoryDatabase();
-    await seedDatabase(memory.db, {
+    // Created beforehand with `npm run platform:create-admin`, as on a database in use.
+    platformAdmin = await createPlatformAdmin(memory.db, {
+      email: 'owner@platform.test',
+      password: 'Owner-Password-1',
+      firstName: 'Owner',
+      lastName: 'Platform',
+    });
+    result = await seedDatabase(memory.db, {
       now: NOW,
       storage: {
         put: async (key, data) => void stored.set(key, data),
@@ -139,6 +175,22 @@ describe('demo seed', () => {
 
   const values = (model: string, field: string) =>
     [...new Set(rows(model).map((row) => row[field]))].sort();
+
+  it('keeps the platform administrator created by the command, and adds no other', () => {
+    expect(rows('user').filter((user) => user.role === 'ADMIN')).toEqual([
+      expect.objectContaining({
+        id: platformAdmin.userId,
+        email: 'owner@platform.test',
+        tenantId: platformAdmin.tenantId,
+      }),
+    ]);
+    expect(
+      rows('tenant')
+        .filter((tenant) => tenant.isPlatform)
+        .map((t) => t.id),
+    ).toEqual([platformAdmin.tenantId]);
+    expect(result.logins.map((login) => login.role)).not.toContain('ADMIN');
+  });
 
   it('creates only Los Arrayanes and the Aurora studio as client demos', () => {
     expect(

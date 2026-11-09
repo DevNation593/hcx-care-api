@@ -1,0 +1,412 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import request from 'supertest';
+import { mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+const storageRoot = mkdtempSync(join(tmpdir(), 'psic-e2e-bill-as-patient-'));
+// Read by the storage driver when the application starts.
+process.env.STORAGE_LOCAL_PATH = storageRoot;
+
+import { AppModule } from './../src/app.module';
+import { PrismaService } from './../src/prisma/prisma.service';
+import { PlatformTenantsService } from './../src/platform/platform-tenants.service';
+import { createPlatformAdmin } from './../prisma/create-platform-admin';
+import { createTestTenant, TEST_PASSWORD } from './helpers/create-test-tenant';
+
+jest.setTimeout(120000);
+
+// Valid Ecuadorian cedulas (modulo 10 check digit).
+const CEDULA_A = '1710034065';
+const CEDULA_B = '0926687856';
+
+describe("Invoice in the patient's own name (E2E)", () => {
+  let app: INestApplication;
+  let prisma: PrismaService;
+  let tenantId: string;
+  let otherTenantId: string;
+  let counter = 0;
+  const tokens: Record<string, string> = {};
+
+  const server = () => app.getHttpServer();
+  const as = (who: string) => ({ Authorization: `Bearer ${tokens[who]}` });
+  const base = (tenant = tenantId) => `/api/v1/tenants/${tenant}`;
+  const own = (patientId: string, tenant = tenantId) =>
+    `${base(tenant)}/patients/${patientId}/billing-profiles/own`;
+
+  const login = async (email: string) => {
+    const response = await request(server())
+      .post('/api/v1/auth/login')
+      .send({ email, password: TEST_PASSWORD })
+      .expect(200);
+    return response.body.accessToken as string;
+  };
+
+  const newPatient = async (data: Record<string, unknown> = {}): Promise<string> => {
+    counter += 1;
+    const created = await request(server())
+      .post(`${base()}/patients`)
+      .set(as('master'))
+      .send({ firstName: 'Ana', lastName: `Factura ${counter}`, ...data })
+      .expect(201);
+    return created.body.id;
+  };
+
+  beforeAll(async () => {
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+
+    app = moduleFixture.createNestApplication();
+    app.setGlobalPrefix('api/v1');
+    // The same options as the global pipe in main.ts.
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+        transformOptions: { enableImplicitConversion: true },
+      }),
+    );
+    await app.init();
+    prisma = app.get<PrismaService>(PrismaService);
+
+    await prisma.cleanDatabase();
+    await createPlatformAdmin(prisma, {
+      email: 'platform-bill-as-patient@example.test',
+      password: TEST_PASSWORD,
+      firstName: 'Platform',
+      lastName: 'Admin',
+    });
+    const tenants = app.get(PlatformTenantsService);
+    tenantId = (await createTestTenant({ tenants, prisma }, 1)).id;
+    otherTenantId = (await createTestTenant({ tenants, prisma }, 2)).id;
+    tokens.master = await login('admin+1@tenant.test');
+    tokens.otherMaster = await login('admin+2@tenant.test');
+
+    await request(server())
+      .post(`${base()}/users`)
+      .set(as('master'))
+      .send({
+        email: 'cajero-own@tenant.test',
+        password: TEST_PASSWORD,
+        firstName: 'Cajera',
+        lastName: 'Factura',
+        role: 'CAJERO',
+      })
+      .expect(201);
+    tokens.cashier = await login('cajero-own@tenant.test');
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('builds the recipient from complete patient data and makes it the default', async () => {
+    const patientId = await newPatient({
+      identificationType: 'CEDULA',
+      identificationNumber: CEDULA_A,
+      email: 'ana@example.test',
+      address: 'Av. Amazonas',
+    });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(201);
+
+    expect(response.body).toMatchObject({
+      kind: 'PERSON',
+      idType: '05',
+      idNumber: CEDULA_A,
+      legalName: expect.stringMatching(/^Ana Factura \d+$/),
+      email: 'ana@example.test',
+      address: 'Av. Amazonas',
+      isDefault: true,
+    });
+
+    // Asking again reuses the same profile.
+    const again = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(201);
+    expect(again.body.id).toBe(response.body.id);
+    expect(await prisma.billingProfile.count({ where: { tenantId, idNumber: CEDULA_A } })).toBe(1);
+  });
+
+  it('names what is missing, then completes the patient record and bills in its name', async () => {
+    const patientId = await newPatient();
+
+    const missing = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(422);
+    expect(missing.body).toMatchObject({
+      code: 'PATIENT_BILLING_DATA_INCOMPLETE',
+      details: { missing: ['identification', 'email'], invalid: [] },
+    });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({
+        identificationType: 'CEDULA',
+        identificationNumber: CEDULA_B,
+        email: 'b@example.test',
+      })
+      .expect(201);
+    expect(response.body).toMatchObject({ idType: '05', idNumber: CEDULA_B, isDefault: true });
+
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: patientId } });
+    expect(patient).toMatchObject({
+      identificationType: 'CEDULA',
+      identificationNumber: CEDULA_B,
+      email: 'b@example.test',
+    });
+  });
+
+  it('never overwrites data the patient already has', async () => {
+    const patientId = await newPatient({ email: 'kept@example.test' });
+
+    await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({
+        identificationType: 'PASSPORT',
+        identificationNumber: `PX${Date.now()}`,
+        email: 'other@example.test',
+      })
+      .expect(201);
+
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: patientId } });
+    expect(patient.email).toBe('kept@example.test');
+  });
+
+  it('rejects an invalid cedula without touching the patient', async () => {
+    const patientId = await newPatient({ email: 'c@example.test' });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({ identificationType: 'CEDULA', identificationNumber: '1710034066' })
+      .expect(422);
+    expect(response.body.code).toBe('BILLING_PROFILE_INVALID');
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: patientId } });
+    expect(patient.identificationNumber).toBeNull();
+  });
+
+  it('says to fix an identification on file that cannot be invoiced', async () => {
+    const patientId = await newPatient({
+      identificationType: 'OTHER',
+      identificationNumber: `OT${Date.now()}`,
+      email: 'd@example.test',
+    });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(422);
+    expect(response.body).toMatchObject({
+      code: 'PATIENT_BILLING_DATA_INCOMPLETE',
+      details: { missing: [], invalid: ['identification'] },
+    });
+  });
+
+  it('names a datum on file that is too long instead of a deactivated profile', async () => {
+    const patientId = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: `PL${Date.now()}`,
+      email: 'long@example.test',
+      address: 'A'.repeat(301),
+    });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(422);
+    expect(response.body).toMatchObject({
+      code: 'PATIENT_BILLING_DATA_INCOMPLETE',
+      details: { missing: [], invalid: ['address'] },
+    });
+    expect(response.body.message).toContain('la dirección');
+  });
+
+  it('answers 409 only for a profile that really is deactivated', async () => {
+    const idNumber = `PD${Date.now()}`;
+    const patientId = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: idNumber,
+      email: 'off@example.test',
+    });
+    const profile = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(201);
+    await prisma.patientBillingProfile.deleteMany({ where: { patientId } });
+    await prisma.billingProfile.update({
+      where: { id: profile.body.id },
+      data: { isActive: false },
+    });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(409);
+    expect(response.body.code).toBe('BILLING_PROFILE_INACTIVE');
+  });
+
+  it('completes the record only while the patient records section is on', async () => {
+    const patientId = await newPatient();
+    const complete = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: `PS${Date.now()}`,
+      email: 'section@example.test',
+    });
+    const section = { tenantId, moduleKey: 'core.patients.records' };
+    await prisma.tenantModule.updateMany({ where: section, data: { enabled: false } });
+    try {
+      const refused = await request(server())
+        .post(own(patientId))
+        .set(as('master'))
+        .send({
+          identificationType: 'PASSPORT',
+          identificationNumber: `PN${Date.now()}`,
+          email: 'n@example.test',
+        })
+        .expect(403);
+      expect(refused.body.code).toBe('SECTION_NOT_ENABLED');
+      const patient = await prisma.patient.findUniqueOrThrow({ where: { id: patientId } });
+      expect(patient.identificationNumber).toBeNull();
+
+      // Billing with the data already on file does not write to the record.
+      await request(server()).post(own(complete)).set(as('master')).send({}).expect(201);
+    } finally {
+      await prisma.tenantModule.updateMany({ where: section, data: { enabled: true } });
+    }
+  });
+
+  it('refuses an identification another patient already has', async () => {
+    const patientId = await newPatient({ email: 'e@example.test' });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({ identificationType: 'CEDULA', identificationNumber: CEDULA_A })
+      .expect(409);
+    expect(response.body.code).toBe('PATIENT_IDENTIFICATION_TAKEN');
+  });
+
+  it('refuses the cashier, who never reads patient records, even with complete data', async () => {
+    const complete = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: `PC${Date.now()}`,
+      email: 'f@example.test',
+    });
+    const incomplete = await newPatient();
+
+    for (const [patientId, body] of [
+      [complete, {}],
+      [incomplete, { identificationType: 'PASSPORT', identificationNumber: `PI${Date.now()}` }],
+    ] as const) {
+      const refused = await request(server())
+        .post(own(patientId))
+        .set(as('cashier'))
+        .send(body)
+        .expect(403);
+      expect(refused.body.code).toBe('PATIENT_ACCESS_REQUIRED');
+      expect(await prisma.patientBillingProfile.count({ where: { patientId } })).toBe(0);
+    }
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: incomplete } });
+    expect(patient.identificationNumber).toBeNull();
+  });
+
+  it('completes the record only with patients.update', async () => {
+    // An assistant granted billing.create whose patients.update was withdrawn by the platform.
+    await prisma.tenantRolePermission.createMany({
+      data: [
+        { tenantId, role: 'ASISTENTE', permission: 'billing.create', granted: true },
+        { tenantId, role: 'ASISTENTE', permission: 'patients.update', granted: false },
+      ],
+    });
+    await request(server())
+      .post(`${base()}/users`)
+      .set(as('master'))
+      .send({
+        email: 'asistente-own@tenant.test',
+        password: TEST_PASSWORD,
+        firstName: 'Asistente',
+        lastName: 'Factura',
+        role: 'ASISTENTE',
+      })
+      .expect(201);
+    const assistant = { Authorization: `Bearer ${await login('asistente-own@tenant.test')}` };
+    const patientId = await newPatient();
+    const complete = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: `PA${Date.now()}`,
+      email: 'assistant@example.test',
+    });
+
+    const refused = await request(server())
+      .post(own(patientId))
+      .set(assistant)
+      .send({
+        identificationType: 'PASSPORT',
+        identificationNumber: `PW${Date.now()}`,
+        email: 'w@example.test',
+      })
+      .expect(403);
+    expect(refused.body.code).toBe('PERMISSION_DENIED');
+    await request(server()).post(own(complete)).set(assistant).send({}).expect(201);
+  });
+
+  it("bills the patient's own identity, not a third party kept in the legacy fiscal fields", async () => {
+    const idNumber = `PT${Date.now()}`;
+    const patientId = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: idNumber,
+      email: 'own@example.test',
+    });
+    // A third party registered in the legacy billing columns, with an invalid RUC.
+    await prisma.patient.update({
+      where: { id: patientId },
+      data: {
+        billingName: 'Empresa Tercera',
+        billingTaxIdType: 'RUC',
+        billingTaxId: '1790000000002',
+      },
+    });
+
+    const response = await request(server())
+      .post(own(patientId))
+      .set(as('master'))
+      .send({})
+      .expect(201);
+    expect(response.body).toMatchObject({ idType: '06', idNumber, email: 'own@example.test' });
+    expect(response.body.legalName).toMatch(/^Ana Factura \d+$/);
+  });
+
+  it("answers 404 to another clinic's master", async () => {
+    const patientId = await newPatient({
+      identificationType: 'PASSPORT',
+      identificationNumber: `PO${Date.now()}`,
+      email: 'h@example.test',
+    });
+
+    await request(server()).post(own(patientId)).set(as('otherMaster')).send({}).expect(403);
+    await request(server())
+      .post(own(patientId, otherTenantId))
+      .set(as('otherMaster'))
+      .send({})
+      .expect(404);
+    expect(await prisma.patientBillingProfile.count({ where: { patientId } })).toBe(0);
+  });
+});

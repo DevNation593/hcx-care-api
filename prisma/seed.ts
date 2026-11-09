@@ -5,7 +5,6 @@ import * as fs from 'fs';
 import { ClinicalCipher, parseClinicalKeys } from '../src/clinical-access/clinical-cipher';
 import { FileStorage } from '../src/patient-files/file-storage';
 import { createFileStorage } from '../src/patient-files/file-storage.factory';
-import { createPlatformAdmin } from './create-platform-admin';
 import { encryptClinicalData } from './encrypt-clinical-data';
 import {
   importDiagnosisCodes,
@@ -25,7 +24,6 @@ import { seedClinicalWorkflow } from './seed-clinical-workflow';
 import { signSeededClinicalContent } from './seed-signatures';
 
 export const DEMO_PASSWORD = 'Password123!';
-const PLATFORM_ADMIN_EMAIL = 'admin@plataforma.test';
 
 /**
  * The demo seed runs on whatever PostgreSQL `DATABASE_URL` names, production included, to show
@@ -245,13 +243,29 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   await db.subscriptionEvent.deleteMany();
   await db.subscriptionPayment.deleteMany();
   await db.usageMetrics.deleteMany();
-  await db.user.deleteMany();
+  // The platform account and its administrators are created by `npm run platform:create-admin`,
+  // never by the seed, so the seed keeps them.
+  const platformTenantIds = (
+    await db.tenant.findMany({ where: { isPlatform: true }, select: { id: true } })
+  ).map(({ id }) => id);
+  await db.user.deleteMany({ where: { tenantId: { notIn: platformTenantIds } } });
   await db.branch.deleteMany();
   await db.tenantSettings.deleteMany();
   await db.tenantSubscription.deleteMany();
-  await db.tenant.deleteMany();
+  await db.tenant.deleteMany({ where: { isPlatform: false } });
   await db.planModule.deleteMany();
   await db.plan.deleteMany();
+}
+
+/** The platform administrator that `npm run platform:create-admin` left, if any. */
+async function findPlatformAdmin(db: PrismaClient): Promise<{ id: string } | null> {
+  const platform = await db.tenant.findFirst({ where: { isPlatform: true }, select: { id: true } });
+  if (!platform) return null;
+  return db.user.findFirst({
+    where: { tenantId: platform.id, role: 'ADMIN' },
+    select: { id: true },
+    orderBy: { createdAt: 'asc' },
+  });
 }
 
 /** Where the seed keeps the bytes of the clinical files it creates. */
@@ -266,10 +280,11 @@ export interface SeedResult {
 }
 
 /**
- * Replaces every row with the demo data set: the platform account, Los Arrayanes with its
- * clinical workflow (branches, encounters, documents and files) and the aesthetic studio Aurora
- * with its treatments. All dates hang from `now`. Patient files, session photos and signed
- * consents are seeded only when a `storage` is given for their bytes.
+ * Replaces every row with the demo data set: Los Arrayanes with its clinical workflow (branches,
+ * encounters, documents and files) and the aesthetic studio Aurora with its treatments. All dates
+ * hang from `now`. Patient files, session photos and signed consents are seeded only when a
+ * `storage` is given for their bytes. The platform account is left as it is: its administrator
+ * is created only with `npm run platform:create-admin`.
  */
 export async function seedDatabase(
   db: PrismaClient,
@@ -284,12 +299,7 @@ export async function seedDatabase(
     db,
     parseDiagnosisCsv(fs.readFileSync(STARTER_DIAGNOSIS_CODES, 'utf8')),
   );
-  const platform = await createPlatformAdmin(db, {
-    email: PLATFORM_ADMIN_EMAIL,
-    password: DEMO_PASSWORD,
-    firstName: 'Admin',
-    lastName: 'Plataforma',
-  });
+  const platformAdmin = await findPlatformAdmin(db);
 
   let paymentReferences = 0;
   const ctx: SeedContext = {
@@ -298,16 +308,14 @@ export async function seedDatabase(
     catalog,
     plans,
     hashedPassword: await bcrypt.hash(DEMO_PASSWORD, 10),
-    platformAdminId: platform.userId,
-    logins: [
-      {
-        tenant: 'Plataforma',
-        email: PLATFORM_ADMIN_EMAIL,
-        role: 'ADMIN',
-        note: 'Administrador de la plataforma: solo entra al panel /platform',
-      },
-    ],
-    highlights: [],
+    platformAdminId: platformAdmin?.id,
+    logins: [],
+    highlights: platformAdmin
+      ? []
+      : [
+          'Sin administrador de plataforma: créalo con `npm run platform:create-admin -- ' +
+            '--email <correo> --first-name <nombre> --last-name <apellido>`.',
+        ],
     cipher: options.cipher?.enabled ? options.cipher : undefined,
     storage: options.storage,
     nextPaymentReference: () => `TRF-DEMO-${String(++paymentReferences).padStart(4, '0')}`,

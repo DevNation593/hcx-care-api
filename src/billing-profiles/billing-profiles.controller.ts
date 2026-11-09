@@ -1,11 +1,25 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
+import { canReadPatients } from '../common/roles/role-compatibility';
+import { PermissionChecker } from '../common/permissions/permission-checker.service';
 import { BillingProfilesService } from './billing-profiles.service';
 import {
+  BillAsPatientDto,
   CreateBillingProfileDto,
   LinkBillingProfileDto,
   ListBillingProfilesQuery,
@@ -17,7 +31,10 @@ import {
 @RequireSection('core.billing.profiles')
 @Controller('tenants/:tenantId')
 export class BillingProfilesController {
-  constructor(private readonly service: BillingProfilesService) {}
+  constructor(
+    private readonly service: BillingProfilesService,
+    private readonly permissions: PermissionChecker,
+  ) {}
 
   @Get('billing-profiles')
   @Roles('MASTER')
@@ -88,6 +105,41 @@ export class BillingProfilesController {
     @Body() dto: LinkBillingProfileDto,
   ) {
     return this.service.linkToPatient(tenantId, user.userId, patientId, dto);
+  }
+
+  @Post('patients/:patientId/billing-profiles/own')
+  @Roles('MASTER')
+  @RequirePermission('billing.create')
+  @ApiOperation({
+    summary: "Bill in the patient's own name, from the patient record",
+    description:
+      'Creates or reuses the profile with the patient data and links it (default when there is none). ' +
+      'Reads the patient record: only roles that read patients (403 PATIENT_ACCESS_REQUIRED for the cashier, who bills with linked profiles). ' +
+      'Fields the record lacks may be sent; writing them also needs patients.update and the core.patients.records section. ' +
+      '422 PATIENT_BILLING_DATA_INCOMPLETE (details.missing to complete, details.invalid to fix in the record), ' +
+      '409 BILLING_PROFILE_INACTIVE or PATIENT_IDENTIFICATION_TAKEN.',
+  })
+  async billAsPatient(
+    @Param('tenantId') tenantId: string,
+    @CurrentUser() user: AuthUser,
+    @Param('patientId') patientId: string,
+    @Body() dto: BillAsPatientDto,
+  ) {
+    // The recipient is copied from the patient record. RolesGuard lets the cashier into this
+    // MASTER route through billing.create, but the cashier never reads patients (SEC-API-07):
+    // it bills with the profiles already linked to the patient.
+    if (!canReadPatients(user.role)) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'PATIENT_ACCESS_REQUIRED',
+        message: 'Tu rol no consulta fichas de pacientes. Elige un receptor ya registrado.',
+      });
+    }
+    // Completing the record edits the patient, which needs its own permission.
+    if (Object.values(dto).some((value) => value !== undefined)) {
+      await this.permissions.assertAllowed(user, 'patients.update');
+    }
+    return this.service.billAsPatient(tenantId, user.userId, patientId, dto);
   }
 
   @Delete('patients/:patientId/billing-profiles/:profileId')
