@@ -9,87 +9,75 @@ export interface FieldIssue {
 /** How many issues the summary message names before it only counts the rest. */
 const SUMMARY_LIMIT = 3;
 
-/** class-validator's own (English) messages; a DTO's custom message is kept as written. */
-function isDefaultMessage(message: string): boolean {
-  return /\b(must|should)\b/.test(message) || /^(property |an unknown value)/.test(message);
+interface DefaultRule {
+  /** class-validator's default text after "<property> ", with the limit it names captured. */
+  template: RegExp;
+  /** What the rule asks for, in Spanish, after "El campo «X»". */
+  describe: (arg: string) => string;
 }
 
-function firstNumber(message: string): string | undefined {
-  return /-?\d+(?:\.\d+)?/.exec(message)?.[0];
-}
+const NUMBER = '(-?\\d+(?:\\.\\d+)?)';
+const elements = (n: string) => `${n} elemento${n === '1' ? '' : 's'}`;
+const rule = (template: string, describe: DefaultRule['describe']): DefaultRule => ({
+  template: new RegExp(`^${template}$`),
+  describe,
+});
 
-function allowedValues(message: string): string | undefined {
-  return /following values: (.+)$/.exec(message)?.[1];
-}
-
-/** What a broken constraint asks for, in Spanish, after "El campo «X»". */
-function describeConstraint(constraint: string, message: string): string {
-  const n = firstNumber(message);
-  switch (constraint) {
-    case 'isNotEmpty':
-    case 'isDefined':
-      return 'es obligatorio';
-    case 'isString':
-      return 'debe ser texto';
-    case 'maxLength':
-      return n ? `debe tener como máximo ${n} caracteres` : 'es demasiado largo';
-    case 'minLength':
-      return n ? `debe tener al menos ${n} caracteres` : 'es demasiado corto';
-    case 'isLength':
-      return 'no tiene una longitud válida';
-    case 'min':
-      return n ? `debe ser mayor o igual a ${n}` : 'es demasiado pequeño';
-    case 'max':
-      return n ? `debe ser menor o igual a ${n}` : 'es demasiado grande';
-    case 'isInt':
-      return 'debe ser un número entero';
-    case 'isNumber':
-    case 'isNumberString':
-    case 'isDecimal':
-      return 'debe ser un número';
-    case 'isPositive':
-      return 'debe ser mayor que 0';
-    case 'isBoolean':
-      return 'debe ser verdadero o falso';
-    case 'isEnum':
-    case 'isIn': {
-      const values = allowedValues(message);
-      return values ? `debe ser uno de estos valores: ${values}` : 'no es un valor permitido';
-    }
-    case 'isArray':
-      return 'debe ser una lista';
-    case 'arrayMinSize':
-    case 'arrayNotEmpty':
-      return n
-        ? `debe tener al menos ${n} elemento${n === '1' ? '' : 's'}`
-        : 'no puede estar vacío';
-    case 'arrayMaxSize':
-      return n
-        ? `debe tener como máximo ${n} elemento${n === '1' ? '' : 's'}`
-        : 'tiene demasiados elementos';
-    case 'arrayUnique':
-      return 'no puede tener valores repetidos';
-    case 'isEmail':
-      return 'debe ser un correo electrónico válido';
-    case 'isObject':
-      return 'debe ser un objeto';
-    case 'isDateString':
-    case 'isIso8601':
-    case 'isDate':
-      return 'debe ser una fecha válida';
-    case 'isUrl':
-      return 'debe ser una URL válida';
-    case 'isUuid':
-    case 'isUUID':
-      return 'debe ser un identificador válido';
-    case 'matches':
-      return 'no tiene el formato esperado';
-    case 'equals':
-      return 'no tiene el valor esperado';
-    default:
-      return 'no es válido';
-  }
-}
+/**
+ * The default messages of the class-validator decorators the DTOs use. Only a message that matches
+ * its rule's template is translated: a DTO's custom message (even an English one with "must") is
+ * kept as written, and a limit is read from the template, never from digits of the field name.
+ */
+const DEFAULT_RULES: Record<string, DefaultRule> = {
+  isNotEmpty: rule('should not be empty', () => 'es obligatorio'),
+  arrayNotEmpty: rule('should not be empty', () => 'no puede estar vacío'),
+  isDefined: rule('should not be null or undefined', () => 'es obligatorio'),
+  isString: rule('must be a string', () => 'debe ser texto'),
+  maxLength: rule(
+    'must be shorter than or equal to (\\d+) characters',
+    (n) => `debe tener como máximo ${n} caracteres`,
+  ),
+  minLength: rule(
+    'must be longer than or equal to (\\d+) characters',
+    (n) => `debe tener al menos ${n} caracteres`,
+  ),
+  min: rule(`must not be less than ${NUMBER}`, (n) => `debe ser mayor o igual a ${n}`),
+  max: rule(`must not be greater than ${NUMBER}`, (n) => `debe ser menor o igual a ${n}`),
+  isInt: rule('must be an integer number', () => 'debe ser un número entero'),
+  isNumber: rule(
+    'must be a number conforming to the specified constraints',
+    () => 'debe ser un número',
+  ),
+  isNumberString: rule('must be a number string', () => 'debe ser un número'),
+  isDecimal: rule('is not a valid decimal number\\.', () => 'debe ser un número decimal'),
+  isPositive: rule('must be a positive number', () => 'debe ser mayor que 0'),
+  isBoolean: rule('must be a boolean value', () => 'debe ser verdadero o falso'),
+  isEnum: rule(
+    'must be one of the following values: (.*)',
+    (v) => `debe ser uno de estos valores: ${v}`,
+  ),
+  isIn: rule(
+    'must be one of the following values: (.*)',
+    (v) => `debe ser uno de estos valores: ${v}`,
+  ),
+  isArray: rule('must be an array', () => 'debe ser una lista'),
+  arrayMinSize: rule(
+    'must contain at least (\\d+) elements',
+    (n) => `debe tener al menos ${elements(n)}`,
+  ),
+  arrayMaxSize: rule(
+    'must contain no more than (\\d+) elements',
+    (n) => `debe tener como máximo ${elements(n)}`,
+  ),
+  isEmail: rule('must be an email', () => 'debe ser un correo electrónico válido'),
+  isObject: rule('must be an object', () => 'debe ser un objeto'),
+  isDateString: rule('must be a valid ISO 8601 date string', () => 'debe ser una fecha válida'),
+  isIso8601: rule('must be a valid ISO 8601 date string', () => 'debe ser una fecha válida'),
+  isUrl: rule('must be a URL address', () => 'debe ser una URL válida'),
+  isUuid: rule('must be a UUID', () => 'debe ser un identificador válido'),
+  matches: rule('must match .+ regular expression', () => 'no tiene el formato esperado'),
+  equals: rule('must be equal to .+', () => 'no tiene el valor esperado'),
+};
 
 function joinPath(parent: string, property: string): string {
   if (!parent) return property;
@@ -104,11 +92,18 @@ function labelOf(path: string): string {
   return index === undefined ? label : `${label} (elemento ${Number(index) + 1})`;
 }
 
-function issueMessage(path: string, constraint: string, message: string): string {
+function issueMessage(path: string, property: string, constraint: string, message: string): string {
   if (constraint === 'whitelistValidation') return `El campo ${labelOf(path)} no está permitido.`;
-  if (!isDefaultMessage(message)) return message;
-  const each = message.startsWith('each value in ');
-  return `${each ? 'Cada valor del campo' : 'El campo'} ${labelOf(path)} ${describeConstraint(constraint, message)}.`;
+  const defaultRule = Object.hasOwn(DEFAULT_RULES, constraint)
+    ? DEFAULT_RULES[constraint]
+    : undefined;
+  const each = message.startsWith(`each value in ${property} `);
+  const subject = each ? `each value in ${property} ` : `${property} `;
+  if (!defaultRule || !message.startsWith(subject)) return message;
+  const match = defaultRule.template.exec(message.slice(subject.length));
+  if (!match) return message;
+  const what = defaultRule.describe(match[1] ?? '');
+  return `${each ? 'Cada valor del campo' : 'El campo'} ${labelOf(path)} ${what}.`;
 }
 
 /** One issue per broken constraint, nested objects and lists included (`lines[0].quantity`). */
@@ -121,7 +116,7 @@ export function flattenValidationErrors(errors: ValidationError[], parent = ''):
     const own = (required.length ? required.slice(0, 1) : constraints).map(
       ([constraint, message]) => ({
         field,
-        message: issueMessage(field, constraint, message),
+        message: issueMessage(field, error.property, constraint, message),
       }),
     );
     return [...own, ...flattenValidationErrors(error.children ?? [], field)];

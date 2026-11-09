@@ -1,5 +1,6 @@
 import {
   ArgumentsHost,
+  BadRequestException,
   Catch,
   ExceptionFilter,
   HttpException,
@@ -9,6 +10,8 @@ import {
 import { HttpAdapterHost } from '@nestjs/core';
 import { Prisma } from '@prisma/client';
 import { fieldLabel } from './field-labels';
+
+const INVALID_JSON_MESSAGE = 'El cuerpo de la solicitud no es un JSON válido.';
 
 type ErrorBody = Record<string, unknown> & { statusCode: number; message: string };
 
@@ -117,7 +120,37 @@ export class AllExceptionsFilter implements ExceptionFilter {
     return { statusCode: 500, code: 'INTERNAL_ERROR', message: statusMessage(500) };
   }
 
+  /**
+   * Nest turns the body parser's SyntaxError (malformed JSON) and Express' URIError (a badly
+   * encoded path) into `new BadRequestException(err.message)` before any filter runs
+   * (RoutesResolver.mapExternalException): they arrive here with the default body and the
+   * parser's English text, which is recognized and replaced.
+   */
+  private fromConvertedParserError(exception: HttpException): ErrorBody | undefined {
+    if (!(exception instanceof BadRequestException)) return undefined;
+    const response = exception.getResponse();
+    if (typeof response !== 'object' || response === null) return undefined;
+    const { message, error, statusCode, ...rest } = response as Record<string, unknown>;
+    const isDefaultBody =
+      Object.keys(rest).length === 0 && error === 'Bad Request' && statusCode === 400;
+    if (!isDefaultBody || typeof message !== 'string') return undefined;
+    if (/\bJSON\b/.test(message)) {
+      return { statusCode: 400, code: 'INVALID_JSON', message: INVALID_JSON_MESSAGE };
+    }
+    // Express 5's router rewrites the URIError as "Failed to decode param '%FF'".
+    if (message === 'URI malformed' || message.startsWith('Failed to decode param ')) {
+      return {
+        statusCode: 400,
+        code: 'INVALID_URL',
+        message: 'La dirección de la solicitud contiene caracteres mal codificados.',
+      };
+    }
+    return undefined;
+  }
+
   private fromHttpException(exception: HttpException): ErrorBody {
+    const converted = this.fromConvertedParserError(exception);
+    if (converted) return converted;
     const statusCode = exception.getStatus();
     const response = exception.getResponse();
     const body: Record<string, unknown> =
@@ -207,7 +240,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return {
         statusCode: 400,
         code: 'INVALID_JSON',
-        message: 'El cuerpo de la solicitud no es un JSON válido.',
+        message: INVALID_JSON_MESSAGE,
       };
     }
     if (type === 'entity.too.large') {

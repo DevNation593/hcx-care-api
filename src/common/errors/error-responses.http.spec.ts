@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   INestApplication,
+  Param,
   Post,
   ValidationPipe,
 } from '@nestjs/common';
@@ -40,6 +41,11 @@ class ProbeController {
   crash() {
     throw new Error('database password leaked in this text');
   }
+
+  @Get('items/:id')
+  item(@Param('id') id: string) {
+    return { id };
+  }
 }
 
 describe('Error responses over HTTP', () => {
@@ -68,6 +74,29 @@ describe('Error responses over HTTP', () => {
     expect(res.body.details).toContainEqual({
       field: 'email',
       message: 'El campo «Correo electrónico» debe ser un correo electrónico válido.',
+    });
+  });
+
+  // Nest turns the parser's SyntaxError into a BadRequestException before the filter runs.
+  it('answers a malformed JSON body with INVALID_JSON in Spanish', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/probe')
+      .set('Content-Type', 'application/json')
+      .send('{"firstName": "Ana",')
+      .expect(400);
+    expect(res.body).toEqual({
+      statusCode: 400,
+      code: 'INVALID_JSON',
+      message: 'El cuerpo de la solicitud no es un JSON válido.',
+    });
+  });
+
+  it('answers a badly encoded path parameter with INVALID_URL in Spanish', async () => {
+    const res = await request(app.getHttpServer()).get('/probe/items/%FF').expect(400);
+    expect(res.body).toEqual({
+      statusCode: 400,
+      code: 'INVALID_URL',
+      message: 'La dirección de la solicitud contiene caracteres mal codificados.',
     });
   });
 

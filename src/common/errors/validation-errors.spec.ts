@@ -50,6 +50,25 @@ class SampleDto {
   @Matches(/^\d{4}$/, { message: 'El código debe tener 4 dígitos.' })
   code?: string;
 
+  // A field name with digits: the limit must come from the rule, not from "256".
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  p256dh?: string;
+
+  // Custom English messages that carry the format the user needs: kept as written.
+  @IsOptional()
+  @Matches(/^\d{2}:\d{2}$/, { message: 'startsAt must be in HH:mm format' })
+  startsAt?: string;
+
+  @IsOptional()
+  @IsString({ each: true })
+  @Matches(/^\d+(h|m)$/, {
+    each: true,
+    message: 'rules must use the format "<number>h" or "<number>m"',
+  })
+  rules?: string[];
+
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(1)
@@ -110,6 +129,21 @@ describe('validationExceptionFactory', () => {
   it('keeps the custom message a DTO declares', async () => {
     expect(await issueOf({ ...valid, code: 'abc' }, 'code')).toBe(
       'El código debe tener 4 dígitos.',
+    );
+  });
+
+  it('reads the limit from the rule, not from digits in the field name', async () => {
+    expect(await issueOf({ ...valid, p256dh: 'x'.repeat(230) }, 'p256dh')).toBe(
+      'El campo «p256dh» debe tener como máximo 200 caracteres.',
+    );
+  });
+
+  it('keeps a custom English message that explains the expected format', async () => {
+    expect(await issueOf({ ...valid, startsAt: '8am' }, 'startsAt')).toBe(
+      'startsAt must be in HH:mm format',
+    );
+    expect(await issueOf({ ...valid, rules: ['24'] }, 'rules')).toBe(
+      'rules must use the format "<number>h" or "<number>m"',
     );
   });
 
