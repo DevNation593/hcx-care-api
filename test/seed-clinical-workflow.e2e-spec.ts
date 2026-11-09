@@ -85,6 +85,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       'nutri',
       'fisio',
       'medicina',
+      'gineco',
       'recepcion',
       'asistente',
     ]) {
@@ -129,7 +130,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
 
     expect(response.body).toHaveLength(3);
     expect(branch('Sede principal').professionalIds.sort()).toEqual(
-      [users.psic, users.fisio, users.medicina].sort(),
+      [users.psic, users.fisio, users.medicina, users.gineco].sort(),
     );
     expect(branch('Sede Norte').professionalIds.sort()).toEqual([users.odonto, users.fisio].sort());
     expect(branch('Sede Valle')).toMatchObject({ isActive: false, professionalIds: [] });
@@ -225,6 +226,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .post(patientUrl('Mateo', 'specialty-records'))
       .set(as('odonto'))
       .send({
+        password: DEMO_PASSWORD,
         moduleKey: 'general.soap-note',
         data: { subjective: 'Dolor 8/10.', assessment: 'Pulpitis.', plan: 'Pulpotomía.' },
         encounterId: encounters.body[0].id,
@@ -234,6 +236,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .post(patientUrl('Mateo', 'specialty-records'))
       .set(as('nutri'))
       .send({
+        password: DEMO_PASSWORD,
         moduleKey: 'general.vital-signs',
         data: { weightKg: 30 },
         encounterId: encounters.body[0].id,
@@ -242,7 +245,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
     const closed = await request(server())
       .post(patientUrl('Mateo', `encounters/${encounters.body[0].id}/close`))
       .set(as('odonto'))
-      .send({ summary: 'Pulpotomía realizada.' })
+      .send({ password: DEMO_PASSWORD, summary: 'Pulpotomía realizada.' })
       .expect(201);
     expect(closed.body.status).toBe('CLOSED');
   });
@@ -260,6 +263,63 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
         'Triaje de urgencia máxima (5 de 5).',
       ]),
     );
+  });
+
+  it('lets the gynecologist read and write the gynecology records of her patient', async () => {
+    const modules = await request(server())
+      .get(`${base()}/clinical-modules`)
+      .set(as('gineco'))
+      .expect(200);
+    const gynecology = modules.body
+      .map((definition: { moduleKey: string }) => definition.moduleKey)
+      .filter((key: string) => key.startsWith('gynecology.'));
+    expect(new Set(gynecology).size).toBe(12);
+
+    const records = await request(server())
+      .get(patientUrl('Lucía', 'specialty-records'))
+      .set(as('gineco'))
+      .expect(200);
+    const byModule = (key: string) =>
+      records.body.find((record: { moduleKey: string }) => record.moduleKey === key);
+    // An exam not performed stays not performed, with its reason.
+    expect(byModule('gynecology.consultation').data).toMatchObject({
+      speculumStatus: 'REALIZADO',
+      bimanualStatus: 'NO_REALIZADO',
+      examNotPerformedReason: expect.stringMatching(/\S/),
+    });
+    // The sample was taken but its report has not arrived: no result and no review.
+    expect(byModule('gynecology.cytology-hpv').data).not.toHaveProperty('cytologyResult');
+    expect(byModule('gynecology.cytology-hpv').data).not.toHaveProperty('reviewedOn');
+
+    const written = await request(server())
+      .post(patientUrl('Lucía', 'specialty-records'))
+      .set(as('gineco'))
+      .send({
+        password: DEMO_PASSWORD,
+        moduleKey: 'gynecology.menstrual-history',
+        schemaVersion: 1,
+        data: { lmpCertainty: 'DESCONOCIDA', cycleRegular: 'DESCONOCIDO' },
+      })
+      .expect(201);
+    // Unknown answers are kept as such, never turned into a no or a date.
+    expect(written.body.data).toEqual({ lmpCertainty: 'DESCONOCIDA', cycleRegular: 'DESCONOCIDO' });
+
+    // Reception schedules her but never reads her clinical records, and a professional of
+    // another specialty cannot write a gynecology module.
+    await request(server())
+      .get(patientUrl('Lucía', 'specialty-records'))
+      .set(as('recepcion'))
+      .expect(403);
+    await request(server())
+      .post(patientUrl('Lucía', 'specialty-records'))
+      .set(as('medicina'))
+      .send({
+        password: DEMO_PASSWORD,
+        moduleKey: 'gynecology.menstrual-history',
+        schemaVersion: 1,
+        data: {},
+      })
+      .expect(403);
   });
 
   it('reads a form of the clinic under the version each record was written with', async () => {
@@ -291,7 +351,11 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
     await request(server())
       .post(patientUrl('Thomas', 'specialty-records'))
       .set(as('nutri'))
-      .send({ moduleKey: form[0].moduleKey, data: { sport: 'Natación', level: 'RECREATIVO' } })
+      .send({
+        password: DEMO_PASSWORD,
+        moduleKey: form[0].moduleKey,
+        data: { sport: 'Natación', level: 'RECREATIVO' },
+      })
       .expect(403);
   });
 
@@ -355,15 +419,16 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .set(as('titular'))
       .expect(200);
 
-    expect(report.body.totals).toMatchObject({ cancelled: 1, noShow: 1, encounters: 6 });
+    expect(report.body.totals).toMatchObject({ cancelled: 1, noShow: 1, encounters: 7 });
     const branch = (name: string) =>
       report.body.branches.find((candidate: { name: string }) => candidate.name === name);
     expect(branch('Sede Norte').encounters).toBe(3);
-    expect(branch('Sede principal').encounters).toBe(2);
+    expect(branch('Sede principal').encounters).toBe(3);
     // The teleconsultation was attended from no branch.
     expect(branch('Sin sede')).toMatchObject({ appointments: 0, encounters: 1 });
     expect(Object.keys(report.body.encountersByType).sort()).toEqual([
       'ASSESSMENT',
+      'CONTROL',
       'EMERGENCY',
       'FIRST_VISIT',
       'FOLLOW_UP',
@@ -492,6 +557,7 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
         .post(studioUrl(`patients/${studio.mariana}/specialty-records`))
         .set(asCosmetologist())
         .send({
+          password: DEMO_PASSWORD,
           moduleKey: 'general.soap-note',
           data: { subjective: 'Refiere', assessment: 'A', plan: 'P' },
         })

@@ -4,6 +4,9 @@ import { ClinicalCipher } from '../clinical-access/clinical-cipher';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertOpenEncounter, EncountersService } from './encounters.service';
 
+// Signing reads the bytes of files that have no hash yet.
+const fileBytes = { get: jest.fn() };
+
 describe('EncountersService', () => {
   const plain = new ClinicalCipher();
   const physio: ClinicalActor = {
@@ -44,14 +47,20 @@ describe('EncountersService', () => {
     branch: { findFirst: jest.fn() },
     appointment: { findFirst: jest.fn(), updateMany: jest.fn() },
     encounter: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
-    specialtyRecord: { count: jest.fn() },
+    specialtyRecord: { count: jest.fn(), findMany: jest.fn(), update: jest.fn() },
+    clinicalNote: { findMany: jest.fn(), count: jest.fn() },
+    patientFile: { findMany: jest.fn(), update: jest.fn(), count: jest.fn() },
+    clinicalOrder: { findMany: jest.fn(), count: jest.fn(), update: jest.fn() },
+    consentDocument: { count: jest.fn() },
     auditLog: { createMany: jest.fn() },
+    $queryRaw: jest.fn(),
   };
   const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
   const service = new EncountersService(
     prisma as unknown as PrismaService,
     new ClinicalAuditService(prisma as unknown as PrismaService, plain),
     plain,
+    fileBytes,
   );
   const auditRows = () => db.auditLog.createMany.mock.calls.flatMap(([args]) => args.data);
   const start = (dto = {}, actor = physio) =>
@@ -71,6 +80,12 @@ describe('EncountersService', () => {
       Promise.resolve(encounter({ ...data, version: 2 })),
     );
     db.specialtyRecord.count.mockResolvedValue(0);
+    db.specialtyRecord.findMany.mockResolvedValue([]);
+    db.clinicalNote.findMany.mockResolvedValue([]);
+    db.patientFile.findMany.mockResolvedValue([]);
+    db.clinicalOrder.findMany.mockResolvedValue([]);
+    db.clinicalOrder.count.mockResolvedValue(0);
+    db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
   });
 
   describe('list', () => {
@@ -261,6 +276,9 @@ describe('EncountersService', () => {
         status: 'CLOSED',
         closedAt: expect.any(Date),
         summary: 'Control en 7 días',
+        signedAt: expect.any(Date),
+        signedById: 'physio',
+        contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/),
         version: { increment: 1 },
       });
       expect(closed.status).toBe('CLOSED');
@@ -273,6 +291,182 @@ describe('EncountersService', () => {
         data: { status: 'COMPLETED' },
       });
       expect(auditRows()[0]).toMatchObject({ action: 'UPDATE', reason: 'Cierre de la atención' });
+    });
+
+    describe('signature', () => {
+      const storedRecord = (overrides = {}) => ({
+        id: 'record-1',
+        tenantId: 'tenant-1',
+        patientId: 'patient-1',
+        professionalId: 'physio',
+        moduleKey: 'general.soap-note',
+        schemaVersion: 1,
+        formDefinitionId: null,
+        appointmentId: null,
+        encounterId: 'encounter-1',
+        recordDate: new Date('2026-10-03T15:10:00Z'),
+        data: { subjective: 'Dolor', assessment: 'Lumbalgia', plan: 'Reposo' },
+        notes: null,
+        amendsRecordId: null,
+        amendmentReason: null,
+        signedAt: null,
+        contentHash: null,
+        updatedAt: new Date('2026-10-03T15:20:00Z'),
+        ...overrides,
+      });
+      const closeWith = async (records: unknown[], notes: unknown[] = []) => {
+        db.encounter.findFirst.mockResolvedValue(encounter());
+        db.specialtyRecord.findMany.mockResolvedValue(records);
+        db.clinicalNote.findMany.mockResolvedValue(notes);
+        await service.close('tenant-1', 'patient-1', 'encounter-1', physio, {});
+        return db.encounter.update.mock.calls.at(-1)[0].data.contentHash as string;
+      };
+
+      it('locks the encounter before reading what it signs', async () => {
+        await closeWith([storedRecord()]);
+
+        expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+          db.specialtyRecord.findMany.mock.invocationCallOrder[0],
+        );
+        expect(db.specialtyRecord.findMany.mock.calls[0][0].where).toEqual({
+          tenantId: 'tenant-1',
+          encounterId: 'encounter-1',
+          deletedAt: null,
+        });
+      });
+
+      it('signs each record it holds at the close, keeping the date of its last change', async () => {
+        await closeWith([storedRecord()]);
+
+        expect(db.specialtyRecord.update).toHaveBeenCalledWith({
+          where: { id: 'record-1' },
+          data: {
+            signedAt: db.encounter.update.mock.calls[0][0].data.signedAt,
+            contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/),
+            updatedAt: new Date('2026-10-03T15:20:00Z'),
+          },
+        });
+      });
+
+      it('covers its files: what they are and the hash of their bytes', async () => {
+        const file = (overrides = {}) => ({
+          id: 'file-1',
+          category: 'EXAMEN',
+          fileName: 'hemograma.pdf',
+          description: null,
+          mimeType: 'application/pdf',
+          sizeBytes: 120,
+          storageKey: 'tenant-1/patient-1/blob',
+          contentHash: 'v1:aa',
+          ...overrides,
+        });
+        const closeWithFiles = async (files: unknown[]) => {
+          db.patientFile.findMany.mockResolvedValue(files);
+          return closeWith([storedRecord()]);
+        };
+
+        const base = await closeWithFiles([file()]);
+        jest.clearAllMocks();
+        db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+        const otherBytes = await closeWithFiles([file({ contentHash: 'v1:bb' })]);
+        jest.clearAllMocks();
+        db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+        const renamed = await closeWithFiles([file({ fileName: 'otro.pdf' })]);
+
+        expect(new Set([base, otherBytes, renamed]).size).toBe(3);
+        expect(fileBytes.get).not.toHaveBeenCalled();
+      });
+
+      it('hashes the bytes of a file uploaded before hashes existed, once, as it signs', async () => {
+        const bytes = Buffer.from('%PDF-1.7 hemograma');
+        fileBytes.get.mockResolvedValue(bytes);
+        db.patientFile.findMany.mockResolvedValue([
+          {
+            id: 'file-old',
+            category: 'EXAMEN',
+            fileName: 'antiguo.pdf',
+            description: null,
+            mimeType: 'application/pdf',
+            sizeBytes: bytes.length,
+            storageKey: 'tenant-1/patient-1/old',
+            contentHash: null,
+          },
+        ]);
+
+        await closeWith([]);
+
+        expect(fileBytes.get).toHaveBeenCalledWith('tenant-1/patient-1/old');
+        expect(db.patientFile.update).toHaveBeenCalledWith({
+          where: { id: 'file-old' },
+          data: { contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/) },
+        });
+      });
+
+      it('signs the request of each order placed in it, and the hash covers it', async () => {
+        const order = (overrides = {}) => ({
+          id: 'order-1',
+          tenantId: 'tenant-1',
+          patientId: 'patient-1',
+          orderedById: 'physio',
+          encounterId: 'encounter-1',
+          orderType: 'IMAGING',
+          priority: 'ROUTINE',
+          studyName: 'Resonancia lumbar',
+          indication: null,
+          orderedAt: new Date('2026-10-03T15:12:00Z'),
+          signedAt: null,
+          contentHash: null,
+          updatedAt: new Date('2026-10-03T15:12:00Z'),
+          ...overrides,
+        });
+        const without = await closeWith([storedRecord()]);
+        jest.clearAllMocks();
+        db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+        db.clinicalOrder.findMany.mockResolvedValue([order()]);
+        const withOrder = await closeWith([storedRecord()]);
+        jest.clearAllMocks();
+        db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+        db.clinicalOrder.findMany.mockResolvedValue([order({ studyName: 'Radiografía lumbar' })]);
+        const otherStudy = await closeWith([storedRecord()]);
+
+        expect(new Set([without, withOrder, otherStudy]).size).toBe(3);
+        expect(db.clinicalOrder.update).toHaveBeenCalledWith({
+          where: { id: 'order-1' },
+          data: {
+            signedAt: expect.any(Date),
+            contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/),
+            updatedAt: new Date('2026-10-03T15:12:00Z'),
+          },
+        });
+      });
+
+      it('leaves an addendum signed already as it is', async () => {
+        await closeWith([storedRecord({ signedAt: new Date(), contentHash: 'v1:x' })]);
+
+        expect(db.specialtyRecord.update).not.toHaveBeenCalled();
+      });
+
+      it('covers the content of every record and note: any change gives another hash', async () => {
+        const note = {
+          id: 'note-1',
+          tenantId: 'tenant-1',
+          content: 'Sesión',
+          diagnosis: null,
+          treatment: null,
+          observations: null,
+          sessionDate: new Date('2026-10-03T15:00:00Z'),
+        };
+        const base = await closeWith([storedRecord()], [note]);
+        jest.clearAllMocks();
+        const otherRecord = await closeWith(
+          [storedRecord({ data: { subjective: 'Dolor', assessment: 'Otra', plan: 'Reposo' } })],
+          [note],
+        );
+        jest.clearAllMocks();
+        const otherNote = await closeWith([storedRecord()], [{ ...note, content: 'Otra' }]);
+
+        expect(new Set([base, otherRecord, otherNote]).size).toBe(3);
+      });
     });
 
     it('cannot be done twice or by another professional', async () => {
@@ -290,7 +484,48 @@ describe('EncountersService', () => {
     });
   });
 
+  it('takes the encounter row before reading its state when editing or removing it', async () => {
+    db.encounter.findFirst.mockResolvedValue(encounter());
+
+    await service.update('tenant-1', 'patient-1', 'encounter-1', physio, {
+      reason: 'Otro',
+    } as never);
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.encounter.findFirst.mock.invocationCallOrder[0],
+    );
+
+    jest.clearAllMocks();
+    db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+    db.encounter.findFirst.mockResolvedValue(encounter());
+    db.specialtyRecord.count.mockResolvedValue(0);
+    await service.delete('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' });
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.encounter.findFirst.mock.invocationCallOrder[0],
+    );
+  });
+
   describe('delete', () => {
+    beforeEach(() => {
+      for (const counter of [
+        db.specialtyRecord.count,
+        db.clinicalOrder.count,
+        db.clinicalNote.count,
+        db.patientFile.count,
+        db.consentDocument.count,
+      ]) {
+        counter.mockResolvedValue(0);
+      }
+    });
+
+    it('never removes a closed encounter: it is signed', async () => {
+      db.encounter.findFirst.mockResolvedValue(encounter({ status: 'CLOSED' }));
+
+      await expect(
+        service.delete('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' }),
+      ).rejects.toMatchObject({ status: 409, response: { code: 'ENCOUNTER_SIGNED' } });
+      expect(db.encounter.update).not.toHaveBeenCalled();
+    });
+
     it('keeps the row, frees the appointment and puts it back as scheduled', async () => {
       db.encounter.findFirst.mockResolvedValue(encounter({ appointmentId: 'appointment-1' }));
 
@@ -318,6 +553,18 @@ describe('EncountersService', () => {
       });
     });
 
+    it('is refused while the encounter holds orders', async () => {
+      db.encounter.findFirst.mockResolvedValue(encounter());
+      db.clinicalOrder.count.mockResolvedValue(1);
+
+      await expect(
+        service.delete('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' }),
+      ).rejects.toMatchObject({ status: 409, response: { code: 'ENCOUNTER_HAS_RECORDS' } });
+      expect(db.clinicalOrder.count).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1', encounterId: 'encounter-1' },
+      });
+    });
+
     it('is refused while the encounter holds records', async () => {
       db.encounter.findFirst.mockResolvedValue(encounter());
       db.specialtyRecord.count.mockResolvedValue(2);
@@ -327,6 +574,25 @@ describe('EncountersService', () => {
       ).rejects.toMatchObject({ status: 409, response: { code: 'ENCOUNTER_HAS_RECORDS' } });
       expect(db.specialtyRecord.count).toHaveBeenCalledWith({
         where: { encounterId: 'encounter-1', deletedAt: null },
+      });
+      expect(db.encounter.update).not.toHaveBeenCalled();
+    });
+
+    // Their notes and files would follow a state that no longer opens: they could never be
+    // corrected nor removed again.
+    it.each([
+      ['notes', () => db.clinicalNote.count],
+      ['files', () => db.patientFile.count],
+      ['procedure consents', () => db.consentDocument.count],
+    ])('is refused while the encounter holds %s', async (_what, counter) => {
+      db.encounter.findFirst.mockResolvedValue(encounter());
+      counter().mockResolvedValue(1);
+
+      await expect(
+        service.delete('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' }),
+      ).rejects.toMatchObject({ status: 409, response: { code: 'ENCOUNTER_HAS_RECORDS' } });
+      expect(counter()).toHaveBeenCalledWith({
+        where: expect.objectContaining({ tenantId: 'tenant-1', encounterId: 'encounter-1' }),
       });
       expect(db.encounter.update).not.toHaveBeenCalled();
     });
@@ -377,6 +643,9 @@ describe('EncountersService', () => {
         status: 'CLOSED',
         closedAt: expect.any(Date),
         summary: 'Procedimiento sin complicaciones',
+        signedAt: expect.any(Date),
+        signedById: 'physio',
+        contentHash: expect.stringMatching(/^v1:/),
         version: { increment: 1 },
       });
       expect(closed.status).toBe('CLOSED');

@@ -19,7 +19,17 @@ const NOTE_FIELDS = [
 const BATCH_SIZE = 200;
 
 export type EncryptionReport = Record<
-  'clinicalNotes' | 'specialtyRecords' | 'encounters' | 'patientFiles' | 'auditLogs',
+  | 'clinicalNotes'
+  | 'specialtyRecords'
+  | 'encounters'
+  | 'patientFiles'
+  | 'clinicalOrders'
+  | 'clinicalResults'
+  | 'clinicalFollowUps'
+  | 'consentDocuments'
+  | 'consentSignatures'
+  | 'mfaSecrets'
+  | 'auditLogs',
   { scanned: number; updated: number }
 >;
 
@@ -29,7 +39,17 @@ type Delegate = {
   update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<unknown>;
 };
 type EncryptionClient = Record<
-  'clinicalNote' | 'specialtyRecord' | 'encounter' | 'patientFile' | 'auditLog',
+  | 'clinicalNote'
+  | 'specialtyRecord'
+  | 'encounter'
+  | 'patientFile'
+  | 'clinicalOrder'
+  | 'clinicalResult'
+  | 'clinicalFollowUp'
+  | 'consentDocument'
+  | 'consentSignature'
+  | 'user'
+  | 'auditLog',
   Delegate
 >;
 
@@ -109,7 +129,7 @@ export async function encryptClinicalData(
       client.specialtyRecord,
       {},
       cipher,
-      ['notes', 'deletionReason'],
+      ['notes', 'deletionReason', 'amendmentReason'],
       ['data'],
       dryRun,
     ),
@@ -131,9 +151,78 @@ export async function encryptClinicalData(
       [],
       dryRun,
     ),
+    clinicalOrders: await processTable(
+      client.clinicalOrder,
+      {},
+      cipher,
+      [
+        'studyName',
+        'indication',
+        'provider',
+        'externalReference',
+        'sampleNotes',
+        'completionNote',
+        'cancellationReason',
+      ],
+      [],
+      dryRun,
+    ),
+    clinicalResults: await processTable(
+      client.clinicalResult,
+      {},
+      cipher,
+      ['issuedBy', 'content', 'reviewNote', 'communicationNote'],
+      [],
+      dryRun,
+    ),
+    clinicalFollowUps: await processTable(
+      client.clinicalFollowUp,
+      {},
+      cipher,
+      ['title', 'description', 'closureNote'],
+      [],
+      dryRun,
+    ),
+    consentDocuments: await processTable(
+      client.consentDocument,
+      {},
+      cipher,
+      ['title', 'body', 'procedureName'],
+      [],
+      dryRun,
+    ),
+    consentSignatures: await processTable(
+      client.consentSignature,
+      {},
+      cipher,
+      ['signerName', 'signerIdentification', 'relationship', 'witnessName'],
+      [],
+      dryRun,
+    ),
+    // Two-factor secrets are encrypted with the same keys: rotating them must carry these along.
+    mfaSecrets: await processTable(
+      client.user,
+      { OR: [{ mfaSecret: { not: null } }, { mfaPendingSecret: { not: null } }] },
+      cipher,
+      ['mfaSecret', 'mfaPendingSecret'],
+      [],
+      dryRun,
+    ),
     auditLogs: await processTable(
       client.auditLog,
-      { entity: { in: ['CLINICAL_NOTE', 'SPECIALTY_RECORD', 'ENCOUNTER', 'PATIENT_FILE'] } },
+      {
+        entity: {
+          in: [
+            'CLINICAL_NOTE',
+            'SPECIALTY_RECORD',
+            'ENCOUNTER',
+            'PATIENT_FILE',
+            'CLINICAL_ORDER',
+            'CLINICAL_RESULT',
+            'CLINICAL_FOLLOW_UP',
+          ],
+        },
+      },
       cipher,
       ['reason'],
       ['changes'],

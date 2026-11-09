@@ -78,6 +78,59 @@ describe('encrypt-clinical-data script', () => {
         deletionReason: null,
       },
     ]),
+    clinicalOrder: fakeTable([
+      {
+        id: 'o1',
+        tenantId: 't1',
+        studyName: 'Citología sin cifrar',
+        indication: null,
+        provider: 'Laboratorio sin cifrar',
+        externalReference: null,
+        sampleNotes: null,
+        completionNote: null,
+        cancellationReason: null,
+      },
+    ]),
+    clinicalResult: fakeTable([
+      {
+        id: 'res1',
+        tenantId: 't1',
+        issuedBy: null,
+        content: oldCipher.encrypt('t1', 'Informe con clave retirada'),
+        reviewNote: null,
+        communicationNote: null,
+      },
+    ]),
+    clinicalFollowUp: fakeTable([
+      {
+        id: 'fu1',
+        tenantId: 't1',
+        title: 'Repetir sin cifrar',
+        description: null,
+        closureNote: null,
+      },
+    ]),
+    consentDocument: fakeTable([
+      { id: 'cd1', tenantId: 't1', title: 'Consentimiento', body: 'Texto', procedureName: 'DIU' },
+    ]),
+    consentSignature: fakeTable([
+      {
+        id: 'cs1',
+        tenantId: 't1',
+        signerName: cipher.encrypt('t1', 'Ana'),
+        signerIdentification: cipher.encrypt('t1', ''),
+        relationship: null,
+        witnessName: null,
+      },
+    ]),
+    user: fakeTable([
+      {
+        id: 'u1',
+        tenantId: 't1',
+        mfaSecret: oldCipher.encrypt('t1', 'JBSWY3DPEHPK3PXP'),
+        mfaPendingSecret: null,
+      },
+    ]),
     auditLog: fakeTable([
       {
         id: 'a1',
@@ -100,6 +153,12 @@ describe('encrypt-clinical-data script', () => {
       specialtyRecords: { scanned: 1, updated: 1 },
       encounters: { scanned: 1, updated: 1 },
       patientFiles: { scanned: 1, updated: 1 },
+      clinicalOrders: { scanned: 1, updated: 1 },
+      clinicalResults: { scanned: 1, updated: 1 },
+      clinicalFollowUps: { scanned: 1, updated: 1 },
+      consentDocuments: { scanned: 1, updated: 1 },
+      consentSignatures: { scanned: 1, updated: 0 },
+      mfaSecrets: { scanned: 1, updated: 1 },
       auditLogs: { scanned: 2, updated: 1 },
     });
     const stored = JSON.stringify([
@@ -107,6 +166,9 @@ describe('encrypt-clinical-data script', () => {
       db.specialtyRecord.rows,
       db.encounter.rows,
       db.patientFile.rows,
+      db.clinicalOrder.rows,
+      db.clinicalResult.rows,
+      db.clinicalFollowUp.rows,
       db.auditLog.rows,
     ]);
     expect(stored).not.toMatch(
@@ -125,6 +187,11 @@ describe('encrypt-clinical-data script', () => {
       after: { content: 'Nota en texto plano' },
     });
     expect(db.auditLog.rows[1].changes).toBeNull();
+    expect(cipher.decrypt('t1', db.clinicalResult.rows[0].content as string)).toBe(
+      'Informe con clave retirada',
+    );
+    expect(cipher.decrypt('t1', db.user.rows[0].mfaSecret as string)).toBe('JBSWY3DPEHPK3PXP');
+    expect(db.user.rows[0].mfaSecret).not.toMatch(/enc:v1:old:/);
   });
 
   it('changes nothing on a second run', async () => {
@@ -134,7 +201,9 @@ describe('encrypt-clinical-data script', () => {
 
     const report = await encryptClinicalData(db, cipher);
 
-    expect(Object.values(report).map(({ updated }) => updated)).toEqual([0, 0, 0, 0, 0]);
+    expect(Object.values(report).map(({ updated }) => updated)).toEqual([
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]);
     expect(JSON.stringify(db.clinicalNote.rows)).toBe(firstRun);
   });
 

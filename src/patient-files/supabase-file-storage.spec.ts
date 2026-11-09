@@ -1,3 +1,4 @@
+import { NoFileScanner } from './file-scanner';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { createServer, IncomingMessage, Server } from 'http';
@@ -252,6 +253,7 @@ describe('SupabaseFileStorage', () => {
       new ClinicalAuditService(prisma, cipher),
       cipher,
       storageWith(),
+      new NoFileScanner(),
     );
 
     await service.upload(

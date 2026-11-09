@@ -157,6 +157,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     const orderedModels = [
       'auditLog',
+      // Results restrict deleting their file, record and users; follow-ups their users.
+      'clinicalFollowUp',
+      'clinicalResult',
+      'clinicalOrder',
       'invoiceRequestEvent',
       'invoiceRequest',
       'branchEmissionPoint',

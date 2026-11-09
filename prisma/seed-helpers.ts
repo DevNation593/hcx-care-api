@@ -36,7 +36,7 @@ const DAY_MS = 24 * HOUR_MS;
 // The demo clinics work in America/Guayaquil, which has no daylight saving time.
 const LOCAL_UTC_OFFSET_HOURS = -5;
 
-export type SeedSpecialtyKey = DemoSpecialtyKey | 'generalMedicine' | 'aesthetics';
+export type SeedSpecialtyKey = DemoSpecialtyKey | 'generalMedicine' | 'aesthetics' | 'gynecology';
 export type SpecialtyCatalog = Record<SeedSpecialtyKey, { id: string; code: string }>;
 
 /** The modules each specialty owns: the ones the clinical module registry defines for it. */
@@ -47,6 +47,7 @@ export const SPECIALTY_MODULE_KEYS: Record<SeedSpecialtyKey, string[]> = {
   dentistry: specialtyModuleKeys('DENTISTRY'),
   generalMedicine: specialtyModuleKeys('GENERAL_MEDICINE'),
   aesthetics: specialtyModuleKeys('AESTHETICS'),
+  gynecology: specialtyModuleKeys('GYNECOLOGY'),
 };
 
 /** Every date of the seed is relative to one instant, so a run is consistent with itself. */

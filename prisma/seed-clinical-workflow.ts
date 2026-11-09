@@ -1,3 +1,5 @@
+import { bytesContentHash, resultContentHash } from '../src/clinical-access/clinical-signature';
+import { consentChecksum } from '../src/consents/consent-text';
 import type {
   Appointment,
   Encounter,
@@ -158,7 +160,14 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     tenantType: 'CLINIC',
     plan: 'CLINICA',
     status: 'ACTIVE',
-    specialties: ['psychology', 'nutrition', 'physiotherapy', 'dentistry', 'generalMedicine'],
+    specialties: [
+      'psychology',
+      'nutrition',
+      'physiotherapy',
+      'dentistry',
+      'generalMedicine',
+      'gynecology',
+    ],
     fiscal: {
       legalName: 'Centro Médico Los Arrayanes S.A.',
       taxIdentificationType: 'RUC',
@@ -214,6 +223,14 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     role: 'PROFESIONAL',
     note: 'Médica general con perfil profesional activo; atiende en la sede principal',
     profile: { specialty: 'generalMedicine', title: 'Médica general', licenseNumber: 'MED-EC-314' },
+  });
+  const gabriela = await createUser(ctx, clinic, {
+    email: 'gineco.arrayanes@psic.com',
+    firstName: 'Gabriela',
+    lastName: 'Andrade',
+    role: 'PROFESIONAL',
+    note: 'Ginecóloga; atiende en la sede principal. Datos clínicos sintéticos',
+    profile: { specialty: 'gynecology', title: 'Ginecóloga', licenseNumber: 'GIN-EC-315' },
   });
   await createUser(ctx, clinic, {
     email: 'recepcion.arrayanes@psic.com',
@@ -277,6 +294,7 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
       { userId: hugo.id, branchId: mainBranch.id },
       { userId: hugo.id, branchId: northBranch.id },
       { userId: camila.id, branchId: mainBranch.id },
+      { userId: gabriela.id, branchId: mainBranch.id },
     ].map((row) => ({ tenantId, ...row })),
   });
 
@@ -495,6 +513,23 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     },
     { current: [hugo, esteban] },
   );
+  const lucia = await createPatient(
+    ctx,
+    clinic,
+    {
+      firstName: 'Lucía',
+      lastName: 'Benítez',
+      email: 'lucia.benitez@pacientes.test',
+      phone: '+593998100007',
+      dateOfBirth: new Date('1990-05-21T00:00:00.000Z'),
+      gender: 'Femenino',
+      identificationType: 'CEDULA',
+      identificationNumber: '1712345675',
+      nationality: 'Ecuatoriana',
+      createdAt: clock.days(-9),
+    },
+    { current: [gabriela] },
+  );
 
   // ------------------------------------------------------------------ helpers
   let sequential = 0;
@@ -636,6 +671,8 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
         mimeType: input.mimeType,
         sizeBytes: input.bytes.length,
         storageKey,
+        // As the API keeps it: the SHA-256 of the bytes as uploaded.
+        contentHash: bytesContentHash(input.bytes),
         createdAt: input.at,
       },
     });
@@ -1288,6 +1325,231 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     status: 'SCHEDULED',
     title: 'Primera consulta de psicología',
     data: { branchId: mainBranch.id, location: 'Consultorio 1' },
+  });
+
+  // A consent template for the procedures of gynecology, published: presented from an open
+  // encounter (Registros clínicos › Consentimientos de procedimientos). Synthetic text.
+  const iudConsent = {
+    title: 'Consentimiento informado para {{procedimiento}}',
+    body:
+      'Yo, {{paciente}}, con identificación {{identificacion}}, declaro que {{profesional}} me explicó en qué ' +
+      'consiste {{procedimiento}}, sus beneficios, sus riesgos frecuentes y graves, y las alternativas, y que pude ' +
+      'hacer preguntas. Sé que puedo retirar este consentimiento antes del procedimiento.\n\n' +
+      'Texto de demostración: debe ser revisado por la profesional y por asesoría jurídica antes de usarse.',
+  };
+  const iudTemplate = await db.consentTemplate.create({
+    data: { tenantId, name: 'Procedimiento ginecológico', createdAt: clock.days(-30) },
+  });
+  await db.consentTemplateVersion.create({
+    data: {
+      tenantId,
+      templateId: iudTemplate.id,
+      version: 1,
+      title: iudConsent.title,
+      body: iudConsent.body,
+      checksum: consentChecksum(iudConsent.title, iudConsent.body),
+      status: 'PUBLISHED',
+      publishedAt: clock.days(-29),
+      createdById: clinic.master.id,
+      createdAt: clock.days(-30),
+    },
+  });
+
+  // ------------------------------------------------------------------ Lucía: gynecology
+  // Synthetic data only. A yearly control at the main branch: the speculum exam is recorded as
+  // done and the bimanual one as not done with its reason, the last period date is approximate,
+  // and the cytology sample was taken but its report has not arrived: no result, no review.
+  const isoDate = (date: Date) => date.toISOString().slice(0, 10);
+  const luciaControl = await createAppointment(ctx, clinic, {
+    patient: lucia,
+    professional: gabriela,
+    slot: book(gabriela, -5, '10:00'),
+    status: 'COMPLETED',
+    title: 'Consulta de control',
+    data: { branchId: mainBranch.id, location: 'Consultorio 2' },
+  });
+  const gynecologyEncounter = await openEncounter({
+    patient: lucia,
+    professional: gabriela,
+    encounterType: 'CONTROL',
+    reason: 'Control ginecológico anual.',
+    startedAt: luciaControl.startTime,
+    appointment: luciaControl,
+  });
+  const atControl = {
+    patient: lucia,
+    professional: gabriela,
+    encounter: gynecologyEncounter,
+    appointment: luciaControl,
+    at: luciaControl.startTime,
+  };
+  await writeRecord({
+    ...atControl,
+    moduleKey: 'general.vital-signs',
+    data: { weightKg: 61, heightCm: 163, systolic: 112, diastolic: 72, heartRate: 68 },
+  });
+  await writeRecord({
+    ...atControl,
+    moduleKey: 'gynecology.consultation',
+    data: {
+      chiefComplaint: 'Control anual; sin molestias referidas.',
+      historyPresentIllness: 'Registro sintético para la demostración.',
+      allergiesReviewed: 'SI',
+      medicationsReviewed: 'SI',
+      generalStatus: 'REALIZADO',
+      generalFindings: 'Paciente en buen estado general.',
+      breastStatus: 'REALIZADO',
+      breastFindings: 'Sin hallazgos referidos por la profesional.',
+      speculumStatus: 'REALIZADO',
+      speculumFindings: 'Se toma muestra para citología.',
+      bimanualStatus: 'NO_REALIZADO',
+      examNotPerformedReason: 'La paciente prefirió diferir el tacto bimanual.',
+      examConsent: 'VERBAL',
+      chaperonePresent: 'SI',
+      clinicalAssessment: 'Control sin cambios respecto al anterior.',
+      managementPlan: 'Esperar el reporte de citología y revisarlo en la próxima cita.',
+      followUpDate: isoDate(clock.days(10)),
+      followUpReason: 'Revisión del reporte de citología',
+    },
+  });
+  await writeRecord({
+    ...atControl,
+    moduleKey: 'gynecology.menstrual-history',
+    data: {
+      menarcheAgeYears: 12,
+      lastMenstrualPeriodDate: isoDate(clock.days(-19)),
+      lmpCertainty: 'APROXIMADA',
+      lmpSource: 'REFERIDA',
+      cycleRegular: 'SI',
+      typicalCycleDays: 29,
+      bleedingDurationDays: 5,
+      dysmenorrhea: 'LEVE',
+      intermenstrualBleeding: 'NO',
+      postcoitalBleeding: 'DESCONOCIDO',
+      menopauseStatus: 'PREMENOPAUSIA',
+    },
+  });
+  await writeRecord({
+    ...atControl,
+    moduleKey: 'gynecology.obstetric-history',
+    data: {
+      historyStatus: 'REGISTRADOS',
+      pregnancies: [{ year: 2019, outcome: 'CESAREA', fetuses: 1, liveBirths: 1 }],
+    },
+  });
+  await writeRecord({
+    ...atControl,
+    moduleKey: 'gynecology.contraception',
+    data: {
+      method: 'DIU_COBRE',
+      status: 'EN_USO',
+      startedOn: isoDate(clock.days(-400)),
+      reproductiveIntention: 'NO_DESEA',
+      counselingNotes: 'Se revisan los signos por los que debe consultar antes del control.',
+    },
+  });
+  await writeRecord({
+    ...atControl,
+    moduleKey: 'gynecology.cytology-hpv',
+    data: {
+      study: 'CITOLOGIA_LIQUIDA',
+      indication: 'Tamizaje según criterio de la profesional.',
+      sampleDate: isoDate(luciaControl.startTime),
+      sampleType: 'Cervical',
+      laboratory: 'Laboratorio de demostración',
+      laboratoryReference: 'DEMO-0001',
+    },
+  });
+  // The cytology is also an order of the encounter: its report arrived yesterday and waits in
+  // the professional's inbox for a review. Nobody has told the patient anything yet.
+  const cytologyOrder = await db.clinicalOrder.create({
+    data: {
+      tenantId,
+      patientId: lucia.id,
+      orderedById: gabriela.id,
+      encounterId: gynecologyEncounter.id,
+      orderType: 'PATHOLOGY',
+      priority: 'ROUTINE',
+      studyName: 'Citología cervicovaginal en base líquida',
+      indication: 'Tamizaje según criterio de la profesional.',
+      provider: 'Laboratorio de demostración',
+      externalReference: 'DEMO-0001',
+      status: 'PENDING_REVIEW',
+      orderedAt: luciaControl.startTime,
+      resultDueAt: clock.days(10),
+      sampleCollectedAt: luciaControl.startTime,
+      sentAt: new Date(luciaControl.startTime.getTime() + 60 * 60 * 1000),
+      version: 4,
+      createdAt: luciaControl.startTime,
+    },
+  });
+  const cytologyResult = {
+    id: randomUUID(),
+    orderId: cytologyOrder.id,
+    version: 1,
+    enteredById: gabriela.id,
+    receivedAt: clock.days(-1),
+    studyDate: luciaControl.startTime,
+    issuedBy: 'Laboratorio de demostración',
+    content:
+      'Informe sintético de demostración. Calidad de la muestra: satisfactoria. Lectura según la clasificación del laboratorio.',
+    fileId: null,
+    recordId: null,
+  };
+  await db.clinicalResult.create({
+    data: {
+      ...cytologyResult,
+      tenantId,
+      patientId: lucia.id,
+      contentHash: resultContentHash({ ...cytologyResult, fileContentHash: null }),
+      createdAt: cytologyResult.receivedAt,
+    },
+  });
+  // An ultrasound ordered at the same control whose report is past the date it was expected.
+  await db.clinicalOrder.create({
+    data: {
+      tenantId,
+      patientId: lucia.id,
+      orderedById: gabriela.id,
+      encounterId: gynecologyEncounter.id,
+      orderType: 'IMAGING',
+      priority: 'PREFERENTIAL',
+      studyName: 'Ecografía ginecológica transvaginal',
+      indication: 'Control del DIU.',
+      provider: 'Centro de imagen de demostración',
+      status: 'SENT_TO_LAB',
+      orderedAt: luciaControl.startTime,
+      resultDueAt: clock.days(-1),
+      sentAt: luciaControl.startTime,
+      version: 2,
+      createdAt: luciaControl.startTime,
+    },
+  });
+  // A preventive control that comes from no order: open until someone records it.
+  await db.clinicalFollowUp.create({
+    data: {
+      tenantId,
+      patientId: lucia.id,
+      title: 'Control ginecológico anual',
+      description: 'Plan preventivo acordado con la paciente.',
+      assignedToId: gabriela.id,
+      createdById: gabriela.id,
+      dueDate: clock.days(360),
+      createdAt: luciaControl.startTime,
+    },
+  });
+  await closeEncounter(
+    gynecologyEncounter,
+    'Control anual. Citología tomada, pendiente de reporte.',
+    new Date(luciaControl.startTime.getTime() + 30 * 60 * 1000),
+  );
+  await createAppointment(ctx, clinic, {
+    patient: lucia,
+    professional: gabriela,
+    slot: book(gabriela, 10, '10:00'),
+    status: 'SCHEDULED',
+    title: 'Consulta de control',
+    data: { branchId: mainBranch.id, location: 'Consultorio 2' },
   });
 
   // ------------------------------------------------------------------ Jorge: the report

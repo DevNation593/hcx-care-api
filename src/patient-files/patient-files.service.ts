@@ -1,9 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   PayloadTooLargeException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { PatientFile, Prisma, SessionMediaPhase } from '@prisma/client';
 import { randomUUID } from 'crypto';
@@ -14,9 +17,11 @@ import {
   clinicalRecordForbidden,
   clinicalRecordNotFound,
 } from '../clinical-access/clinical-errors';
-import { assertOpenEncounter } from '../encounters/encounters.service';
+import { bytesContentHash, patientFileSigned } from '../clinical-access/clinical-signature';
+import { assertOpenEncounter, lockOpenEncounter } from '../encounters/encounters.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DeletePatientFileDto, UploadPatientFileDto } from './dto/patient-file.dto';
+import { FILE_SCANNER, FileScanner } from './file-scanner';
 import { FILE_STORAGE, FileStorage } from './file-storage';
 
 export const MAX_PATIENT_FILE_BYTES = 10 * 1024 * 1024;
@@ -61,10 +66,20 @@ export function snapshotPatientFile(file: PatientFile) {
     description: file.description,
     mimeType: file.mimeType,
     sizeBytes: file.sizeBytes,
+    contentHash: file.contentHash,
     treatmentSessionId: file.treatmentSessionId,
     phase: file.phase,
   };
 }
+
+/** A file the antivirus flagged: refused on upload, never served on download. */
+const infectedFile = () =>
+  new UnprocessableEntityException({
+    statusCode: 422,
+    code: 'PATIENT_FILE_INFECTED',
+    message:
+      'El antivirus detectó contenido malicioso en el archivo: no se guardó ni puede abrirse.',
+  });
 
 const invalidFile = (message: string) =>
   new BadRequestException({ statusCode: 400, code: 'PATIENT_FILE_INVALID', message });
@@ -81,13 +96,29 @@ function cleanFileName(original: string): string {
   return (base || 'archivo').slice(0, 200);
 }
 
+/**
+ * Takes the file row for the rest of the caller's transaction. Removing a file and making it the
+ * report of a result both start with it, then read its state: one waits for the other and sees
+ * what it left, so a result never ends up with a removed report.
+ */
+export async function lockPatientFileRow(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  fileId: string,
+): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "PatientFile" WHERE "id" = ${fileId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+}
+
 @Injectable()
 export class PatientFilesService {
+  private readonly logger = new Logger(PatientFilesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: ClinicalAuditService,
     private readonly crypto: ClinicalCryptoService,
     @Inject(FILE_STORAGE) private readonly storage: FileStorage,
+    @Inject(FILE_SCANNER) private readonly scanner: FileScanner,
   ) {}
 
   async list(tenantId: string, patientId: string, actor: ClinicalActor) {
@@ -139,12 +170,25 @@ export class PatientFilesService {
       await assertOpenEncounter(this.prisma, tenantId, patientId, dto.encounterId, actor);
     }
 
+    // Scanned before anything is stored: an infected file never reaches the storage, and when
+    // the antivirus cannot answer nothing is stored either (503 FILE_SCAN_UNAVAILABLE).
+    const scan = await this.scanner.scan(part.buffer);
+    if (scan.status === 'INFECTED') {
+      // The signature name and the tenant only: never the file name nor the patient.
+      this.logger.warn(`Rejected an infected upload in tenant ${tenantId}: ${scan.signature}`);
+      throw infectedFile();
+    }
+
     const storageKey = `${tenantId}/${patientId}/${randomUUID()}`;
     const sizeBytes = part.buffer.length;
     await this.storage.put(storageKey, this.crypto.encryptBuffer(tenantId, part.buffer));
 
     try {
       return await this.transaction(async (tx) => {
+        // Holds the encounter open until the file is in: a close running now waits for it.
+        if (dto.encounterId && !(await lockOpenEncounter(tx, tenantId, dto.encounterId))) {
+          await assertOpenEncounter(tx, tenantId, patientId, dto.encounterId, actor);
+        }
         await this.reserveSpace(tx, tenantId, actor, sizeBytes);
 
         const stored = await tx.patientFile.create({
@@ -161,8 +205,12 @@ export class PatientFilesService {
             mimeType: part.mimetype,
             sizeBytes,
             storageKey,
+            // Over the bytes as uploaded, so it never depends on the encryption key.
+            contentHash: bytesContentHash(part.buffer),
             treatmentSessionId: session?.treatmentSessionId,
             phase: session?.phase,
+            scanStatus: scan.status,
+            ...(scan.status === 'CLEAN' ? { scannedAt: new Date(), scanEngine: scan.engine } : {}),
           },
           include: fileInclude,
         });
@@ -198,9 +246,28 @@ export class PatientFilesService {
       where: { id: fileId, tenantId, patientId, deletedAt: null },
     });
     if (!stored) throw clinicalRecordNotFound('Archivo no encontrado');
+    if (stored.scanStatus === 'INFECTED') throw infectedFile();
     const file = this.decrypt(stored);
 
     const data = this.crypto.decryptBuffer(tenantId, await this.storage.get(file.storageKey));
+
+    // A file stored before scanning existed is scanned the first time it is read again.
+    if (stored.scanStatus === 'NOT_SCANNED' && this.scanner.enabled) {
+      const scan = await this.scanner.scan(data);
+      await this.prisma.patientFile.update({
+        where: { id: stored.id },
+        data: {
+          scanStatus: scan.status,
+          ...(scan.status === 'NOT_SCANNED'
+            ? {}
+            : { scannedAt: new Date(), scanEngine: scan.engine }),
+        },
+      });
+      if (scan.status === 'INFECTED') {
+        this.logger.warn(`Quarantined a stored file in tenant ${tenantId}: ${scan.signature}`);
+        throw infectedFile();
+      }
+    }
 
     await this.audit.record(tenantId, actor, [
       { action: 'READ', entity: 'PATIENT_FILE', entityId: fileId, patientId },
@@ -218,12 +285,26 @@ export class PatientFilesService {
     dto: DeletePatientFileDto,
   ) {
     return this.transaction(async (tx) => {
+      await lockPatientFileRow(tx, tenantId, fileId);
       const stored = await tx.patientFile.findFirst({
         where: { id: fileId, tenantId, patientId, deletedAt: null },
+        include: { clinicalResult: { select: { id: true } } },
       });
       if (!stored) throw clinicalRecordNotFound('Archivo no encontrado');
       if (stored.uploadedById !== actor.userId) {
         throw clinicalRecordForbidden('Solo puedes eliminar los archivos que subiste');
+      }
+      // The report of a clinical result: removing it would leave the result without its report.
+      if (stored.clinicalResult) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'PATIENT_FILE_IN_RESULT',
+          message: 'El archivo es el informe de un resultado clínico: no se puede eliminar.',
+        });
+      }
+      // A file of an encounter is part of its signature; while it is open, it stays open.
+      if (stored.encounterId && !(await lockOpenEncounter(tx, tenantId, stored.encounterId))) {
+        throw patientFileSigned();
       }
 
       await tx.patientFile.update({

@@ -4,8 +4,10 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
-import { LoginDto, AuthResponseDto } from './dto/auth.dto';
+import { LoginDto, AuthResponseDto, MfaChallengeDto, VerifyMfaLoginDto } from './dto/auth.dto';
+import { MfaService } from './mfa.service';
 import { getInactivityTimeoutMs } from './session-inactivity';
+import { sessionEnded } from './session-version';
 import { MailService } from '../mail/mail.service';
 
 type JwtExpiresIn = NonNullable<JwtSignOptions['expiresIn']>;
@@ -17,9 +19,14 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private mail: MailService,
+    private mfa: MfaService,
   ) {}
 
-  async login(loginDto: LoginDto): Promise<AuthResponseDto> {
+  /**
+   * The first step of a sign-in. An account with two-factor sign-in gets a short-lived challenge
+   * instead of tokens, and completes it with `verifyMfaLogin`.
+   */
+  async login(loginDto: LoginDto): Promise<AuthResponseDto | MfaChallengeDto> {
     const { email, password } = loginDto;
 
     const users = await this.prisma.user.findMany({
@@ -28,7 +35,10 @@ export class AuthService {
         isActive: true,
         tenant: { isActive: true },
       },
-      include: { tenant: true, professionalProfile: { include: { specialty: true } } },
+      include: {
+        tenant: { include: { settings: { select: { requireMfa: true } } } },
+        professionalProfile: { include: { specialty: true } },
+      },
     });
 
     if (users.length === 0) {
@@ -54,26 +64,71 @@ export class AuthService {
 
     const user = matchingUsers[0];
 
+    if (user.mfaEnabledAt) {
+      return { mfaRequired: true, mfaToken: this.mfa.challengeToken(user.id) };
+    }
+    return this.openSession(user);
+  }
+
+  /** The second step: a code of the authenticator app, or one of the recovery codes. */
+  async verifyMfaLogin(dto: VerifyMfaLoginDto): Promise<AuthResponseDto> {
+    const userId = this.mfa.userIdOfChallenge(dto.mfaToken);
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, isActive: true, tenant: { isActive: true } },
+      include: {
+        tenant: { include: { settings: { select: { requireMfa: true } } } },
+        professionalProfile: { include: { specialty: true } },
+      },
+    });
+    if (!user?.mfaEnabledAt) throw new UnauthorizedException('Credenciales inválidas');
+    if (!(await this.mfa.verify(user, { code: dto.code, recoveryCode: dto.recoveryCode }))) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        code: 'MFA_CODE_INVALID',
+        message: 'El código no es correcto o ya se usó.',
+      });
+    }
+    return this.openSession(user);
+  }
+
+  /**
+   * A new session for the account that just confirmed its second factor. Enabling it ends every
+   * other session (they never passed it), so the one that confirmed the code continues with this.
+   */
+  async sessionAfterMfaEnrolment(userId: string): Promise<AuthResponseDto> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, isActive: true, tenant: { isActive: true } },
+      include: {
+        tenant: { include: { settings: { select: { requireMfa: true } } } },
+        professionalProfile: { include: { specialty: true } },
+      },
+    });
+    if (!user?.mfaEnabledAt) throw new UnauthorizedException('Usuario no encontrado');
+    return this.openSession(user);
+  }
+
+  private async openSession(user: any): Promise<AuthResponseDto> {
     await this.prisma.user.update({
       where: { id: user.id },
       data: { lastActivityAt: new Date() },
     });
-
-    // Generate tokens
     const tokens = await this.generateTokens(user);
+    return { ...tokens, user: this.sessionUser(user) };
+  }
 
+  /** The account as the clients keep it after signing in or refreshing. */
+  private sessionUser(user: any): AuthResponseDto['user'] {
     return {
-      ...tokens,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-        tenantId: user.tenantId,
-        mustChangePassword: user.mustChangePassword,
-        professionalProfile: user.professionalProfile ?? undefined,
-      },
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role,
+      tenantId: user.tenantId,
+      mustChangePassword: user.mustChangePassword,
+      professionalProfile: user.professionalProfile ?? undefined,
+      mfaEnabled: Boolean(user.mfaEnabledAt),
+      mfaEnrollmentRequired: this.mfa.enrollmentRequired(user),
     };
   }
 
@@ -95,7 +150,10 @@ export class AuthService {
             where: { token: refreshToken },
             include: {
               user: {
-                include: { tenant: true, professionalProfile: { include: { specialty: true } } },
+                include: {
+                  tenant: { include: { settings: { select: { requireMfa: true } } } },
+                  professionalProfile: { include: { specialty: true } },
+                },
               },
             },
           });
@@ -117,6 +175,13 @@ export class AuthService {
 
           if (!user.isActive || !user.tenant.isActive) {
             throw new UnauthorizedException('Usuario o tenant inactivo');
+          }
+
+          // Issued under an earlier session version: the second factor was enabled or reset
+          // after it, possibly while the sign-in that created it was still running.
+          if (sessionEnded(payload, user)) {
+            await this.revokeTokenFamily(storedToken.familyId);
+            throw new UnauthorizedException('La sesión terminó');
           }
 
           if (
@@ -144,19 +209,7 @@ export class AuthService {
           // Generate new tokens with same family
           const tokens = await this.generateTokens(user, storedToken.familyId);
 
-          return {
-            ...tokens,
-            user: {
-              id: user.id,
-              email: user.email,
-              firstName: user.firstName,
-              lastName: user.lastName,
-              role: user.role,
-              tenantId: user.tenantId,
-              mustChangePassword: user.mustChangePassword,
-              professionalProfile: user.professionalProfile ?? undefined,
-            },
-          };
+          return { ...tokens, user: this.sessionUser(user) };
         },
       );
     } catch (error) {
@@ -317,6 +370,10 @@ export class AuthService {
       email: user.email,
       tenantId: user.tenantId,
       role: user.role,
+      // The version of the account read when this sign-in or refresh started. Enabling or
+      // resetting the second factor bumps it, so a token issued from a read made before that is
+      // refused even if it is signed after it (see sessionEnded).
+      sv: user.sessionVersion ?? 0,
     };
 
     const accessToken = this.jwtService.sign(payload, {

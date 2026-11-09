@@ -44,9 +44,10 @@ export type ConsentDocumentView = Omit<ConsentDocument, 'pdfStorageKey' | 'body'
 };
 
 /** The state of a document stored in the audit log; no text, signature or storage key. */
-function snapshotConsentDocument(document: ConsentDocument) {
+export function snapshotConsentDocument(document: ConsentDocument) {
   return {
     treatmentSessionId: document.treatmentSessionId,
+    encounterId: document.encounterId,
     templateVersionId: document.templateVersionId,
     checksum: document.checksum,
     status: document.status,
@@ -58,18 +59,18 @@ function snapshotConsentDocument(document: ConsentDocument) {
   };
 }
 
-const sha256 = (data: Buffer) => createHash('sha256').update(data).digest('hex');
-const fullName = (person: { firstName: string; lastName: string }) =>
+export const sha256 = (data: Buffer) => createHash('sha256').update(data).digest('hex');
+export const fullName = (person: { firstName: string; lastName: string }) =>
   `${person.firstName} ${person.lastName}`.trim();
 
-const documentNotFound = () =>
+export const documentNotFound = () =>
   new NotFoundException({
     statusCode: 404,
     code: 'CONSENT_DOCUMENT_NOT_FOUND',
     message: 'Documento de consentimiento no encontrado.',
   });
 
-const invalidState = (status?: ConsentDocumentStatus) =>
+export const invalidState = (status?: ConsentDocumentStatus) =>
   new ConflictException({
     statusCode: 409,
     code: 'CONSENT_DOCUMENT_INVALID_STATE',
@@ -85,7 +86,7 @@ const invalidSignature = () =>
   });
 
 /** The PNG bytes of a signature data URL, checked by what they are, not by what they say. */
-function parseSignature(raw: string): Buffer {
+export function parseSignature(raw: string): Buffer {
   if (typeof raw !== 'string' || !raw.startsWith(SIGNATURE_PREFIX)) throw invalidSignature();
   if (raw.length > MAX_SIGNATURE_CHARS) throw invalidSignature();
   const encoded = raw.slice(SIGNATURE_PREFIX.length);
@@ -658,12 +659,18 @@ export class ConsentDocumentsService {
     if (claimed.count === 0) throw invalidState();
   }
 
+  /**
+   * A document of a treatment session. The consents of clinical procedures (owned by an
+   * encounter) are handled by ProcedureConsentsService and are not found here.
+   */
   private async findDocument(
     db: Prisma.TransactionClient | PrismaService,
     tenantId: string,
     documentId: string,
   ): Promise<ConsentDocument> {
-    const document = await db.consentDocument.findFirst({ where: { id: documentId, tenantId } });
+    const document = await db.consentDocument.findFirst({
+      where: { id: documentId, tenantId, treatmentSessionId: { not: null } },
+    });
     if (!document) throw documentNotFound();
     return document;
   }

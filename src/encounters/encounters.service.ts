@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -13,6 +14,16 @@ import {
   clinicalRecordForbidden,
   clinicalRecordNotFound,
 } from '../clinical-access/clinical-errors';
+import {
+  bytesContentHash,
+  encounterContentHash,
+  fileContentHash,
+  noteContentHash,
+  orderContentHash,
+  recordContentHash,
+} from '../clinical-access/clinical-signature';
+import { ENCRYPTED_NOTE_FIELDS } from '../clinical-notes/encrypted-note-fields';
+import { FILE_STORAGE, FileStorage } from '../patient-files/file-storage';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CloseEncounterDto,
@@ -50,6 +61,9 @@ export function snapshotEncounter(encounter: Encounter) {
     summary: encounter.summary,
     startedAt: encounter.startedAt,
     closedAt: encounter.closedAt,
+    signedAt: encounter.signedAt,
+    signedById: encounter.signedById,
+    contentHash: encounter.contentHash,
   };
 }
 
@@ -91,12 +105,45 @@ export async function assertOpenEncounter(
   }
 }
 
+/**
+ * Takes the encounter row for the rest of the caller's transaction. Changing the encounter
+ * itself (editing, removing, closing and signing it) starts with it, before its state is read:
+ * those operations then run one after the other, and each one sees what the previous one left.
+ */
+async function lockEncounterRow(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  encounterId: string,
+): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "Encounter" WHERE "id" = ${encounterId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+}
+
+/**
+ * Holds the encounter open until the caller's transaction ends: it takes a shared lock on the
+ * row, so closing (which signs what the encounter holds) waits for writes already under way, and
+ * a write that starts after the close sees it closed. Returns false when it is not open.
+ */
+export async function lockOpenEncounter(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  encounterId: string,
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Encounter"
+    WHERE "id" = ${encounterId} AND "tenantId" = ${tenantId}
+      AND "status" = 'OPEN' AND "deletedAt" IS NULL
+    FOR SHARE`;
+  return rows.length > 0;
+}
+
 @Injectable()
 export class EncountersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: ClinicalAuditService,
     private readonly crypto: ClinicalCryptoService,
+    // Files uploaded before their hash existed are read once, when their encounter is signed.
+    @Inject(FILE_STORAGE) private readonly storage: Pick<FileStorage, 'get'>,
   ) {}
 
   /** Encounters of the patient, newest first, with how many live records each one holds. */
@@ -237,6 +284,7 @@ export class EncountersService {
     dto: UpdateEncounterDto,
   ) {
     return this.transaction(async (tx) => {
+      await lockEncounterRow(tx, tenantId, encounterId);
       const current = await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'editar');
       assertNotManagedBySession(current);
 
@@ -302,6 +350,9 @@ export class EncountersService {
     summary?: string,
     options: { anyAuthor?: boolean } = {},
   ): Promise<Encounter> {
+    // Writes into the encounter hold a shared lock on it: closing waits for them to finish, and
+    // the ones that come after find it closed. What is signed below is therefore final.
+    await lockEncounterRow(tx, tenantId, encounterId);
     const current = await this.findOwnOpen(
       tx,
       tenantId,
@@ -311,13 +362,22 @@ export class EncountersService {
       'cerrar',
     );
     const trimmed = summary?.trim();
+    const closedAt = new Date();
+    const contentHash = await this.signContents(tx, tenantId, encounterId, closedAt, {
+      ...current,
+      summary: trimmed || current.summary,
+      closedAt,
+    });
 
     const stored = await tx.encounter.update({
       where: { id: encounterId },
       data: {
         status: 'CLOSED',
-        closedAt: new Date(),
+        closedAt,
         ...(trimmed ? { summary: this.crypto.encrypt(tenantId, trimmed) } : {}),
+        signedAt: closedAt,
+        signedById: actor.userId,
+        contentHash,
         version: { increment: 1 },
       },
       include: encounterInclude,
@@ -355,6 +415,88 @@ export class EncountersService {
     return encounter;
   }
 
+  /**
+   * Signs the records, notes and files the encounter holds as of `signedAt` and returns the hash
+   * of the encounter, which covers theirs. Records keep the date of their last change: signing is not one.
+   */
+  private async signContents(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    encounterId: string,
+    signedAt: Date,
+    encounter: Parameters<typeof encounterContentHash>[0],
+  ): Promise<string> {
+    const records = await tx.specialtyRecord.findMany({
+      where: { tenantId, encounterId, deletedAt: null },
+    });
+    const recordHashes: { id: string; contentHash: string }[] = [];
+    for (const record of records) {
+      const contentHash = recordContentHash({
+        ...record,
+        data: this.crypto.decryptJson(tenantId, record.data),
+        notes: record.notes === null ? null : this.crypto.decrypt(tenantId, record.notes),
+        amendmentReason:
+          record.amendmentReason === null
+            ? null
+            : this.crypto.decrypt(tenantId, record.amendmentReason),
+      });
+      recordHashes.push({ id: record.id, contentHash });
+      if (!record.signedAt) {
+        await tx.specialtyRecord.update({
+          where: { id: record.id },
+          data: { signedAt, contentHash, updatedAt: record.updatedAt },
+        });
+      }
+    }
+
+    const notes = await tx.clinicalNote.findMany({
+      where: { tenantId, encounterId, deletedAt: null },
+    });
+    const noteHashes = notes.map((stored) => {
+      const note = this.crypto.decryptFields(tenantId, stored, ENCRYPTED_NOTE_FIELDS);
+      return { id: note.id, contentHash: noteContentHash(note) };
+    });
+
+    const files = await tx.patientFile.findMany({
+      where: { tenantId, encounterId, deletedAt: null },
+    });
+    const fileHashes: { id: string; contentHash: string }[] = [];
+    for (const file of files) {
+      let bytesHash = file.contentHash;
+      if (!bytesHash) {
+        const bytes = this.crypto.decryptBuffer(tenantId, await this.storage.get(file.storageKey));
+        bytesHash = bytesContentHash(bytes);
+        await tx.patientFile.update({ where: { id: file.id }, data: { contentHash: bytesHash } });
+      }
+      fileHashes.push({
+        id: file.id,
+        contentHash: fileContentHash({
+          ...file,
+          fileName: this.crypto.decrypt(tenantId, file.fileName),
+          description:
+            file.description === null ? null : this.crypto.decrypt(tenantId, file.description),
+          contentHash: bytesHash,
+        }),
+      });
+    }
+
+    const orders = await tx.clinicalOrder.findMany({ where: { tenantId, encounterId } });
+    const orderHashes: { id: string; contentHash: string }[] = [];
+    for (const stored of orders) {
+      const order = this.crypto.decryptFields(tenantId, stored, ['studyName', 'indication']);
+      const contentHash = orderContentHash(order);
+      orderHashes.push({ id: order.id, contentHash });
+      if (!stored.signedAt) {
+        await tx.clinicalOrder.update({
+          where: { id: stored.id },
+          data: { signedAt, contentHash, updatedAt: stored.updatedAt },
+        });
+      }
+    }
+
+    return encounterContentHash(encounter, recordHashes, noteHashes, fileHashes, orderHashes);
+  }
+
   /** An encounter started by mistake. It must hold no records; the row stays for audit. */
   async delete(
     tenantId: string,
@@ -364,14 +506,37 @@ export class EncountersService {
     dto: DeleteEncounterDto,
   ) {
     return this.transaction(async (tx) => {
+      await lockEncounterRow(tx, tenantId, encounterId);
       const current = await this.findOwn(tx, tenantId, patientId, encounterId, actor, 'eliminar');
       assertNotManagedBySession(current);
+      if (current.status === 'CLOSED') {
+        throw conflict(
+          'ENCOUNTER_SIGNED',
+          'La atención está cerrada y firmada: no se puede eliminar.',
+        );
+      }
 
       const records = await tx.specialtyRecord.count({ where: { encounterId, deletedAt: null } });
-      if (records > 0) {
+      const orders = await tx.clinicalOrder.count({ where: { tenantId, encounterId } });
+      if (records + orders > 0) {
         throw conflict(
           'ENCOUNTER_HAS_RECORDS',
-          'La atención tiene registros. Elimínalos antes de eliminar la atención.',
+          'La atención tiene registros u órdenes. Elimina sus registros; si tiene órdenes, ciérrala en lugar de eliminarla.',
+        );
+      }
+      // Notes and files of a removed encounter could not be changed nor removed any more (they
+      // follow its state, and it is no longer open), and a consent stays as it was signed.
+      const notes = await tx.clinicalNote.count({
+        where: { tenantId, encounterId, deletedAt: null },
+      });
+      const files = await tx.patientFile.count({
+        where: { tenantId, encounterId, deletedAt: null },
+      });
+      const consents = await tx.consentDocument.count({ where: { tenantId, encounterId } });
+      if (notes + files + consents > 0) {
+        throw conflict(
+          'ENCOUNTER_HAS_RECORDS',
+          'La atención tiene notas, archivos o consentimientos. Elimina sus notas y archivos; si tiene consentimientos, ciérrala en lugar de eliminarla.',
         );
       }
 

@@ -8,6 +8,11 @@ import { ClinicalNotesController } from '../../clinical-notes/clinical-notes.con
 import { ClinicalTimelineController } from '../../clinical-timeline/clinical-timeline.controller';
 import { ConsentTemplatesController } from '../../consents/consent-templates.controller';
 import { EncountersController } from '../../encounters/encounters.controller';
+import {
+  ClinicalOrdersController,
+  PatientClinicalOrdersController,
+} from '../../clinical-orders/clinical-orders.controller';
+import { ProcedureConsentsController } from '../../procedure-consents/procedure-consents.controller';
 import { NextSessionPlansController } from '../../next-session-plans/next-session-plans.controller';
 import { PatientFilesController } from '../../patient-files/patient-files.controller';
 import { PatientsController } from '../../patients/patients.controller';
@@ -48,6 +53,9 @@ const controllers: Controller[] = [
   SpecialtyRecordsController,
   ClinicalNotesController,
   EncountersController,
+  ClinicalOrdersController,
+  PatientClinicalOrdersController,
+  ProcedureConsentsController,
   ClinicalTimelineController,
   NextSessionPlansController,
   PatientFilesController,
@@ -224,6 +232,7 @@ describe('permission catalog', () => {
         'billing.controller.ts',
         'cash-registers.controller.ts',
         'clinical-notes.controller.ts',
+        'clinical-orders.controller.ts',
         'clinical-timeline.controller.ts',
         'consent-documents.controller.ts',
         'consent-templates.controller.ts',
@@ -234,6 +243,7 @@ describe('permission catalog', () => {
         'orders.controller.ts',
         'patient-files.controller.ts',
         'patients.controller.ts',
+        'procedure-consents.controller.ts',
         'products.controller.ts',
         'record-documents.controller.ts',
         'stock.controller.ts',

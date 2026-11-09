@@ -17,6 +17,13 @@ describe('renderConsentText', () => {
     );
   });
 
+  it('names the procedure, and the treatment where there is no procedure', () => {
+    expect(
+      renderConsentText('{{procedimiento}}', { ...values, procedimiento: 'Inserción de DIU' }),
+    ).toBe('Inserción de DIU');
+    expect(renderConsentText('{{procedimiento}}', values)).toBe('Toxina botulínica');
+  });
+
   it('tolerates spaces inside the braces', () => {
     expect(renderConsentText('Yo, {{ paciente }}, y {{  fecha  }}', values)).toBe(
       'Yo, Ana Pérez, y 15 de octubre de 2026',

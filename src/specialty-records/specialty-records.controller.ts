@@ -12,6 +12,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { ClinicalActor, CurrentClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalProfileGuard } from '../clinical-access/clinical-profile.guard';
+import { SignerVerificationService } from '../clinical-access/signer-verification.service';
 import { Roles } from '../common/decorators/roles.decorator';
 import {
   CreateSpecialtyRecordDto,
@@ -28,7 +29,10 @@ import { RequirePermission } from '../common/permissions/permission-catalog';
 @UseGuards(ClinicalProfileGuard)
 @Controller('tenants/:tenantId/patients/:patientId/specialty-records')
 export class SpecialtyRecordsController {
-  constructor(private readonly recordsService: SpecialtyRecordsService) {}
+  constructor(
+    private readonly recordsService: SpecialtyRecordsService,
+    private readonly signer: SignerVerificationService,
+  ) {}
 
   @Get()
   @Roles('MASTER', 'PROFESIONAL')
@@ -85,12 +89,16 @@ export class SpecialtyRecordsController {
       'The data is validated against the module or form definition. Specialty modules can only be written by professionals of that specialty.',
   })
   @RequirePermission('clinical_records.create')
-  create(
+  async create(
     @Param('tenantId') tenantId: string,
     @Param('patientId') patientId: string,
     @CurrentClinicalActor() actor: ClinicalActor,
     @Body() dto: CreateSpecialtyRecordDto,
   ) {
+    // Signed as it is saved (an addendum, or outside any encounter): who signs is checked again.
+    if (dto.amendsRecordId || !dto.encounterId) {
+      await this.signer.verify(actor.userId, dto.password);
+    }
     return this.recordsService.create(tenantId, patientId, actor, dto);
   }
 

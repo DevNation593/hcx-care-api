@@ -51,6 +51,9 @@ function tinyPng(): Buffer {
   ]);
 }
 
+// Signing reads the bytes of files that have no hash yet.
+const fileBytes = { get: jest.fn() };
+
 describe('ConsentDocumentsService', () => {
   const cipher = new ClinicalCipher(
     parseClinicalKeys(`test:${randomBytes(32).toString('base64')}`),
@@ -173,11 +176,17 @@ describe('ConsentDocumentsService', () => {
     consentSignature: { create: jest.fn() },
     consentEvent: { create: jest.fn() },
     auditLog: { createMany: jest.fn() },
+    // Closing an encounter (revoking a consent) signs what it holds.
+    specialtyRecord: { findMany: jest.fn(), update: jest.fn() },
+    clinicalNote: { findMany: jest.fn() },
+    patientFile: { findMany: jest.fn(), update: jest.fn() },
+    clinicalOrder: { findMany: jest.fn(), update: jest.fn() },
+    $queryRaw: jest.fn(),
   };
   const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
   const prismaService = prisma as unknown as PrismaService;
   const audit = new ClinicalAuditService(prismaService, cipher);
-  const encounters = new EncountersService(prismaService, audit, cipher);
+  const encounters = new EncountersService(prismaService, audit, cipher, fileBytes);
   const sessions = new TreatmentSessionsService(
     prismaService,
     audit,
@@ -208,6 +217,11 @@ describe('ConsentDocumentsService', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    db.specialtyRecord.findMany.mockResolvedValue([]);
+    db.clinicalNote.findMany.mockResolvedValue([]);
+    db.patientFile.findMany.mockResolvedValue([]);
+    db.clinicalOrder.findMany.mockResolvedValue([]);
+    db.$queryRaw.mockResolvedValue([{ id: 'locked' }]);
     objects.clear();
     storage.put.mockImplementation(async (key: string, data: Buffer) => {
       if (objects.has(key)) throw new Error('exists');
@@ -652,7 +666,7 @@ describe('ConsentDocumentsService', () => {
       expect(storage.put).not.toHaveBeenCalled();
     });
 
-    it('does not find a document of another tenant', async () => {
+    it('does not find a document of another tenant, nor one of a clinical procedure', async () => {
       db.consentDocument.findFirst.mockResolvedValue(null);
 
       await expect(sign()).rejects.toMatchObject({
@@ -662,6 +676,7 @@ describe('ConsentDocumentsService', () => {
       expect(db.consentDocument.findFirst.mock.calls[0][0].where).toEqual({
         id: 'doc-1',
         tenantId: 'tenant-1',
+        treatmentSessionId: { not: null },
       });
     });
 

@@ -1,3 +1,4 @@
+import { NoFileScanner } from '../patient-files/file-scanner';
 import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCipher } from '../clinical-access/clinical-cipher';
@@ -28,6 +29,9 @@ const JPEG_WITH_EXIF = Buffer.concat([SOI, APP0, EXIF, SOS, SCAN, EOI]);
 const JPEG_CLEAN = Buffer.concat([SOI, APP0, SOS, SCAN, EOI]);
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 const PDF = Buffer.from('%PDF-1.7\nInforme');
+
+// Signing reads the bytes of files that have no hash yet.
+const fileBytes = { get: jest.fn() };
 
 describe('SessionMediaService', () => {
   const plain = new ClinicalCipher();
@@ -84,6 +88,8 @@ describe('SessionMediaService', () => {
     remove: async (key) => void blobs.delete(key),
   };
   const db = {
+    // Uploads into an encounter hold it open while the file goes in.
+    $queryRaw: jest.fn(),
     patient: { findFirst: jest.fn() },
     encounter: { findFirst: jest.fn() },
     tenantSubscription: { findUnique: jest.fn(), updateMany: jest.fn() },
@@ -99,13 +105,13 @@ describe('SessionMediaService', () => {
     audit,
     plain,
     new TreatmentsService(prismaService, new ConsentTemplatesService(prismaService)),
-    new EncountersService(prismaService, audit, plain),
+    new EncountersService(prismaService, audit, plain, fileBytes),
     new SpecialtyRecordsService(prismaService, audit, plain),
   );
   const service = new SessionMediaService(
     prismaService,
     sessions,
-    new PatientFilesService(prismaService, audit, plain, storage),
+    new PatientFilesService(prismaService, audit, plain, storage, new NoFileScanner()),
   );
 
   const part = (overrides: Partial<UploadedFilePart> = {}): UploadedFilePart => ({
@@ -131,6 +137,7 @@ describe('SessionMediaService', () => {
       professionalId: 'pro',
       status: 'OPEN',
     });
+    db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
     db.tenantSubscription.findUnique.mockResolvedValue({ storageGB: 1 });
     db.tenantSubscription.updateMany.mockResolvedValue({ count: 1 });
     db.patientFile.create.mockImplementation(({ data }) =>

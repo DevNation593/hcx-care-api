@@ -98,6 +98,34 @@ export class UpdateTenantSettingsDto {
   @IsOptional()
   reminderEnabled?: boolean;
 
+  // Clinical inbox thresholds, decided by the clinic.
+  @ApiPropertyOptional({
+    example: 3,
+    description: 'Days a received result may wait for review before it shows as overdue',
+  })
+  @IsInt()
+  @IsOptional()
+  @Min(1)
+  @Max(90)
+  resultReviewAlertDays?: number;
+
+  @ApiPropertyOptional({
+    example: 15,
+    description: 'Days an order may wait for its result before it shows as overdue',
+  })
+  @IsInt()
+  @IsOptional()
+  @Min(1)
+  @Max(365)
+  orderResultAlertDays?: number;
+  @ApiPropertyOptional({
+    example: true,
+    description: 'Require two-factor sign-in for the account holder and the professionals',
+  })
+  @IsBoolean()
+  @IsOptional()
+  requireMfa?: boolean;
+
   // Locale & timezone
   @ApiPropertyOptional({
     example: 'America/Mexico_City',

@@ -1,3 +1,5 @@
+import { AuthResponseDto } from '../src/auth/dto/auth.dto';
+import { MfaService } from '../src/auth/mfa.service';
 import { MailService } from '../src/mail/mail.service';
 import { AuthService } from '../src/auth/auth.service';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -53,11 +55,15 @@ describe('Auth professional profile payload', () => {
       jwt as JwtService,
       { get: jest.fn().mockReturnValue('secret') } as unknown as ConfigService,
       {} as MailService,
+      { enrollmentRequired: () => false } as unknown as MfaService,
     );
   });
 
   it('includes specialty in login while retaining the persisted JWT role', async () => {
-    const result = await service.login({ email: user.email, password: 'Password123!' });
+    const result = (await service.login({
+      email: user.email,
+      password: 'Password123!',
+    })) as AuthResponseDto;
     expect(result.user).toMatchObject({
       id: user.id,
       tenantId: user.tenantId,
@@ -67,7 +73,10 @@ describe('Auth professional profile payload', () => {
     expect(JSON.parse(result.accessToken).role).toBe('MASTER');
     expect(db.user.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        include: { tenant: true, professionalProfile: { include: { specialty: true } } },
+        include: {
+          tenant: { include: { settings: { select: { requireMfa: true } } } },
+          professionalProfile: { include: { specialty: true } },
+        },
       }),
     );
   });
@@ -92,7 +101,10 @@ describe('Auth professional profile payload', () => {
       expect.objectContaining({
         include: {
           user: {
-            include: { tenant: true, professionalProfile: { include: { specialty: true } } },
+            include: {
+              tenant: { include: { settings: { select: { requireMfa: true } } } },
+              professionalProfile: { include: { specialty: true } },
+            },
           },
         },
       }),

@@ -15,8 +15,14 @@ import {
   clinicalRecordForbidden,
   clinicalRecordNotFound,
 } from '../clinical-access/clinical-errors';
+import {
+  clinicalRecordSigned,
+  clinicalRecordVersionConflict,
+  isRecordSigned,
+  recordContentHash,
+} from '../clinical-access/clinical-signature';
 import { evaluateFormAlerts, FormAlert, FormSchema } from '../clinical-forms/form-schema';
-import { assertOpenEncounter } from '../encounters/encounters.service';
+import { assertOpenEncounter, lockOpenEncounter } from '../encounters/encounters.service';
 import {
   CUSTOM_MODULE_PREFIX,
   findClinicalModule,
@@ -47,6 +53,8 @@ const recordInclude = {
   },
   appointment: { select: { id: true, title: true, startTime: true } },
   encounter: { select: { id: true, encounterType: true, status: true, startedAt: true } },
+  // The addendum that corrects it, if any: the record is then shown as superseded.
+  amendedBy: { select: { id: true, createdAt: true } },
 } satisfies Prisma.SpecialtyRecordInclude;
 
 /** What a record is validated and rendered with: one version of a module or tenant form. */
@@ -77,6 +85,10 @@ export function snapshotSpecialtyRecord(record: SpecialtyRecord) {
     recordDate: record.recordDate,
     data: record.data,
     notes: record.notes,
+    amendsRecordId: record.amendsRecordId,
+    amendmentReason: record.amendmentReason,
+    signedAt: record.signedAt,
+    contentHash: record.contentHash,
   };
 }
 
@@ -89,7 +101,16 @@ export function decryptSpecialtyRecord<T extends SpecialtyRecord>(
     ...record,
     data: cipher.decryptJson(record.tenantId, record.data),
     notes: record.notes === null ? null : cipher.decrypt(record.tenantId, record.notes),
+    amendmentReason:
+      record.amendmentReason === null
+        ? null
+        : cipher.decrypt(record.tenantId, record.amendmentReason),
   };
+}
+
+/** What the client gets: the record with whether it is signed, and so final. */
+function present<T extends Parameters<typeof isRecordSigned>[0]>(record: T) {
+  return { ...record, signed: isRecordSigned(record) };
 }
 
 const moduleUnknown = () =>
@@ -98,6 +119,12 @@ const moduleUnknown = () =>
     code: 'CLINICAL_MODULE_UNKNOWN',
     message: 'El módulo no tiene una definición clínica.',
   });
+
+const amendmentInvalid = (message: string) =>
+  new BadRequestException({ statusCode: 400, code: 'CLINICAL_AMENDMENT_INVALID', message });
+
+const conflictOf = (code: string, message: string, extra: Record<string, unknown> = {}) =>
+  new ConflictException({ statusCode: 409, code, message, ...extra });
 
 const moduleVersionOutdated = () =>
   new ConflictException({
@@ -136,7 +163,7 @@ export class SpecialtyRecordsService {
     );
 
     return records.map((record) => ({
-      ...record,
+      ...present(record),
       alerts: this.alertsOf(definitionOf(record), record.data),
     }));
   }
@@ -157,7 +184,11 @@ export class SpecialtyRecordsService {
       { action: 'READ', entity: 'SPECIALTY_RECORD', entityId: recordId, patientId },
     ]);
 
-    return { ...record, verificationCode, alerts: this.alertsOf(definition, record.data) };
+    return {
+      ...present(record),
+      verificationCode,
+      alerts: this.alertsOf(definition, record.data),
+    };
   }
 
   /**
@@ -211,8 +242,9 @@ export class SpecialtyRecordsService {
   ): Promise<PatientClinicalAlert[]> {
     await this.assertPatient(tenantId, patientId);
     const stored = await this.prisma.specialtyRecord.findMany({
-      where: { tenantId, patientId, deletedAt: null },
-      orderBy: { recordDate: 'desc' },
+      // A record corrected by an addendum no longer speaks for the patient: its addendum does.
+      where: { tenantId, patientId, deletedAt: null, amendedBy: null },
+      orderBy: [{ recordDate: 'desc' }, { createdAt: 'desc' }],
     });
     const definitionOf = await this.definitionsOf(tenantId, stored);
 
@@ -262,6 +294,13 @@ export class SpecialtyRecordsService {
       : await this.resolveModule(tenantId, actor, dto);
     const data = validateModuleData(target.definition, dto.data);
 
+    if (dto.amendsRecordId) {
+      return this.amend(tenantId, patientId, actor, dto, target, data);
+    }
+    if (dto.amendmentReason !== undefined) {
+      throw amendmentInvalid('El motivo de corrección solo acompaña a una adenda.');
+    }
+
     if (dto.appointmentId) {
       const appointment = await this.prisma.appointment.findFirst({
         where: { id: dto.appointmentId, tenantId, patientId },
@@ -275,7 +314,11 @@ export class SpecialtyRecordsService {
     }
 
     return this.transaction(async (tx) => {
-      const stored = await tx.specialtyRecord.create({
+      // Holds the encounter open until the record is in: a close running now waits for it.
+      if (dto.encounterId && !(await lockOpenEncounter(tx, tenantId, dto.encounterId))) {
+        throw conflictOf('ENCOUNTER_CLOSED', 'La atención ya está cerrada.');
+      }
+      const created = await tx.specialtyRecord.create({
         data: {
           tenantId,
           patientId,
@@ -293,6 +336,8 @@ export class SpecialtyRecordsService {
         },
         include: recordInclude,
       });
+      // Outside an encounter there is no close to sign it: it is signed as it is saved.
+      const stored = dto.encounterId ? created : await this.sign(tx, tenantId, created);
       const record = decryptSpecialtyRecord(this.crypto, stored);
 
       await this.audit.record(
@@ -310,13 +355,150 @@ export class SpecialtyRecordsService {
         tx,
       );
 
-      return { ...record, alerts: this.alertsOf(target.definition, record.data) };
+      return { ...present(record), alerts: this.alertsOf(target.definition, record.data) };
     });
   }
 
   /**
-   * A correction by the author. The data is checked against the version the record was
-   * written under, the record version is bumped and the previous state stays in the audit log.
+   * An addendum: the author corrects a signed record with a new one of the same module, written
+   * in the same encounter and appointment and dated like the original, which stays as signed.
+   * It is signed as it is saved. A record takes one addendum; to correct again, amend the addendum.
+   */
+  private async amend(
+    tenantId: string,
+    patientId: string,
+    actor: ClinicalActor,
+    dto: CreateSpecialtyRecordDto,
+    target: { definition: RecordDefinition; formDefinitionId: string | null; specialtyId: string },
+    data: Record<string, unknown>,
+  ) {
+    const reason = dto.amendmentReason?.trim();
+    if (!reason) throw amendmentInvalid('Indica el motivo de la corrección.');
+    if (dto.encounterId || dto.appointmentId || dto.recordDate) {
+      throw amendmentInvalid(
+        'La adenda queda en la atención, la cita y la fecha del registro que corrige.',
+      );
+    }
+
+    return this.transaction(async (tx) => {
+      const original = await this.findOwnRecord(
+        tx,
+        tenantId,
+        patientId,
+        dto.amendsRecordId!,
+        actor,
+        'corregir',
+      );
+      if (!isRecordSigned(original)) {
+        throw conflictOf(
+          'CLINICAL_RECORD_NOT_SIGNED',
+          'El registro aún no está firmado: corrígelo directamente.',
+        );
+      }
+      if (original.moduleKey !== dto.moduleKey) {
+        throw amendmentInvalid('La adenda debe usar el mismo formulario que el registro.');
+      }
+      const existing = await tx.specialtyRecord.findUnique({
+        where: { amendsRecordId: original.id },
+        select: { id: true },
+      });
+      if (existing) {
+        throw conflictOf(
+          'CLINICAL_RECORD_ALREADY_AMENDED',
+          'El registro ya tiene una adenda. Corrige la adenda.',
+          { amendedById: existing.id },
+        );
+      }
+
+      let created;
+      try {
+        created = await tx.specialtyRecord.create({
+          data: {
+            tenantId,
+            patientId,
+            professionalId: actor.userId,
+            specialtyId: target.specialtyId,
+            moduleKey: dto.moduleKey,
+            schemaVersion: target.definition.schemaVersion,
+            verificationCode: newVerificationCode(),
+            formDefinitionId: target.formDefinitionId,
+            appointmentId: original.appointmentId,
+            encounterId: original.encounterId,
+            recordDate: original.recordDate,
+            data: this.crypto.encryptJson(tenantId, data) as Prisma.InputJsonValue,
+            notes: dto.notes === undefined ? undefined : this.crypto.encrypt(tenantId, dto.notes),
+            amendsRecordId: original.id,
+            amendmentReason: this.crypto.encrypt(tenantId, reason),
+          },
+          include: recordInclude,
+        });
+      } catch (error) {
+        // Another addendum of the same record was saved in between.
+        if ((error as { code?: string }).code === 'P2002') {
+          throw conflictOf(
+            'CLINICAL_RECORD_ALREADY_AMENDED',
+            'El registro ya tiene una adenda. Corrige la adenda.',
+          );
+        }
+        throw error;
+      }
+      const record = decryptSpecialtyRecord(this.crypto, await this.sign(tx, tenantId, created));
+
+      await this.audit.record(
+        tenantId,
+        actor,
+        [
+          {
+            action: 'CREATE',
+            entity: 'SPECIALTY_RECORD',
+            entityId: record.id,
+            patientId,
+            after: snapshotSpecialtyRecord(record),
+            reason,
+          },
+        ],
+        tx,
+      );
+
+      return { ...present(record), alerts: this.alertsOf(target.definition, record.data) };
+    });
+  }
+
+  /** Signs a record as it stands: its hash covers the decrypted content. */
+  private async sign<T extends SpecialtyRecord>(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    stored: T,
+  ): Promise<T> {
+    const contentHash = recordContentHash(decryptSpecialtyRecord(this.crypto, stored));
+    const signedAt = new Date();
+    await tx.specialtyRecord.update({
+      where: { id: stored.id },
+      data: { signedAt, contentHash, updatedAt: stored.updatedAt },
+      select: { id: true },
+    });
+    return { ...stored, signedAt, contentHash };
+  }
+
+  /**
+   * A record that is not yet signed (in an encounter still open) can be corrected and removed
+   * by its author; a signed one cannot. Holds the encounter open for the rest of the transaction.
+   */
+  private async assertEditable(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    record: Parameters<typeof isRecordSigned>[0],
+  ) {
+    if (isRecordSigned(record)) throw clinicalRecordSigned();
+    if (!(await lockOpenEncounter(tx, tenantId, record.encounterId!))) {
+      throw clinicalRecordSigned();
+    }
+  }
+
+  /**
+   * A correction by the author while the record is not signed. The data is checked against the
+   * version the record was written under, the record version is bumped and the previous state
+   * stays in the audit log. A `version` that is no longer current is a 409: someone else saved.
    */
   async update(
     tenantId: string,
@@ -334,7 +516,11 @@ export class SpecialtyRecordsService {
         actor,
         'corregir',
       );
+      await this.assertEditable(tx, tenantId, current);
       await this.assertNotStartedSessionForm(tx, tenantId, recordId);
+      if (dto.version !== undefined && dto.version !== current.version) {
+        throw clinicalRecordVersionConflict(current.version);
+      }
       const definition = (await this.definitionsOf(tenantId, [current], tx))(current);
 
       let data: Record<string, unknown> | undefined;
@@ -343,8 +529,9 @@ export class SpecialtyRecordsService {
         data = validateModuleData(definition, dto.data);
       }
 
-      const stored = await tx.specialtyRecord.update({
-        where: { id: recordId },
+      // Only the version read above is replaced: a save in between makes this a conflict.
+      const { count } = await tx.specialtyRecord.updateMany({
+        where: { id: recordId, version: current.version },
         data: {
           ...(data
             ? { data: this.crypto.encryptJson(tenantId, data) as Prisma.InputJsonValue }
@@ -355,6 +542,16 @@ export class SpecialtyRecordsService {
           ...(dto.recordDate ? { recordDate: new Date(dto.recordDate) } : {}),
           version: { increment: 1 },
         },
+      });
+      if (count === 0) {
+        const latest = await tx.specialtyRecord.findUnique({
+          where: { id: recordId },
+          select: { version: true },
+        });
+        throw clinicalRecordVersionConflict(latest?.version ?? current.version);
+      }
+      const stored = await tx.specialtyRecord.findUniqueOrThrow({
+        where: { id: recordId },
         include: recordInclude,
       });
       const record = decryptSpecialtyRecord(this.crypto, stored);
@@ -376,7 +573,7 @@ export class SpecialtyRecordsService {
         tx,
       );
 
-      return { ...record, alerts: this.alertsOf(definition, record.data) };
+      return { ...present(record), alerts: this.alertsOf(definition, record.data) };
     });
   }
 
@@ -396,6 +593,7 @@ export class SpecialtyRecordsService {
         actor,
         'eliminar',
       );
+      await this.assertEditable(tx, tenantId, current);
       await this.assertNotStartedSessionForm(tx, tenantId, recordId);
 
       // The row stays for audit; it only stops being listed.
@@ -473,6 +671,7 @@ export class SpecialtyRecordsService {
         actor,
         'corregir',
       );
+      await this.assertEditable(tx, tenantId, current);
       const stored = await tx.specialtyRecord.update({
         where: { id: current.id },
         data: { data: encrypted, version: { increment: 1 } },
@@ -498,6 +697,9 @@ export class SpecialtyRecordsService {
     }
 
     await assertOpenEncounter(tx, tenantId, patientId, input.encounterId, actor);
+    if (!(await lockOpenEncounter(tx, tenantId, input.encounterId))) {
+      throw conflictOf('ENCOUNTER_CLOSED', 'La atención ya está cerrada.');
+    }
     const stored = await tx.specialtyRecord.create({
       data: {
         tenantId,
@@ -700,6 +902,7 @@ export class SpecialtyRecordsService {
   ) {
     const stored = await tx.specialtyRecord.findFirst({
       where: { id: recordId, tenantId, patientId, deletedAt: null },
+      include: { encounter: { select: { status: true } } },
     });
     if (!stored) {
       throw clinicalRecordNotFound('Registro no encontrado');
