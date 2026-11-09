@@ -5,7 +5,7 @@ import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UsersController } from '../../users/users.controller';
-import { JwtStrategy } from './jwt.strategy';
+import { issuedBeforeMfaEnabled, JwtStrategy } from './jwt.strategy';
 
 describe('JwtStrategy current account authority', () => {
   let strategy: JwtStrategy;
@@ -82,5 +82,37 @@ describe('JwtStrategy current account authority', () => {
       UnauthorizedException,
     );
     expect(db.user.update).not.toHaveBeenCalled();
+  });
+
+  describe('sessions opened before two-factor sign-in was enabled', () => {
+    const enabledAt = new Date('2026-11-09T10:00:00.500Z');
+
+    it('ends a session issued before it, even within the same second', async () => {
+      user.mfaEnabledAt = enabledAt;
+      await expect(
+        strategy.validate({ ...payload('ASISTENTE'), issuedAtMs: enabledAt.getTime() - 200 }),
+      ).rejects.toMatchObject({ response: { code: 'SESSION_ENDED_BY_MFA' } });
+      expect(db.user.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps the session issued after it', async () => {
+      user.mfaEnabledAt = enabledAt;
+      const principal = await strategy.validate({
+        ...payload('ASISTENTE'),
+        issuedAtMs: enabledAt.getTime() + 1,
+      });
+      expect(principal.userId).toBe('member-1');
+    });
+
+    it('reads a token without issuedAtMs by its iat, rounded down', () => {
+      // 10:00:00 counts as earlier than 10:00:00.500: an old token is never taken as newer.
+      expect(
+        issuedBeforeMfaEnabled({ iat: Math.floor(enabledAt.getTime() / 1000) }, enabledAt),
+      ).toBe(true);
+      expect(issuedBeforeMfaEnabled({ iat: enabledAt.getTime() / 1000 + 1 }, enabledAt)).toBe(
+        false,
+      );
+      expect(issuedBeforeMfaEnabled({ issuedAtMs: 1 }, null)).toBe(false);
+    });
   });
 });

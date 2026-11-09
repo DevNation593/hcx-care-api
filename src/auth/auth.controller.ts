@@ -87,9 +87,15 @@ export class AuthController {
   @Throttle(AUTH_THROTTLE)
   @Post('mfa/enable')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Confirm the enrolment with a code; returns the recovery codes once' })
-  enableMfa(@CurrentUser() user: AuthUser, @Body() dto: MfaCodeDto) {
-    return this.mfa.enable(user.userId, dto.code);
+  @ApiOperation({
+    summary: 'Confirm the enrolment with a code; returns the recovery codes once',
+    description:
+      'Ends every other session of the account and returns new tokens for this one, which the client must use from now on.',
+  })
+  async enableMfa(@CurrentUser() user: AuthUser, @Body() dto: MfaCodeDto) {
+    const { recoveryCodes } = await this.mfa.enable(user.userId, dto.code);
+    const session = await this.authService.sessionAfterMfaEnrolment(user.userId);
+    return { recoveryCodes, ...session };
   }
 
   @ApiBearerAuth('access-token')
