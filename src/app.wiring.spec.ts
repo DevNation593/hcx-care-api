@@ -25,6 +25,8 @@ import {
   PatientClinicalOrdersController,
 } from './clinical-orders/clinical-orders.controller';
 import { ClinicalOrdersModule } from './clinical-orders/clinical-orders.module';
+import { ProcedureConsentsController } from './procedure-consents/procedure-consents.controller';
+import { ProcedureConsentsModule } from './procedure-consents/procedure-consents.module';
 import { FILE_STORAGE } from './patient-files/file-storage';
 import { PatientFilesController } from './patient-files/patient-files.controller';
 import { PatientFilesModule } from './patient-files/patient-files.module';
@@ -58,6 +60,7 @@ describe('module wiring', () => {
         ClinicalModulesModule,
         EncountersModule,
         ClinicalOrdersModule,
+        ProcedureConsentsModule,
         PatientFilesModule,
         ReportsModule,
         RecordDocumentsModule,
@@ -83,6 +86,7 @@ describe('module wiring', () => {
       EncountersController,
       ClinicalOrdersController,
       PatientClinicalOrdersController,
+      ProcedureConsentsController,
       PatientFilesController,
       SpecialtyRecordsController,
       TreatmentSessionsController,

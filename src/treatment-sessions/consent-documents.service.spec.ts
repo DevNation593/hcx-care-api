@@ -666,7 +666,7 @@ describe('ConsentDocumentsService', () => {
       expect(storage.put).not.toHaveBeenCalled();
     });
 
-    it('does not find a document of another tenant', async () => {
+    it('does not find a document of another tenant, nor one of a clinical procedure', async () => {
       db.consentDocument.findFirst.mockResolvedValue(null);
 
       await expect(sign()).rejects.toMatchObject({
@@ -676,6 +676,7 @@ describe('ConsentDocumentsService', () => {
       expect(db.consentDocument.findFirst.mock.calls[0][0].where).toEqual({
         id: 'doc-1',
         tenantId: 'tenant-1',
+        treatmentSessionId: { not: null },
       });
     });
 

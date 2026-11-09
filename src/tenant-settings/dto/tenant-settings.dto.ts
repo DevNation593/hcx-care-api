@@ -118,6 +118,13 @@ export class UpdateTenantSettingsDto {
   @Min(1)
   @Max(365)
   orderResultAlertDays?: number;
+  @ApiPropertyOptional({
+    example: true,
+    description: 'Require two-factor sign-in for the account holder and the professionals',
+  })
+  @IsBoolean()
+  @IsOptional()
+  requireMfa?: boolean;
 
   // Locale & timezone
   @ApiPropertyOptional({

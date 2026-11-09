@@ -26,6 +26,9 @@ export type EncryptionReport = Record<
   | 'clinicalOrders'
   | 'clinicalResults'
   | 'clinicalFollowUps'
+  | 'consentDocuments'
+  | 'consentSignatures'
+  | 'mfaSecrets'
   | 'auditLogs',
   { scanned: number; updated: number }
 >;
@@ -43,6 +46,9 @@ type EncryptionClient = Record<
   | 'clinicalOrder'
   | 'clinicalResult'
   | 'clinicalFollowUp'
+  | 'consentDocument'
+  | 'consentSignature'
+  | 'user'
   | 'auditLog',
   Delegate
 >;
@@ -174,6 +180,31 @@ export async function encryptClinicalData(
       {},
       cipher,
       ['title', 'description', 'closureNote'],
+      [],
+      dryRun,
+    ),
+    consentDocuments: await processTable(
+      client.consentDocument,
+      {},
+      cipher,
+      ['title', 'body', 'procedureName'],
+      [],
+      dryRun,
+    ),
+    consentSignatures: await processTable(
+      client.consentSignature,
+      {},
+      cipher,
+      ['signerName', 'signerIdentification', 'relationship', 'witnessName'],
+      [],
+      dryRun,
+    ),
+    // Two-factor secrets are encrypted with the same keys: rotating them must carry these along.
+    mfaSecrets: await processTable(
+      client.user,
+      { OR: [{ mfaSecret: { not: null } }, { mfaPendingSecret: { not: null } }] },
+      cipher,
+      ['mfaSecret', 'mfaPendingSecret'],
       [],
       dryRun,
     ),

@@ -1,3 +1,4 @@
+import { MfaService } from './mfa.service';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -41,6 +42,7 @@ describe('AuthService password reset', () => {
     new JwtService({}),
     { get: (name: string) => config[name] } as unknown as ConfigService,
     mail as unknown as MailService,
+    { enrollmentRequired: () => false } as unknown as MfaService,
   );
   const sentToken = () => mail.sendPasswordReset.mock.calls[0][1].token as string;
 

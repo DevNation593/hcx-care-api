@@ -12,6 +12,7 @@ import {
   ClinicalOrdersController,
   PatientClinicalOrdersController,
 } from '../../clinical-orders/clinical-orders.controller';
+import { ProcedureConsentsController } from '../../procedure-consents/procedure-consents.controller';
 import { NextSessionPlansController } from '../../next-session-plans/next-session-plans.controller';
 import { PatientFilesController } from '../../patient-files/patient-files.controller';
 import { PatientsController } from '../../patients/patients.controller';
@@ -54,6 +55,7 @@ const controllers: Controller[] = [
   EncountersController,
   ClinicalOrdersController,
   PatientClinicalOrdersController,
+  ProcedureConsentsController,
   ClinicalTimelineController,
   NextSessionPlansController,
   PatientFilesController,
@@ -241,6 +243,7 @@ describe('permission catalog', () => {
         'orders.controller.ts',
         'patient-files.controller.ts',
         'patients.controller.ts',
+        'procedure-consents.controller.ts',
         'products.controller.ts',
         'record-documents.controller.ts',
         'stock.controller.ts',
