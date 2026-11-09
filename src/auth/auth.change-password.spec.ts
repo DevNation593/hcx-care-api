@@ -1,3 +1,6 @@
+import { UnauthorizedException } from '@nestjs/common';
+import { AuthResponseDto } from './dto/auth.dto';
+import { MfaService } from './mfa.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -31,6 +34,7 @@ describe('AuthService own password change and session flag', () => {
     new JwtService({}),
     { get: (name: string) => config[name] } as unknown as ConfigService,
     {} as MailService,
+    { enrollmentRequired: () => false } as unknown as MfaService,
   );
 
   beforeEach(async () => {
@@ -86,7 +90,10 @@ describe('AuthService own password change and session flag', () => {
   });
 
   it('returns mustChangePassword in the login response', async () => {
-    const response = await service.login({ email: 'ana@example.com', password: 'Temporary1!' });
+    const response = (await service.login({
+      email: 'ana@example.com',
+      password: 'Temporary1!',
+    })) as AuthResponseDto;
 
     expect(response.user.mustChangePassword).toBe(true);
   });
@@ -107,5 +114,47 @@ describe('AuthService own password change and session flag', () => {
     const response = await service.refreshTokens(refreshToken);
 
     expect(response.user.mustChangePassword).toBe(true);
+  });
+
+  it('carries the session version of the account into the new tokens', async () => {
+    user.sessionVersion = 3;
+    const refreshToken = new JwtService({}).sign(
+      { sub: 'user-1', tenantId: 'tenant-1', role: 'MASTER', sv: 3 },
+      { secret: 'refresh-secret', expiresIn: '1h' },
+    );
+    prisma.refreshToken.findUnique.mockResolvedValue({
+      id: 'rt-1',
+      familyId: 'family-1',
+      isRevoked: false,
+      expiresAt: new Date(Date.now() + 3600_000),
+      user: { ...user },
+    });
+
+    const response = await service.refreshTokens(refreshToken);
+
+    expect(new JwtService({}).decode(response.accessToken)).toMatchObject({ sv: 3 });
+  });
+
+  it('refuses a refresh token of an earlier session version, even one never revoked', async () => {
+    // Issued by a refresh that read the account before its second factor was enabled.
+    user.sessionVersion = 1;
+    const refreshToken = new JwtService({}).sign(
+      { sub: 'user-1', tenantId: 'tenant-1', role: 'MASTER', sv: 0 },
+      { secret: 'refresh-secret', expiresIn: '1h' },
+    );
+    prisma.refreshToken.findUnique.mockResolvedValue({
+      id: 'rt-1',
+      familyId: 'family-1',
+      isRevoked: false,
+      expiresAt: new Date(Date.now() + 3600_000),
+      user: { ...user },
+    });
+
+    await expect(service.refreshTokens(refreshToken)).rejects.toThrow(UnauthorizedException);
+    expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
+      where: { familyId: 'family-1' },
+      data: { isRevoked: true },
+    });
+    expect(prisma.refreshToken.create).not.toHaveBeenCalled();
   });
 });

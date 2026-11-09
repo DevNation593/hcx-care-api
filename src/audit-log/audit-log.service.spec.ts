@@ -55,3 +55,53 @@ describe('AuditLogService clinical content', () => {
     });
   });
 });
+
+describe('AuditLogService, clinical orders, results and follow-ups', () => {
+  const cipher = new ClinicalCipher([{ id: 'k1', key: Buffer.alloc(32, 5) }]);
+  const changes = cipher.encryptJson('tenant-1', {
+    before: null,
+    after: { studyName: 'Citología' },
+  });
+  const logs = ['CLINICAL_ORDER', 'CLINICAL_RESULT', 'CLINICAL_FOLLOW_UP'].map((entity, index) => ({
+    id: `log-${index}`,
+    tenantId: 'tenant-1',
+    entity,
+    action: 'UPDATE',
+    changes,
+    reason: cipher.encrypt('tenant-1', 'Revisión del resultado'),
+  }));
+  const prisma = {
+    auditLog: { findMany: jest.fn() },
+    professionalProfile: { findFirst: jest.fn() },
+  };
+  const service = new AuditLogService(prisma as unknown as PrismaService, cipher);
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    prisma.auditLog.findMany.mockResolvedValue(logs);
+  });
+
+  it('decrypts their snapshots for a viewer with an active profile', async () => {
+    prisma.professionalProfile.findFirst.mockResolvedValue({ userId: 'master' });
+
+    const result = await service.findAll('tenant-1', 'master');
+
+    for (const entry of result) {
+      expect(entry).toMatchObject({
+        changes: { before: null, after: { studyName: 'Citología' } },
+        reason: 'Revisión del resultado',
+        contentRedacted: false,
+      });
+    }
+  });
+
+  it('hides them from an account holder without a profile', async () => {
+    prisma.professionalProfile.findFirst.mockResolvedValue(null);
+
+    const result = await service.findAll('tenant-1', 'master');
+
+    for (const entry of result) {
+      expect(entry).toMatchObject({ changes: null, reason: null, contentRedacted: true });
+    }
+  });
+});

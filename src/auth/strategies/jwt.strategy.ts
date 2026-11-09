@@ -4,12 +4,15 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActivityWriteIntervalMs, getInactivityTimeoutMs } from '../session-inactivity';
+import { MfaService } from '../mfa.service';
+import { sessionEnded } from '../session-version';
 
 interface JwtPayload {
   sub: string; // userId
   email: string;
   tenantId: string;
   role: string;
+  sv?: number;
 }
 
 @Injectable()
@@ -17,6 +20,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
+    private mfa: MfaService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -36,12 +40,20 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       () =>
         this.prisma.user.findUnique({
           where: { id: payload.sub },
-          include: { tenant: true },
+          include: { tenant: { include: { settings: { select: { requireMfa: true } } } } },
         }),
     );
 
     if (!user || !user.isActive || !user.tenant.isActive || user.tenantId !== payload.tenantId) {
       throw new UnauthorizedException('User or tenant is inactive');
+    }
+
+    if (sessionEnded(payload, user)) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        code: 'SESSION_ENDED',
+        message: 'Cambió la verificación en dos pasos de tu cuenta. Inicia sesión otra vez.',
+      });
     }
 
     const idleMs = user.lastActivityAt ? Date.now() - user.lastActivityAt.getTime() : null;
@@ -68,6 +80,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       role: user.role,
       isPlatformTenant: user.tenant.isPlatform,
       mustChangePassword: user.mustChangePassword,
+      mfaEnrollmentRequired: this.mfa.enrollmentRequired(user),
     };
   }
 }

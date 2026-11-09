@@ -257,13 +257,29 @@ GET /tenants/{tenantId}/patients/{patientId}/specialty-records?moduleKey=...
 # Standing alerts of the patient: every allergy record and the latest record of each other module.
 GET /tenants/{tenantId}/patients/{patientId}/specialty-records/alerts
 
-# Correct (author only): validated against the version the record was written under.
+# Correct (author only) while the record is not signed, that is, in an encounter still open:
+# validated against the version the record was written under. With `version`, a save made by
+# someone else since answers 409 CLINICAL_RECORD_VERSION_CONFLICT { currentVersion }.
 PATCH /tenants/{tenantId}/patients/{patientId}/specialty-records/{recordId}
-{ "data": { "weightKg": 69.5, "heightCm": 170 }, "changeReason": "Peso mal digitado" }
+{ "data": { "weightKg": 69.5, "heightCm": 170 }, "changeReason": "Peso mal digitado", "version": 1 }
 
-# Remove (author only): soft delete with a mandatory reason.
+# Remove (author only, not signed): soft delete with a mandatory reason.
 DELETE /tenants/{tenantId}/patients/{patientId}/specialty-records/{recordId}
 { "reason": "Paciente equivocado" }
+
+# A signed record (its encounter closed, or saved outside any encounter) is never changed nor
+# removed: 409 CLINICAL_RECORD_SIGNED. Its author corrects it with an addendum, a new signed
+# record of the same module in the encounter, appointment and date of the original. One addendum
+# per record (409 CLINICAL_RECORD_ALREADY_AMENDED { amendedById }); a record not signed yet is
+# corrected directly (409 CLINICAL_RECORD_NOT_SIGNED). Records carry `signed`, `signedAt`,
+# `contentHash`, `amendsRecordId`, `amendmentReason` and `amendedBy: { id, createdAt } | null`.
+POST /tenants/{tenantId}/patients/{patientId}/specialty-records
+{ "moduleKey": "general.vital-signs", "schemaVersion": 1, "data": { "weightKg": 69.5, "heightCm": 170 },
+  "amendsRecordId": "...", "amendmentReason": "Peso mal digitado", "password": "..." }
+
+# Every explicit signature asks the password of the professional again: an addendum and a record
+# saved outside any encounter (both signed as they are saved) carry `password`. Missing or wrong:
+# 403 SIGNATURE_PASSWORD_INVALID, which keeps the session.
 ```
 
 A request without `schemaVersion` comes from a client older than the definitions: it is checked against the legacy version of the module when one exists (the previous required keys, any value), otherwise against the current one. Other codes: `400 CLINICAL_MODULE_UNKNOWN`, `409 CLINICAL_MODULE_VERSION_OUTDATED`.
@@ -284,6 +300,36 @@ PATCH /tenants/{tenantId}/form-definitions/{formId}
 
 Field types: `text`, `textarea`, `integer`, `decimal`, `date`, `time`, `checkbox`, `radio`, `select`, `multiselect`, `scale`, `table` (scalar columns) and `calculated`. Formulas and alert conditions use a small expression language that is parsed, never evaluated as code: field keys, numbers, `'text'`, `+ - * / ^`, comparisons, `and` / `or` / `not`, and `sum`, `avg`, `min`, `max`, `round`, `abs`. An invalid definition answers `400 FORM_DEFINITION_INVALID` with one issue per problem.
 
+#### Procedure consents, antivirus and two-factor sign-in
+
+Details in `docs/CLINICAL_SECURITY.md`.
+
+```bash
+# Consents of clinical procedures, in an open encounter of the caller (core.clinical.specialties).
+GET  /tenants/{tenantId}/procedure-consents/templates
+GET  /tenants/{tenantId}/patients/{patientId}/procedure-consents
+POST /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}/procedure-consents
+{ "templateId": "...", "procedureName": "Inserción de DIU" }
+POST /tenants/{tenantId}/procedure-consents/{id}/sign     # SignConsentDto + optional witnessName
+POST /tenants/{tenantId}/procedure-consents/{id}/refuse   { "reason": "..." }
+POST /tenants/{tenantId}/procedure-consents/{id}/revoke   { "reason": "..." }
+GET  /tenants/{tenantId}/procedure-consents/{id}/pdf
+
+# Patient files carry scanStatus (NOT_SCANNED, CLEAN, INFECTED). With FILE_SCAN_DRIVER=clamav an
+# upload answers 422 PATIENT_FILE_INFECTED or 503 FILE_SCAN_UNAVAILABLE and stores nothing.
+
+# Two-factor sign-in. Login of an account with it: { mfaRequired: true, mfaToken }.
+POST /auth/mfa/verify          { "mfaToken": "...", "code": "123456" }   # or "recoveryCode"
+GET  /auth/mfa                 # { enabled, required, recoveryCodesLeft }
+POST /auth/mfa/setup           { "password": "..." }   # { secret, otpauthUrl, qrCodeDataUrl }
+POST /auth/mfa/enable          { "code": "123456" }    # { recoveryCodes } once
+POST /auth/mfa/disable         { "password": "...", "code": "123456" }   # 409 MFA_REQUIRED_BY_POLICY
+POST /auth/mfa/recovery-codes  { "code": "123456" }
+POST /tenants/{tenantId}/users/{userId}/mfa/reset    # MASTER, for a lost phone
+# PATCH /tenants/{tenantId}/settings { "requireMfa": true } makes the MASTER and the professionals
+# enrol: 403 MFA_ENROLLMENT_REQUIRED on every route but their session routes until they do.
+```
+
 #### Encounters, branches, catalogs and permissions
 
 ```bash
@@ -295,10 +341,68 @@ POST /tenants/{tenantId}/patients/{patientId}/encounters
 GET  /tenants/{tenantId}/patients/{patientId}/encounters
 
 # Records created with `encounterId` are written into that open encounter (409 ENCOUNTER_CLOSED).
-# Closing is the sign-off of the professional: no more records, and the appointment is COMPLETED.
-POST   /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}/close   { "summary": "..." }
+# Closing is the signature of the professional: the encounter, its records and notes get their
+# SHA-256 (`signedAt`, `signedById`, `contentHash`), take no more changes, and the appointment is
+# COMPLETED. Encounters closed before signatures existed have no hash but are as final. The
+# signature covers the files of the encounter (the SHA-256 of their bytes, taken on upload), which
+# can no longer be removed (409 PATIENT_FILE_SIGNED). `password` is required (403 above).
+POST   /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}/close   { "summary": "...", "password": "..." }
 PATCH  /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         # type or reason, while open
-DELETE /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         { "reason": "..." }  # only without records
+DELETE /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         { "reason": "..." }  # open and without records nor orders (409 ENCOUNTER_SIGNED)
+```
+
+#### Clinical orders, results and follow-ups
+
+Same access as the clinical record (`MASTER`/`PROFESIONAL` with an active profile of a health specialty, section `core.clinical.specialties`). Free text is stored encrypted; every read and change is audited (`CLINICAL_ORDER`, `CLINICAL_RESULT`, `CLINICAL_FOLLOW_UP`). Details in `docs/CLINICAL_ORDERS.md`.
+
+```bash
+# Order a study. With an open encounter of the caller it is signed when the encounter closes;
+# without one, saving signs it and `password` is required (403 SIGNATURE_PASSWORD_INVALID).
+# resultDueAt defaults to orderedAt + the clinic's orderResultAlertDays.
+POST /tenants/{tenantId}/patients/{patientId}/clinical-orders
+{ "orderType": "PATHOLOGY", "studyName": "Citología", "indication": "...", "priority": "ROUTINE",
+  "provider": "...", "resultDueAt": "...", "encounterId": "...", "password": "..." }
+GET  /tenants/{tenantId}/patients/{patientId}/clinical-orders      # with results and follow-ups
+GET  /tenants/{tenantId}/clinical-orders/{orderId}
+
+# Steps. Each sends the `version` it read: 409 CLINICAL_ORDER_VERSION_CONFLICT { currentVersion }.
+# A step that does not apply to the status: 409 CLINICAL_ORDER_INVALID_STATE.
+POST /tenants/{tenantId}/clinical-orders/{orderId}/sample     { "version": 1, "notes": "..." }
+POST /tenants/{tenantId}/clinical-orders/{orderId}/sent       { "version": 2, "provider": "...", "externalReference": "..." }
+# A result (text and/or a file of the patient, optionally its structured record) is a new version:
+# PENDING_REVIEW, never reviewed nor communicated by itself. Earlier unreviewed versions: SUPERSEDED.
+POST /tenants/{tenantId}/clinical-orders/{orderId}/results    { "version": 3, "content": "...", "fileId": "...", "recordId": "..." }
+# Review of the last version. FOLLOW_UP_REQUIRED and REPEAT_REQUIRED need `followUp`.
+POST /tenants/{tenantId}/clinical-results/{resultId}/review
+{ "decision": "REPEAT_REQUIRED", "note": "...", "appointmentNeeded": true,
+  "followUp": { "title": "Repetir citología", "dueDate": "...", "assignedToId": "..." } }
+POST /tenants/{tenantId}/clinical-results/{resultId}/communication   { "channel": "PHONE", "note": "..." }
+# Close: last result reviewed, no open follow-up (409 CLINICAL_ORDER_FOLLOW_UPS_OPEN); without a
+# recorded contact, `note` is required (400 CLINICAL_ORDER_COMPLETION_NOTE_REQUIRED).
+POST /tenants/{tenantId}/clinical-orders/{orderId}/complete   { "version": 5, "note": "..." }
+# Only an order without results: CANCELLED or NOT_PERFORMED, with a reason.
+POST /tenants/{tenantId}/clinical-orders/{orderId}/cancel     { "version": 1, "status": "NOT_PERFORMED", "reason": "..." }
+
+# Follow-ups close only explicitly; cancelling an appointment never closes them.
+GET   /tenants/{tenantId}/patients/{patientId}/clinical-follow-ups
+POST  /tenants/{tenantId}/patients/{patientId}/clinical-follow-ups   { "title": "...", "dueDate": "...", "assignedToId": "..." }
+# { items, total, page, pageSize }: 200 per page, the nearest date first.
+GET   /tenants/{tenantId}/clinical-follow-ups?status=OPEN&scope=mine|all&page=1
+# Editing a follow-up needs clinical_records.update; closing it, clinical_records.create.
+# Its responsible must be an active professional of a health specialty (400 FOLLOW_UP_ASSIGNEE_INVALID).
+PATCH /tenants/{tenantId}/clinical-follow-ups/{followUpId}           { "version": 1, "dueDate": "...", "assignedToId": "..." }
+POST  /tenants/{tenantId}/clinical-follow-ups/{followUpId}/close     { "version": 1, "status": "DONE", "note": "..." }
+
+# What waits: results to review, orders without a result, reviewed results not communicated and
+# open follow-ups, each `overdue` past the thresholds of the clinic (TenantSettings
+# resultReviewAlertDays, orderResultAlertDays). scope=mine (default) or all.
+# Each list holds 200 items per page, the oldest first; `totals` counts all of them and `page`
+# brings the next ones.
+GET /tenants/{tenantId}/clinical-inbox?scope=mine&page=1
+# A file that is the report of a result is never removed: 409 PATIENT_FILE_IN_RESULT.
+```
+
+```bash
 
 # Branches. Every clinic has a main one. A PERSONAL tenant has a single active branch.
 GET   /tenants/{tenantId}/branches

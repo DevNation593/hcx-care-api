@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClinicalAccessModule } from '../clinical-access/clinical-access.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { createFileScanner, FILE_SCANNER } from './file-scanner';
 import { FILE_STORAGE } from './file-storage';
 import { createFileStorage } from './file-storage.factory';
 import { PatientFilesController, StorageController } from './patient-files.controller';
@@ -13,7 +14,8 @@ import { PatientFilesService } from './patient-files.service';
   providers: [
     PatientFilesService,
     { provide: FILE_STORAGE, useFactory: createFileStorage, inject: [ConfigService] },
+    { provide: FILE_SCANNER, useFactory: createFileScanner, inject: [ConfigService] },
   ],
-  exports: [PatientFilesService, FILE_STORAGE],
+  exports: [PatientFilesService, FILE_STORAGE, FILE_SCANNER],
 })
 export class PatientFilesModule {}

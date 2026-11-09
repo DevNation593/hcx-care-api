@@ -65,9 +65,47 @@ export class CreateSpecialtyRecordDto {
   @IsString()
   @IsOptional()
   encounterId?: string;
+
+  @ApiPropertyOptional({
+    example: 'record_cuid',
+    description:
+      'Makes this an addendum: a correction of that signed record of the caller, with the same module. It takes the encounter, appointment and date of the original, which stays as signed.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @IsOptional()
+  amendsRecordId?: string;
+
+  @ApiPropertyOptional({
+    example: 'Días de reposo mal digitados.',
+    description: 'Required with amendsRecordId: why the signed record is corrected.',
+  })
+  @IsString()
+  @MaxLength(500)
+  @IsOptional()
+  amendmentReason?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The password of the professional, required when the record is signed as it is saved: an addendum, or a record outside any encounter. A wrong or missing one answers 403 SIGNATURE_PASSWORD_INVALID.',
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  password?: string;
 }
 
 export class UpdateSpecialtyRecordDto {
+  @ApiPropertyOptional({
+    example: 2,
+    description:
+      'The version the caller edited. If someone saved since, the answer is 409 CLINICAL_RECORD_VERSION_CONFLICT instead of overwriting their change.',
+  })
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  version?: number;
+
   @ApiPropertyOptional({
     description:
       'Replaces the data. It is checked against the version the record was written under.',

@@ -5,7 +5,11 @@ import { printable } from '../record-documents/record-pdf';
 export interface ConsentPdfInput {
   clinic: { name: string; address?: string | null };
   patient: { name: string; identification?: string | null };
-  treatment: { name: string; version: number };
+  /**
+   * What is consented to: a treatment and its version, or a clinical procedure (`label`
+   * "Procedimiento", no version).
+   */
+  treatment: { name: string; version: number | null; label?: string };
   templateVersion: { version: number; checksum: string };
   title: string;
   body: string;
@@ -19,7 +23,11 @@ export interface ConsentPdfInput {
     understood: boolean;
     questionsAnswered: boolean;
     marketingPhotos: boolean;
+    /** Who witnessed the signature, when someone did. */
+    witnessName?: string | null;
   };
+  /** Procedures take no photos for advertising: the declaration is left out. Defaults to true. */
+  showMarketingPhotos?: boolean;
   operatorName: string;
   signedAt: Date;
   /** Tenant time zone, used to print signedAt. */
@@ -138,8 +146,12 @@ export async function renderConsentPdf(input: ConsentPdfInput): Promise<Buffer> 
       .join('   ·   '),
   );
   doc.moveDown(0.5);
-  label('Tratamiento');
-  line(`${input.treatment.name} (versión ${input.treatment.version})`);
+  label(input.treatment.label ?? 'Tratamiento');
+  line(
+    input.treatment.version === null
+      ? input.treatment.name
+      : `${input.treatment.name} (versión ${input.treatment.version})`,
+  );
   doc.moveDown(0.8);
   rule();
 
@@ -182,12 +194,23 @@ export async function renderConsentPdf(input: ConsentPdfInput): Promise<Buffer> 
     .filter(Boolean)
     .join(' · ');
   doc.font('Helvetica').fontSize(9.5).fillColor(MUTED).text(printable(signer));
+  if (signature.witnessName) {
+    doc
+      .font('Helvetica')
+      .fontSize(9.5)
+      .fillColor(MUTED)
+      .text(printable(`Testigo: ${signature.witnessName}`));
+  }
   doc.moveDown(0.8);
 
   label('Declaraciones');
   line(`Comprendió la información: ${yesNo(signature.understood)}`);
   line(`Sus preguntas fueron respondidas: ${yesNo(signature.questionsAnswered)}`);
-  line(`Autoriza el uso de fotografías con fines de difusión: ${yesNo(signature.marketingPhotos)}`);
+  if (input.showMarketingPhotos !== false) {
+    line(
+      `Autoriza el uso de fotografías con fines de difusión: ${yesNo(signature.marketingPhotos)}`,
+    );
+  }
   doc.moveDown(0.8);
 
   label('Firmado');

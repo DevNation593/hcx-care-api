@@ -52,6 +52,7 @@ describe('ClinicalNotesService', () => {
       delete: jest.fn(),
     },
     auditLog: { createMany: jest.fn() },
+    $queryRaw: jest.fn(),
   };
   const prisma = { ...db, $transaction: jest.fn(), applyRlsContext: jest.fn() };
   const service = new ClinicalNotesService(
@@ -67,6 +68,8 @@ describe('ClinicalNotesService', () => {
     prisma.$transaction.mockImplementation((callback: (tx: unknown) => unknown) => callback(db));
     db.patient.findFirst.mockResolvedValue({ id: 'patient-1' });
     db.clinicalNote.findFirst.mockResolvedValue(note());
+    // Encounters are open unless a case closes one.
+    db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
   });
 
   afterEach(() => jest.useRealTimers());
@@ -284,6 +287,33 @@ describe('ClinicalNotesService', () => {
         service.delete('tenant-1', 'note-1', master, { reason: 'x' }),
       ).rejects.toMatchObject({ status: 403, response: { code: 'CLINICAL_RECORD_FORBIDDEN' } });
       expect(db.clinicalNote.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a note written in an encounter', () => {
+    beforeEach(() =>
+      db.clinicalNote.findFirst.mockResolvedValue(note({ encounterId: 'encounter-1' })),
+    );
+
+    it('is final once the encounter is closed and signed', async () => {
+      db.$queryRaw.mockResolvedValue([]);
+
+      await expect(
+        service.update('tenant-1', 'note-1', author, { content: 'x', changeReason: 'x' }),
+      ).rejects.toMatchObject({ status: 409, response: { code: 'CLINICAL_RECORD_SIGNED' } });
+      await expect(
+        service.delete('tenant-1', 'note-1', author, { reason: 'x' }),
+      ).rejects.toMatchObject({ status: 409, response: { code: 'CLINICAL_RECORD_SIGNED' } });
+      expect(db.clinicalNote.update).not.toHaveBeenCalled();
+    });
+
+    it('can still be corrected while the encounter is open', async () => {
+      db.clinicalNote.update.mockResolvedValue(note({ encounterId: 'encounter-1', version: 2 }));
+
+      await service.update('tenant-1', 'note-1', author, { content: 'x', changeReason: 'x' });
+
+      expect(db.$queryRaw).toHaveBeenCalled();
+      expect(db.clinicalNote.update).toHaveBeenCalled();
     });
   });
 });

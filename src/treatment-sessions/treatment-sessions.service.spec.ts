@@ -17,6 +17,9 @@ import {
 } from './dto/treatment-session.dto';
 import { TreatmentSessionsService } from './treatment-sessions.service';
 
+// Signing reads the bytes of files that have no hash yet.
+const fileBytes = { get: jest.fn() };
+
 describe('TreatmentSessionsService', () => {
   const plain = new ClinicalCipher();
   const professional: ClinicalActor = {
@@ -152,14 +155,17 @@ describe('TreatmentSessionsService', () => {
     },
     specialtyRecord: {
       findFirst: jest.fn(),
+      findMany: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
       count: jest.fn(),
     },
+    clinicalNote: { findMany: jest.fn() },
     formDefinitionVersion: { findFirst: jest.fn() },
     consentDocument: { findMany: jest.fn() },
     tenant: { findUnique: jest.fn() },
     patientFile: { findMany: jest.fn(), count: jest.fn() },
+    clinicalOrder: { findMany: jest.fn(), update: jest.fn() },
     auditLog: { createMany: jest.fn() },
     invoiceRequest: { findFirst: jest.fn() },
     $queryRaw: jest.fn(),
@@ -172,7 +178,7 @@ describe('TreatmentSessionsService', () => {
     audit,
     plain,
     new TreatmentsService(prismaService, new ConsentTemplatesService(prismaService)),
-    new EncountersService(prismaService, audit, plain),
+    new EncountersService(prismaService, audit, plain, fileBytes),
     new SpecialtyRecordsService(prismaService, audit, plain),
   );
   const auditRows = () => db.auditLog.createMany.mock.calls.flatMap(([args]) => args.data);
@@ -205,8 +211,15 @@ describe('TreatmentSessionsService', () => {
     db.consentDocument.findMany.mockResolvedValue([]);
     db.tenant.findUnique.mockResolvedValue({ settings: { timezone: 'America/Guayaquil' } });
     db.patientFile.findMany.mockResolvedValue([]);
+    db.clinicalOrder.findMany.mockResolvedValue([]);
     db.patientFile.count.mockResolvedValue(0);
     db.specialtyRecord.count.mockResolvedValue(0);
+    // Closing the encounter signs what it holds; row locks are granted.
+    db.specialtyRecord.findMany.mockResolvedValue([]);
+    db.clinicalNote.findMany.mockResolvedValue([]);
+    db.$queryRaw.mockResolvedValue([{ id: 'locked' }]);
+    db.patientFile.findMany.mockResolvedValue([]);
+    db.clinicalOrder.findMany.mockResolvedValue([]);
   });
 
   describe('create', () => {
@@ -660,7 +673,7 @@ describe('TreatmentSessionsService', () => {
       keyedAudit,
       cipher,
       new TreatmentsService(prismaService, new ConsentTemplatesService(prismaService)),
-      new EncountersService(prismaService, keyedAudit, cipher),
+      new EncountersService(prismaService, keyedAudit, cipher, fileBytes),
       new SpecialtyRecordsService(prismaService, keyedAudit, cipher),
     );
     const signedConsent = (overrides = {}) => ({

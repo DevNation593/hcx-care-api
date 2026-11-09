@@ -233,6 +233,23 @@ SUPABASE_URL=https://<project-ref>.supabase.co
 SUPABASE_SECRET_KEY=<secret-key>
 SUPABASE_STORAGE_BUCKET=<private-bucket>
 
+# Antivirus for patient files (SEG-09, CA-015). With FILE_SCAN_DRIVER=clamav every upload is
+# scanned by a ClamAV daemon (clamd) before it is stored; an infected file is refused (422) and,
+# while clamd does not answer, uploads are refused (503) rather than stored unscanned. Files
+# stored before are scanned at their next download. clamd must run outside Vercel (a small VM or
+# container with clamav-daemon and freshclam), reachable only from the API, on TCP 3310.
+# Without FILE_SCAN_DRIVER files are stored as NOT_SCANNED and the API says so in its log.
+FILE_SCAN_DRIVER=clamav
+CLAMAV_HOST=<clamd-host>
+CLAMAV_PORT=3310
+FILE_SCAN_TIMEOUT_MS=30000
+
+# Two-factor sign-in. Each clinic decides in Configuración whether to require it for its
+# account holder and professionals; this requires it for the platform administrators.
+PLATFORM_ADMIN_MFA_REQUIRED=true
+# The name authenticator apps show next to the account.
+MFA_ISSUER=HCX Care
+
 # CORS
 CORS_ORIGINS=https://app.yourdomain.com,https://www.yourdomain.com
 ```

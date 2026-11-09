@@ -1,9 +1,11 @@
+import { MfaService } from '../mfa.service';
 import { ConfigService } from '@nestjs/config';
 import { ExecutionContext, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UsersController } from '../../users/users.controller';
+import { sessionEnded } from '../session-version';
 import { JwtStrategy } from './jwt.strategy';
 
 describe('JwtStrategy current account authority', () => {
@@ -45,6 +47,7 @@ describe('JwtStrategy current account authority', () => {
     strategy = new JwtStrategy(
       { get: jest.fn().mockReturnValue('test-jwt-secret') } as unknown as ConfigService,
       db as PrismaService,
+      { enrollmentRequired: () => false } as unknown as MfaService,
     );
   });
 
@@ -56,11 +59,12 @@ describe('JwtStrategy current account authority', () => {
       tenantId: 'tenant-1',
       role: 'ASISTENTE',
       isPlatformTenant: false,
+      mfaEnrollmentRequired: false,
       mustChangePassword: true,
     });
     expect(db.user.findUnique).toHaveBeenCalledWith({
       where: { id: 'member-1' },
-      include: { tenant: true },
+      include: { tenant: { include: { settings: { select: { requireMfa: true } } } } },
     });
     expect(() =>
       new RolesGuard(new Reflector()).canActivate(adminCreateContext(principal)),
@@ -79,5 +83,30 @@ describe('JwtStrategy current account authority', () => {
       UnauthorizedException,
     );
     expect(db.user.update).not.toHaveBeenCalled();
+  });
+
+  describe('sessions of an earlier session version', () => {
+    it('ends a token issued under an earlier version, however late it was signed', async () => {
+      // A sign-in that read the account before its second factor was enabled.
+      user.sessionVersion = 1;
+      await expect(strategy.validate({ ...payload('ASISTENTE'), sv: 0 })).rejects.toMatchObject({
+        response: { code: 'SESSION_ENDED' },
+      });
+      expect(db.user.update).not.toHaveBeenCalled();
+    });
+
+    it('ends a token older than the version claim once the account has a newer version', async () => {
+      user.sessionVersion = 2;
+      await expect(strategy.validate(payload('ASISTENTE'))).rejects.toMatchObject({
+        response: { code: 'SESSION_ENDED' },
+      });
+    });
+
+    it('keeps the token of the current version, and the old tokens of an untouched account', async () => {
+      user.sessionVersion = 1;
+      expect((await strategy.validate({ ...payload('ASISTENTE'), sv: 1 })).userId).toBe('member-1');
+      expect(sessionEnded({}, { sessionVersion: 0 })).toBe(false);
+      expect(sessionEnded({}, {})).toBe(false);
+    });
   });
 });

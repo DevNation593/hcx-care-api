@@ -22,6 +22,7 @@ import {
 } from './seed-helpers';
 import { seedAestheticStudio } from './seed-aesthetic-studio';
 import { seedClinicalWorkflow } from './seed-clinical-workflow';
+import { signSeededClinicalContent } from './seed-signatures';
 
 export const DEMO_PASSWORD = 'Password123!';
 const PLATFORM_ADMIN_EMAIL = 'admin@plataforma.test';
@@ -104,6 +105,18 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
         isActive: true,
       },
     }),
+    db.specialty.upsert({
+      where: { code: 'GYNECOLOGY' },
+      update: { name: 'Ginecología', isActive: true },
+      create: {
+        id: 'specialty-gynecology',
+        code: 'GYNECOLOGY',
+        name: 'Ginecología',
+        description:
+          'Consulta ginecológica, antecedentes gineco-obstétricos, anticoncepción, tamizaje y procedimientos.',
+        isActive: true,
+      },
+    }),
   ]);
   // Retired from the catalog: no plan offers it and no clinic can select it.
   await db.specialty.upsert({
@@ -117,7 +130,7 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
     },
   });
 
-  const [psychology, nutrition, physiotherapy, dentistry, generalMedicine, aesthetics] =
+  const [psychology, nutrition, physiotherapy, dentistry, generalMedicine, aesthetics, gynecology] =
     specialties;
   const catalog: SpecialtyCatalog = {
     psychology,
@@ -126,6 +139,7 @@ async function seedSpecialtyCatalog(db: PrismaClient): Promise<SpecialtyCatalog>
     dentistry,
     generalMedicine,
     aesthetics,
+    gynecology,
   };
 
   await db.specialtyModule.createMany({
@@ -191,6 +205,10 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   await db.treatment.deleteMany();
   await db.consentTemplateVersion.deleteMany();
   await db.consentTemplate.deleteMany();
+  // Results restrict deleting their file, record and users; follow-ups and orders their users.
+  await db.clinicalFollowUp.deleteMany();
+  await db.clinicalResult.deleteMany();
+  await db.clinicalOrder.deleteMany();
   // Files restrict deleting their uploader, so they go before the users.
   await db.patientFile.deleteMany();
   await db.documentTemplate.deleteMany();
@@ -297,6 +315,8 @@ export async function seedDatabase(
 
   await seedClinicalWorkflow(ctx);
   await seedAestheticStudio(ctx);
+  // Signed as the API signs them, over the plain text, before it is encrypted below.
+  await signSeededClinicalContent(db);
 
   // The rows above are written as plain text; with a key configured they are stored as the
   // API stores them, so the demo data is readable by the API and nothing else.

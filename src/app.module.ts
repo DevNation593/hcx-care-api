@@ -26,6 +26,8 @@ import { SpecialtyRecordsModule } from './specialty-records/specialty-records.mo
 import { ClinicalModulesModule } from './clinical-modules/clinical-modules.module';
 import { BranchesModule } from './branches/branches.module';
 import { EncountersModule } from './encounters/encounters.module';
+import { ClinicalOrdersModule } from './clinical-orders/clinical-orders.module';
+import { ProcedureConsentsModule } from './procedure-consents/procedure-consents.module';
 import { CatalogsModule } from './catalogs/catalogs.module';
 import { PatientFilesModule } from './patient-files/patient-files.module';
 import { ReportsModule } from './reports/reports.module';
@@ -106,6 +108,8 @@ const throttleTtlMs = throttleTtlRaw < 1000 ? throttleTtlRaw * 1000 : throttleTt
     ClinicalModulesModule,
     BranchesModule,
     EncountersModule,
+    ClinicalOrdersModule,
+    ProcedureConsentsModule,
     CatalogsModule,
     PatientFilesModule,
     ReportsModule,
