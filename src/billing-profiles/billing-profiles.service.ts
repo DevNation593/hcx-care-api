@@ -41,6 +41,8 @@ type PatientFill = Partial<
 
 const blank = (value: string | null | undefined) => !value?.trim();
 
+const OWN = { ownIdentity: true } as const;
+
 const ISSUE_LABELS: Record<PatientBillingIssue, string> = {
   identification: 'la identificación',
   legalName: 'el nombre',
@@ -353,9 +355,10 @@ export class BillingProfilesService {
           await tx.patient.update({ where: { id: patientId }, data: fill, select: { id: true } });
         }
 
-        const profileId = await patientBillingProfileId(tx, tenantId, actorId, patientId);
+        // In the patient's own name: a legacy fiscal identity of the record is not used here.
+        const profileId = await patientBillingProfileId(tx, tenantId, actorId, patientId, OWN);
         if (!profileId) {
-          const draft = patientBillingDraft({ ...patient, ...fill });
+          const draft = patientBillingDraft({ ...patient, ...fill }, OWN);
           if (!draft.issues.includes('identification')) {
             const { idType, idNumber } = draft.data;
             const deactivated = await tx.billingProfile.findFirst({

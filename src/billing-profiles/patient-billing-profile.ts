@@ -45,16 +45,27 @@ const ISSUE_OF_PROPERTY: Record<string, PatientBillingIssue> = {
   phone: 'phone',
 };
 
+export interface PatientBillingOptions {
+  /**
+   * Bill the patient as a person: ignore the separately registered fiscal identity (the legacy
+   * billing* columns, which may name a third party). Order defaults keep using it.
+   */
+  ownIdentity?: boolean;
+}
+
 /**
  * The recipient the patient record forms, with the same requirements as manual creation, and
  * what in the record stops it from being valid. A separately registered fiscal identity is kept
- * together instead of being mixed with the patient's name.
+ * together instead of being mixed with the patient's name, unless `ownIdentity` is asked.
  */
-export function patientBillingDraft(patient: PatientBillingSource): {
+export function patientBillingDraft(
+  patient: PatientBillingSource,
+  { ownIdentity = false }: PatientBillingOptions = {},
+): {
   data: CreateBillingProfileDto;
   issues: PatientBillingIssue[];
 } {
-  const fiscal = Boolean(patient.billingTaxId?.trim());
+  const fiscal = !ownIdentity && Boolean(patient.billingTaxId?.trim());
   const rawIdType = fiscal ? patient.billingTaxIdType : patient.identificationType;
   const idType = PATIENT_ID_TYPES[rawIdType?.trim().toUpperCase() ?? ''];
   const rawNumber = (fiscal ? patient.billingTaxId : patient.identificationNumber) ?? '';
@@ -89,6 +100,7 @@ export async function patientBillingProfileId(
   tenantId: string,
   actorId: string,
   patientId: string,
+  options: PatientBillingOptions = {},
 ): Promise<string | null> {
   const patient = await tx.patient.findFirst({
     where: { id: patientId, tenantId, deletedAt: null },
@@ -96,7 +108,7 @@ export async function patientBillingProfileId(
   });
   if (!patient) return null;
 
-  const { data, issues } = patientBillingDraft(patient);
+  const { data, issues } = patientBillingDraft(patient, options);
   if (issues.includes('identification')) return null;
   const { idType, idNumber, legalName } = data;
 
