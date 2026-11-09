@@ -520,5 +520,14 @@ describe('PatientFilesService', () => {
       ).rejects.toMatchObject({ status: 403, response: { code: 'CLINICAL_RECORD_FORBIDDEN' } });
       expect(db.patientFile.update).not.toHaveBeenCalled();
     });
+
+    it('keeps the report of a clinical result: it is never removed', async () => {
+      db.patientFile.findFirst.mockResolvedValue({ ...row, clinicalResult: { id: 'result-1' } });
+
+      await expect(
+        service.delete('tenant-1', 'patient-1', 'file-1', dentist, { reason: 'Subido por error' }),
+      ).rejects.toMatchObject({ status: 409, response: { code: 'PATIENT_FILE_IN_RESULT' } });
+      expect(db.patientFile.update).not.toHaveBeenCalled();
+    });
   });
 });

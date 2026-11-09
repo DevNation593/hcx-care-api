@@ -50,6 +50,7 @@ describe('EncountersService', () => {
     specialtyRecord: { count: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     clinicalNote: { findMany: jest.fn() },
     patientFile: { findMany: jest.fn(), update: jest.fn() },
+    clinicalOrder: { findMany: jest.fn(), count: jest.fn(), update: jest.fn() },
     auditLog: { createMany: jest.fn() },
     $queryRaw: jest.fn(),
   };
@@ -81,6 +82,8 @@ describe('EncountersService', () => {
     db.specialtyRecord.findMany.mockResolvedValue([]);
     db.clinicalNote.findMany.mockResolvedValue([]);
     db.patientFile.findMany.mockResolvedValue([]);
+    db.clinicalOrder.findMany.mockResolvedValue([]);
+    db.clinicalOrder.count.mockResolvedValue(0);
     db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
   });
 
@@ -398,6 +401,44 @@ describe('EncountersService', () => {
         });
       });
 
+      it('signs the request of each order placed in it, and the hash covers it', async () => {
+        const order = (overrides = {}) => ({
+          id: 'order-1',
+          tenantId: 'tenant-1',
+          patientId: 'patient-1',
+          orderedById: 'physio',
+          encounterId: 'encounter-1',
+          orderType: 'IMAGING',
+          priority: 'ROUTINE',
+          studyName: 'Resonancia lumbar',
+          indication: null,
+          orderedAt: new Date('2026-10-03T15:12:00Z'),
+          signedAt: null,
+          contentHash: null,
+          updatedAt: new Date('2026-10-03T15:12:00Z'),
+          ...overrides,
+        });
+        const without = await closeWith([storedRecord()]);
+        jest.clearAllMocks();
+        db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+        db.clinicalOrder.findMany.mockResolvedValue([order()]);
+        const withOrder = await closeWith([storedRecord()]);
+        jest.clearAllMocks();
+        db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+        db.clinicalOrder.findMany.mockResolvedValue([order({ studyName: 'Radiografía lumbar' })]);
+        const otherStudy = await closeWith([storedRecord()]);
+
+        expect(new Set([without, withOrder, otherStudy]).size).toBe(3);
+        expect(db.clinicalOrder.update).toHaveBeenCalledWith({
+          where: { id: 'order-1' },
+          data: {
+            signedAt: expect.any(Date),
+            contentHash: expect.stringMatching(/^v1:[0-9a-f]{64}$/),
+            updatedAt: new Date('2026-10-03T15:12:00Z'),
+          },
+        });
+      });
+
       it('leaves an addendum signed already as it is', async () => {
         await closeWith([storedRecord({ signedAt: new Date(), contentHash: 'v1:x' })]);
 
@@ -496,6 +537,18 @@ describe('EncountersService', () => {
           before: expect.objectContaining({ appointmentId: 'appointment-1' }),
           after: null,
         },
+      });
+    });
+
+    it('is refused while the encounter holds orders', async () => {
+      db.encounter.findFirst.mockResolvedValue(encounter());
+      db.clinicalOrder.count.mockResolvedValue(1);
+
+      await expect(
+        service.delete('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' }),
+      ).rejects.toMatchObject({ status: 409, response: { code: 'ENCOUNTER_HAS_RECORDS' } });
+      expect(db.clinicalOrder.count).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1', encounterId: 'encounter-1' },
       });
     });
 

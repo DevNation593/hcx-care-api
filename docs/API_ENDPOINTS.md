@@ -318,7 +318,61 @@ GET  /tenants/{tenantId}/patients/{patientId}/encounters
 # can no longer be removed (409 PATIENT_FILE_SIGNED). `password` is required (403 above).
 POST   /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}/close   { "summary": "...", "password": "..." }
 PATCH  /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         # type or reason, while open
-DELETE /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         { "reason": "..." }  # open and without records (409 ENCOUNTER_SIGNED)
+DELETE /tenants/{tenantId}/patients/{patientId}/encounters/{encounterId}         { "reason": "..." }  # open and without records nor orders (409 ENCOUNTER_SIGNED)
+```
+
+#### Clinical orders, results and follow-ups
+
+Same access as the clinical record (`MASTER`/`PROFESIONAL` with an active profile of a health specialty, section `core.clinical.specialties`). Free text is stored encrypted; every read and change is audited (`CLINICAL_ORDER`, `CLINICAL_RESULT`, `CLINICAL_FOLLOW_UP`). Details in `docs/CLINICAL_ORDERS.md`.
+
+```bash
+# Order a study. With an open encounter of the caller it is signed when the encounter closes;
+# without one, saving signs it and `password` is required (403 SIGNATURE_PASSWORD_INVALID).
+# resultDueAt defaults to orderedAt + the clinic's orderResultAlertDays.
+POST /tenants/{tenantId}/patients/{patientId}/clinical-orders
+{ "orderType": "PATHOLOGY", "studyName": "Citología", "indication": "...", "priority": "ROUTINE",
+  "provider": "...", "resultDueAt": "...", "encounterId": "...", "password": "..." }
+GET  /tenants/{tenantId}/patients/{patientId}/clinical-orders      # with results and follow-ups
+GET  /tenants/{tenantId}/clinical-orders/{orderId}
+
+# Steps. Each sends the `version` it read: 409 CLINICAL_ORDER_VERSION_CONFLICT { currentVersion }.
+# A step that does not apply to the status: 409 CLINICAL_ORDER_INVALID_STATE.
+POST /tenants/{tenantId}/clinical-orders/{orderId}/sample     { "version": 1, "notes": "..." }
+POST /tenants/{tenantId}/clinical-orders/{orderId}/sent       { "version": 2, "provider": "...", "externalReference": "..." }
+# A result (text and/or a file of the patient, optionally its structured record) is a new version:
+# PENDING_REVIEW, never reviewed nor communicated by itself. Earlier unreviewed versions: SUPERSEDED.
+POST /tenants/{tenantId}/clinical-orders/{orderId}/results    { "version": 3, "content": "...", "fileId": "...", "recordId": "..." }
+# Review of the last version. FOLLOW_UP_REQUIRED and REPEAT_REQUIRED need `followUp`.
+POST /tenants/{tenantId}/clinical-results/{resultId}/review
+{ "decision": "REPEAT_REQUIRED", "note": "...", "appointmentNeeded": true,
+  "followUp": { "title": "Repetir citología", "dueDate": "...", "assignedToId": "..." } }
+POST /tenants/{tenantId}/clinical-results/{resultId}/communication   { "channel": "PHONE", "note": "..." }
+# Close: last result reviewed, no open follow-up (409 CLINICAL_ORDER_FOLLOW_UPS_OPEN); without a
+# recorded contact, `note` is required (400 CLINICAL_ORDER_COMPLETION_NOTE_REQUIRED).
+POST /tenants/{tenantId}/clinical-orders/{orderId}/complete   { "version": 5, "note": "..." }
+# Only an order without results: CANCELLED or NOT_PERFORMED, with a reason.
+POST /tenants/{tenantId}/clinical-orders/{orderId}/cancel     { "version": 1, "status": "NOT_PERFORMED", "reason": "..." }
+
+# Follow-ups close only explicitly; cancelling an appointment never closes them.
+GET   /tenants/{tenantId}/patients/{patientId}/clinical-follow-ups
+POST  /tenants/{tenantId}/patients/{patientId}/clinical-follow-ups   { "title": "...", "dueDate": "...", "assignedToId": "..." }
+# { items, total, page, pageSize }: 200 per page, the nearest date first.
+GET   /tenants/{tenantId}/clinical-follow-ups?status=OPEN&scope=mine|all&page=1
+# Editing a follow-up needs clinical_records.update; closing it, clinical_records.create.
+# Its responsible must be an active professional of a health specialty (400 FOLLOW_UP_ASSIGNEE_INVALID).
+PATCH /tenants/{tenantId}/clinical-follow-ups/{followUpId}           { "version": 1, "dueDate": "...", "assignedToId": "..." }
+POST  /tenants/{tenantId}/clinical-follow-ups/{followUpId}/close     { "version": 1, "status": "DONE", "note": "..." }
+
+# What waits: results to review, orders without a result, reviewed results not communicated and
+# open follow-ups, each `overdue` past the thresholds of the clinic (TenantSettings
+# resultReviewAlertDays, orderResultAlertDays). scope=mine (default) or all.
+# Each list holds 200 items per page, the oldest first; `totals` counts all of them and `page`
+# brings the next ones.
+GET /tenants/{tenantId}/clinical-inbox?scope=mine&page=1
+# A file that is the report of a result is never removed: 409 PATIENT_FILE_IN_RESULT.
+```
+
+```bash
 
 # Branches. Every clinic has a main one. A PERSONAL tenant has a single active branch.
 GET   /tenants/{tenantId}/branches

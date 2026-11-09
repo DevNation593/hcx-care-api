@@ -205,6 +205,10 @@ export async function clearDatabase(db: PrismaClient, storage?: SeedStorage) {
   await db.treatment.deleteMany();
   await db.consentTemplateVersion.deleteMany();
   await db.consentTemplate.deleteMany();
+  // Results restrict deleting their file, record and users; follow-ups and orders their users.
+  await db.clinicalFollowUp.deleteMany();
+  await db.clinicalResult.deleteMany();
+  await db.clinicalOrder.deleteMany();
   // Files restrict deleting their uploader, so they go before the users.
   await db.patientFile.deleteMany();
   await db.documentTemplate.deleteMany();

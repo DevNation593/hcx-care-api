@@ -3,6 +3,7 @@ import {
   encounterContentHash,
   fileContentHash,
   noteContentHash,
+  orderContentHash,
   recordContentHash,
 } from '../src/clinical-access/clinical-signature';
 
@@ -41,6 +42,20 @@ export async function signSeededClinicalContent(db: PrismaClient): Promise<void>
         contentHash: fileContentHash({ ...file, contentHash: file.contentHash! }),
       }));
 
+    const orders = await db.clinicalOrder.findMany({ where: { encounterId: encounter.id } });
+    const orderHashes = orders.map((order) => ({
+      id: order.id,
+      contentHash: order.contentHash ?? orderContentHash(order),
+    }));
+    for (const { id, contentHash } of orderHashes) {
+      const order = orders.find((candidate) => candidate.id === id)!;
+      if (order.signedAt) continue;
+      await db.clinicalOrder.update({
+        where: { id },
+        data: { signedAt, contentHash, updatedAt: order.updatedAt },
+      });
+    }
+
     await db.encounter.update({
       where: { id: encounter.id },
       data: {
@@ -51,8 +66,23 @@ export async function signSeededClinicalContent(db: PrismaClient): Promise<void>
           records.map(({ id, contentHash }) => ({ id, contentHash })),
           notes,
           files,
+          orderHashes,
         ),
         updatedAt: encounter.updatedAt,
+      },
+    });
+  }
+
+  // Orders placed outside any encounter are signed when they are saved.
+  for (const order of await db.clinicalOrder.findMany({
+    where: { encounterId: null, signedAt: null },
+  })) {
+    await db.clinicalOrder.update({
+      where: { id: order.id },
+      data: {
+        signedAt: order.orderedAt,
+        contentHash: orderContentHash(order),
+        updatedAt: order.updatedAt,
       },
     });
   }
