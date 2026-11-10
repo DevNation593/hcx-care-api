@@ -32,6 +32,7 @@ import {
   CancelTreatmentSessionDto,
   CompleteTreatmentSessionDto,
   CreateTreatmentSessionDto,
+  SaveProcedureNotesDto,
   SaveSessionFormDto,
 } from './dto/treatment-session.dto';
 import { loadSessionFacts } from './session-facts';
@@ -125,7 +126,8 @@ export interface SessionTreatment {
   version: number;
 }
 
-export type SessionSummary = Omit<TreatmentSession, (typeof ENCRYPTED_SESSION_FIELDS)[number]> & {
+/** A session of the patient's list: its procedure notes decrypted, without the cancellation reason. */
+export type SessionSummary = Omit<TreatmentSession, 'cancellationReason'> & {
   treatment: SessionTreatment;
   professional: SessionProfessional;
 };
@@ -232,7 +234,10 @@ export class TreatmentSessionsService {
     private readonly records: SpecialtyRecordsService,
   ) {}
 
-  /** Sessions of the patient, newest first, without clinical content. Each one is audited. */
+  /**
+   * Sessions of the patient, newest first, with their procedure notes for the clinical history
+   * (the same text its encounter closes with). Each one is audited as read.
+   */
   async list(tenantId: string, patientId: string, actor: ClinicalActor): Promise<SessionSummary[]> {
     const patient = await this.prisma.patient.findFirst({
       where: { id: patientId, tenantId, deletedAt: null },
@@ -263,8 +268,9 @@ export class TreatmentSessionsService {
     );
 
     return stored.map(
-      ({ treatmentVersion, procedureNotes: _notes, cancellationReason: _reason, ...session }) => ({
+      ({ treatmentVersion, procedureNotes, cancellationReason: _reason, ...session }) => ({
         ...session,
+        procedureNotes: procedureNotes ? this.crypto.decrypt(tenantId, procedureNotes) : null,
         treatment: { ...treatmentVersion.treatment, version: treatmentVersion.version },
       }),
     );
@@ -595,6 +601,52 @@ export class TreatmentSessionsService {
       );
       await this.auditTransition(tx, actor, session, completed);
       return this.detail(tx, completed, version, policy, actor);
+    });
+  }
+
+  /**
+   * Keeps the notes typed during the procedure, encrypted, so that leaving the page does not
+   * lose them. Only while the procedure is in progress; completing takes the stored notes when
+   * it brings none. Notes that did not change are not written; the detail returned is then
+   * audited as read.
+   */
+  async saveNotes(
+    tenantId: string,
+    sessionId: string,
+    actor: ClinicalActor,
+    dto: SaveProcedureNotesDto,
+  ): Promise<SessionDetail> {
+    const notes = dto.procedureNotes.trim() || null;
+    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
+      const { session, version, policy } = await this.loadForCommand(
+        tx,
+        tenantId,
+        sessionId,
+        actor,
+        'SAVE_NOTES',
+      );
+      if (notes === (session.procedureNotes?.trim() || null)) {
+        // Nothing to write, but the detail returned discloses clinical content: audited as read.
+        await this.audit.record(
+          tenantId,
+          actor,
+          [
+            {
+              action: 'READ',
+              entity: 'TREATMENT_SESSION',
+              entityId: session.id,
+              patientId: session.patientId,
+            },
+          ],
+          tx,
+        );
+        return this.detail(tx, session, version, policy, actor);
+      }
+      const saved = await this.transition(tx, session, {
+        procedureNotes: notes ? this.crypto.encrypt(tenantId, notes) : null,
+      });
+      await this.auditTransition(tx, actor, session, saved);
+      return this.detail(tx, saved, version, policy, actor);
     });
   }
 

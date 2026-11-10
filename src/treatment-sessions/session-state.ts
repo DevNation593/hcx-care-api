@@ -12,6 +12,7 @@ export type SessionCommand =
   | 'UPLOAD_AFTER'
   | 'UPLOAD_OTHER'
   | 'START'
+  | 'SAVE_NOTES'
   | 'COMPLETE'
   | 'CANCEL'
   | 'NO_SHOW';
@@ -66,7 +67,7 @@ export function allowedCommands(
         'NO_SHOW',
       ];
     case 'IN_PROGRESS':
-      return ['UPLOAD_AFTER', 'UPLOAD_OTHER', 'COMPLETE', 'CANCEL'];
+      return ['UPLOAD_AFTER', 'UPLOAD_OTHER', 'SAVE_NOTES', 'COMPLETE', 'CANCEL'];
     default:
       return [];
   }

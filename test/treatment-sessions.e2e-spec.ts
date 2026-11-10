@@ -719,6 +719,59 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     expect(response.body.treatmentSessionId).toBe(session.id);
   });
 
+  it('keeps the notes typed before completing, lists them for the history and completes with them', async () => {
+    const { session, patientId } = await consentedSession();
+    const notesUrl = sessionUrl(session.id, '/notes');
+    const notes = 'Borrador: toxina 20 U en glabela.';
+
+    // Not before the procedure has started.
+    const early = await request(server())
+      .put(notesUrl)
+      .set(as('pro'))
+      .send({ procedureNotes: notes })
+      .expect(409);
+    expect(early.body.code).toBe('TREATMENT_SESSION_INVALID_TRANSITION');
+
+    await request(server()).post(sessionUrl(session.id, '/start')).set(as('pro')).expect(201);
+    const saved = await request(server())
+      .put(notesUrl)
+      .set(as('pro'))
+      .send({ procedureNotes: `  ${notes}  ` })
+      .expect(200);
+    expect(saved.body).toMatchObject({ status: 'IN_PROGRESS', procedureNotes: notes });
+    expect(saved.body.allowedCommands).toContain('SAVE_NOTES');
+
+    // Stored encrypted, and only the professional of the session writes them.
+    const row = await prisma.treatmentSession.findUniqueOrThrow({ where: { id: session.id } });
+    expect(row.procedureNotes).toMatch(/^enc:v1:/);
+    await request(server())
+      .put(notesUrl)
+      .set(as('master'))
+      .send({ procedureNotes: 'Otra cosa.' })
+      .expect(403);
+
+    // The patient's list carries them for the clinical history.
+    const listed = await request(server())
+      .get(`${base()}/patients/${patientId}/treatment-sessions`)
+      .set(as('pro'))
+      .expect(200);
+    const item = listed.body.find((entry: { id: string }) => entry.id === session.id);
+    expect(item).toMatchObject({ status: 'IN_PROGRESS', procedureNotes: notes });
+    expect(item).not.toHaveProperty('cancellationReason');
+
+    // Completing without notes in the body takes the stored ones, which the treatment requires.
+    await upload(session.id, 'AFTER').expect(201);
+    const completed = await request(server())
+      .post(sessionUrl(session.id, '/complete'))
+      .set(as('pro'))
+      .send({})
+      .expect(201);
+    expect(completed.body).toMatchObject({ status: 'CLINICAL_COMPLETE', procedureNotes: notes });
+
+    // Once completed they no longer change.
+    await request(server()).put(notesUrl).set(as('pro')).send({ procedureNotes: 'x' }).expect(409);
+  });
+
   it('fixes the form once the procedure has started', async () => {
     const { session, patientId } = await consentedSession();
     const { formRecordId } = await detail(session.id);
