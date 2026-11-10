@@ -175,6 +175,95 @@ describe('Platform admin panel (E2E)', () => {
     });
   });
 
+  describe('a personal practice', () => {
+    const personalEmail = 'titular@personal-e2e.test';
+    const alta = (extra: Record<string, unknown> = {}) =>
+      http()
+        .post(api('/platform/tenants'))
+        .set(bearer(adminToken))
+        .send({
+          name: 'Consulta Personal E2E',
+          email: 'contacto@personal-e2e.test',
+          tenantType: 'PERSONAL',
+          timezone: 'America/Guayaquil',
+          locale: 'es-EC',
+          masterFirstName: 'Titular',
+          masterLastName: 'Personal',
+          masterEmail: personalEmail,
+          temporaryPassword,
+          planId: 'plan_esencial',
+          specialtyCodes: ['PSYCHOLOGY', 'NUTRITION'],
+          ...extra,
+        });
+    const masterProfile = () =>
+      prisma.user.findFirstOrThrow({
+        where: { email: personalEmail },
+        select: {
+          professionalProfile: {
+            select: { isActive: true, specialty: { select: { code: true } } },
+          },
+          professionalSpecialties: {
+            select: { isPrimary: true, specialty: { select: { code: true } } },
+          },
+        },
+      });
+
+    it('refuses a master specialty the practice does not have', async () => {
+      const response = await alta({ masterSpecialtyCode: 'AESTHETICS' }).expect(400);
+      expect(response.body.code).toBe('MASTER_SPECIALTY_NOT_SELECTED');
+    });
+
+    it('makes the master the professional of the chosen specialty, taking the seat', async () => {
+      const response = await alta({ masterSpecialtyCode: 'nutrition' }).expect(201);
+
+      expect(response.body.usage.seatsPsychologistsUsed).toBe(1);
+      expect(await masterProfile()).toEqual({
+        professionalProfile: { isActive: true, specialty: { code: 'NUTRITION' } },
+        professionalSpecialties: [{ isPrimary: true, specialty: { code: 'NUTRITION' } }],
+      });
+
+      // Removing that specialty moves the master to the one that stays.
+      await http()
+        .put(api(`/platform/tenants/${response.body.tenant.id}/specialties`))
+        .set(bearer(adminToken))
+        .send({ specialtyCodes: ['PSYCHOLOGY'] })
+        .expect(200);
+      expect(await masterProfile()).toEqual({
+        professionalProfile: { isActive: true, specialty: { code: 'PSYCHOLOGY' } },
+        professionalSpecialties: [{ isPrimary: true, specialty: { code: 'PSYCHOLOGY' } }],
+      });
+    });
+  });
+
+  it("leaves a clinic's master without a professional profile", async () => {
+    const master = await prisma.user.findFirstOrThrow({
+      where: { email: masterEmail },
+      select: { professionalProfile: true, tenant: { select: { subscription: true } } },
+    });
+    expect(master.professionalProfile).toBeNull();
+    expect(master.tenant.subscription?.seatsPsychologistsUsed).toBe(0);
+
+    const response = await http()
+      .post(api('/platform/tenants'))
+      .set(bearer(adminToken))
+      .send({
+        name: 'Otra Clínica E2E',
+        email: 'contacto@otra-e2e.test',
+        tenantType: 'CLINIC',
+        timezone: 'America/Guayaquil',
+        locale: 'es-EC',
+        masterFirstName: 'Titular',
+        masterLastName: 'Otra',
+        masterEmail: 'titular@otra-e2e.test',
+        temporaryPassword,
+        planId: 'plan_profesional',
+        specialtyCodes: ['PSYCHOLOGY'],
+        masterSpecialtyCode: 'PSYCHOLOGY',
+      })
+      .expect(400);
+    expect(response.body.code).toBe('MASTER_SPECIALTY_NOT_ALLOWED');
+  });
+
   it('blocks the new master with PASSWORD_CHANGE_REQUIRED', async () => {
     masterToken = await login(masterEmail, temporaryPassword);
     const response = await http()

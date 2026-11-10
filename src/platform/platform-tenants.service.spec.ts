@@ -362,7 +362,7 @@ describe('PlatformTenantsService', () => {
     ]);
   });
 
-  it('creates the master with role MASTER, mustChangePassword true and no professional profile', async () => {
+  it("creates a clinic's master with role MASTER, mustChangePassword true and no professional profile", async () => {
     const result = await service.create(input(), 'admin-1');
     expect(state.users[0]).toMatchObject({
       tenantId: 'tenant-1',
@@ -384,6 +384,61 @@ describe('PlatformTenantsService', () => {
       email: 'ana@example.com',
       mustChangePassword: true,
     });
+  });
+
+  describe('on a personal plan', () => {
+    const personal = (overrides: Partial<CreatePlatformTenantDto> = {}) =>
+      input({ tenantType: 'PERSONAL', planId: 'plan_esencial', ...overrides });
+
+    it('makes the master the professional who attends, with the assigned specialty', async () => {
+      const result = await service.create(personal(), 'admin-1');
+
+      expect(state.users).toHaveLength(1);
+      expect(state.users[0]).toMatchObject({
+        role: 'MASTER',
+        professionalProfile: { create: { specialtyId: psychology.id, isActive: true } },
+        professionalSpecialties: { create: { specialtyId: psychology.id, isPrimary: true } },
+      });
+      expect(state.subscriptions[0].seatsPsychologistsUsed).toBe(1);
+      expect(result.usage.seatsPsychologistsUsed).toBe(1);
+    });
+
+    it('uses the specialty chosen for the master when the practice has several', async () => {
+      await service.create(
+        personal({
+          specialtyCodes: ['psychology', 'aesthetics'],
+          masterSpecialtyCode: ' aesthetics ',
+        }),
+        'admin-1',
+      );
+
+      expect(state.users[0].professionalProfile.create.specialtyId).toBe(aesthetics.id);
+      expect(state.users[0].professionalSpecialties.create.specialtyId).toBe(aesthetics.id);
+    });
+
+    it('defaults to the first specialty sent', async () => {
+      await service.create(personal({ specialtyCodes: ['aesthetics', 'psychology'] }), 'admin-1');
+
+      expect(state.users[0].professionalProfile.create.specialtyId).toBe(aesthetics.id);
+    });
+
+    it('rejects a master specialty the practice does not have, before writing anything', async () => {
+      await expect(
+        service.create(personal({ masterSpecialtyCode: 'AESTHETICS' }), 'admin-1'),
+      ).rejects.toMatchObject({
+        status: 400,
+        response: { code: 'MASTER_SPECIALTY_NOT_SELECTED' },
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(auth.hashPassword).not.toHaveBeenCalled();
+    });
+  });
+
+  it('rejects a master specialty for a clinic, whose master gets no profile', async () => {
+    await expect(
+      service.create(input({ masterSpecialtyCode: 'PSYCHOLOGY' }), 'admin-1'),
+    ).rejects.toMatchObject({ status: 400, response: { code: 'MASTER_SPECIALTY_NOT_ALLOWED' } });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('turns on what the plan includes when sections are omitted, all following the plan', async () => {

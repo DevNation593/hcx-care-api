@@ -107,7 +107,14 @@ describe('TenantSpecialtiesService', () => {
         update: jest.fn(async ({ data }) => Object.assign(subscription, data)),
       },
       auditLog: { create: jest.fn() },
-      professionalProfile: { findFirst: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
+      professionalProfile: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        update: jest.fn(),
+        deleteMany: jest.fn(),
+      },
+      professionalSpecialty: { deleteMany: jest.fn(), create: jest.fn() },
+      // A clinic, or a personal practice whose master has no profile.
+      user: { findFirst: jest.fn().mockResolvedValue(null) },
       appointment: { findFirst: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
       clinicalNote: { deleteMany: jest.fn() },
       specialtyRecord: { deleteMany: jest.fn() },
@@ -215,6 +222,91 @@ describe('TenantSpecialtiesService', () => {
     });
     expect(tx.tenantSpecialty.deleteMany).not.toHaveBeenCalled();
     expect(tx.tenantSubscription.update).not.toHaveBeenCalled();
+  });
+
+  describe("a personal practice's master", () => {
+    const personalMaster = (specialtyId: string) =>
+      tx.user.findFirst.mockResolvedValue({ id: 'master-1', professionalProfile: { specialtyId } });
+
+    it('moves to the first specialty selected when theirs is removed, and is audited', async () => {
+      personalMaster('psy');
+
+      const result = await service.replace('tenant-1', ['NUTRITION'], 'admin-1');
+
+      expect(tx.user.findFirst).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1', role: 'MASTER', tenant: { tenantType: 'PERSONAL' } },
+        select: { id: true, professionalProfile: { select: { specialtyId: true } } },
+      });
+      // Other professionals with the removed specialty still block it.
+      expect(tx.professionalProfile.findFirst).toHaveBeenCalledWith({
+        where: {
+          specialtyId: 'psy',
+          isActive: true,
+          user: { tenantId: 'tenant-1', isActive: true },
+          userId: { not: 'master-1' },
+        },
+        select: { userId: true },
+      });
+      expect(tx.professionalProfile.update).toHaveBeenCalledWith({
+        where: { userId: 'master-1' },
+        data: { specialtyId: 'nut' },
+      });
+      expect(tx.professionalSpecialty.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'master-1' },
+      });
+      expect(tx.professionalSpecialty.create).toHaveBeenCalledWith({
+        data: { userId: 'master-1', specialtyId: 'nut', isPrimary: true },
+      });
+      expect(selected).toEqual(['nut']);
+      expect(result.masterSpecialtyChange).toEqual({
+        userId: 'master-1',
+        fromSpecialtyId: 'psy',
+        toSpecialtyId: 'nut',
+      });
+      const { changes } = tx.auditLog.create.mock.calls[0][0].data;
+      expect(changes.before.masterSpecialtyId).toBe('psy');
+      expect(changes.after.masterSpecialtyId).toBe('nut');
+    });
+
+    it('is still blocked by future appointments with the removed specialty', async () => {
+      personalMaster('psy');
+      tx.appointment.findFirst.mockResolvedValue({ id: 'future' });
+
+      await expect(service.replace('tenant-1', ['NUTRITION'], 'admin-1')).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'SPECIALTY_HAS_FUTURE_APPOINTMENTS' },
+      });
+      expect(tx.professionalProfile.update).not.toHaveBeenCalled();
+      expect(tx.tenantSpecialty.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('keeps their specialty when another one is removed', async () => {
+      selected = ['psy', 'nut'];
+      personalMaster('nut');
+
+      const result = await service.replace('tenant-1', ['NUTRITION'], 'admin-1');
+
+      expect(tx.professionalProfile.findFirst).toHaveBeenCalledWith({
+        where: {
+          specialtyId: 'psy',
+          isActive: true,
+          user: { tenantId: 'tenant-1', isActive: true },
+        },
+        select: { userId: true },
+      });
+      expect(tx.professionalProfile.update).not.toHaveBeenCalled();
+      expect(tx.professionalSpecialty.create).not.toHaveBeenCalled();
+      expect(result.masterSpecialtyChange).toBeUndefined();
+      expect(tx.auditLog.create.mock.calls[0][0].data.changes.after).not.toHaveProperty(
+        'masterSpecialtyId',
+      );
+    });
+  });
+
+  it('does not look for a personal master when no specialty is removed', async () => {
+    await service.replace('tenant-1', ['PSYCHOLOGY', 'NUTRITION'], 'admin-1');
+    expect(tx.user.findFirst).not.toHaveBeenCalled();
+    expect(tx.professionalProfile.update).not.toHaveBeenCalled();
   });
 
   it('blocks future non-cancelled appointments with tenant-scoped dependencies', async () => {

@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, TenantSubscription } from '@prisma/client';
+import { Prisma, TenantSubscription, TenantType, UserRole } from '@prisma/client';
 import { monthlyTotal } from '../plans/plan-values';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
@@ -18,6 +18,8 @@ export type SpecialtySelectionResult = {
   specialties: CatalogSpecialty[];
   modules: Array<{ moduleKey: string; enabled: boolean }>;
   pricing: SpecialtyPricing;
+  /** Set when the master of a personal practice lost their specialty and moved to another. */
+  masterSpecialtyChange?: { userId: string; fromSpecialtyId: string; toSpecialtyId: string };
 };
 
 /** What the clinic pays a month with this selection; basePrice itself never changes here. */
@@ -58,6 +60,7 @@ export class TenantSpecialtiesService {
       ]);
       const previousMonthlyPrice = monthlyTotal(subscription, previousSpecialties.length);
       const result = await this.applySelection(tx, { tenantId, subscription, specialties });
+      const masterChange = result.masterSpecialtyChange;
       await tx.auditLog.create({
         data: {
           tenantId,
@@ -70,11 +73,13 @@ export class TenantSpecialtiesService {
               specialtyIds: previousSpecialties.map(({ specialtyId }) => specialtyId).sort(),
               modules: previousModules,
               monthlyPrice: previousMonthlyPrice,
+              ...(masterChange && { masterSpecialtyId: masterChange.fromSpecialtyId }),
             },
             after: {
               specialtyIds: result.specialties.map(({ id }) => id).sort(),
               modules: result.modules,
               monthlyPrice: result.pricing.totalMonthly,
+              ...(masterChange && { masterSpecialtyId: masterChange.toSpecialtyId }),
             },
           },
         },
@@ -105,9 +110,21 @@ export class TenantSpecialtiesService {
     ]);
     const oldIds = existingSelection.map(({ specialtyId }) => specialtyId);
     const removeIds = oldIds.filter((id) => !selectedIds.includes(id));
+    // The master of a personal practice attends with one of its specialties: when that one goes,
+    // the profile moves to the first one selected instead of blocking the change.
+    const owner = removeIds.length ? await this.personalOwnerProfile(tx, tenantId) : null;
+    const movedOwner =
+      owner && removeIds.includes(owner.specialtyId)
+        ? { ...owner, toSpecialtyId: selectedIds[0] }
+        : null;
     for (const specialtyId of removeIds) {
       const activeProfessional = await tx.professionalProfile.findFirst({
-        where: { specialtyId, isActive: true, user: { tenantId, isActive: true } },
+        where: {
+          specialtyId,
+          isActive: true,
+          user: { tenantId, isActive: true },
+          ...(movedOwner && { userId: { not: movedOwner.userId } }),
+        },
         select: { userId: true },
       });
       if (activeProfessional) {
@@ -140,6 +157,17 @@ export class TenantSpecialtiesService {
       await tx.tenantSpecialty.createMany({
         data: addIds.map((specialtyId) => ({ tenantId, specialtyId })),
       });
+    if (movedOwner) {
+      // Future appointments with the removed specialty were rejected above.
+      await tx.professionalProfile.update({
+        where: { userId: movedOwner.userId },
+        data: { specialtyId: movedOwner.toSpecialtyId },
+      });
+      await tx.professionalSpecialty.deleteMany({ where: { userId: movedOwner.userId } });
+      await tx.professionalSpecialty.create({
+        data: { userId: movedOwner.userId, specialtyId: movedOwner.toSpecialtyId, isPrimary: true },
+      });
+    }
 
     const billedIds = existingBilling.map(({ specialtyId }) => specialtyId);
     const removeBilled = billedIds.filter((id) => !selectedIds.includes(id));
@@ -203,7 +231,28 @@ export class TenantSpecialtiesService {
         ...addKeys.map((moduleKey) => ({ moduleKey, enabled: true })),
       ].sort((a, b) => a.moduleKey.localeCompare(b.moduleKey)),
       pricing,
+      ...(movedOwner && {
+        masterSpecialtyChange: {
+          userId: movedOwner.userId,
+          fromSpecialtyId: movedOwner.specialtyId,
+          toSpecialtyId: movedOwner.toSpecialtyId,
+        },
+      }),
     };
+  }
+
+  /** The professional profile of a personal practice's master, if it has one. */
+  private async personalOwnerProfile(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+  ): Promise<{ userId: string; specialtyId: string } | null> {
+    const master = await tx.user.findFirst({
+      where: { tenantId, role: UserRole.MASTER, tenant: { tenantType: TenantType.PERSONAL } },
+      select: { id: true, professionalProfile: { select: { specialtyId: true } } },
+    });
+    return master?.professionalProfile
+      ? { userId: master.id, specialtyId: master.professionalProfile.specialtyId }
+      : null;
   }
 
   async updateModule(tenantId: string, moduleKey: string, enabled: boolean, actorId: string) {
