@@ -22,6 +22,7 @@ import {
   CancelTreatmentSessionDto,
   CompleteTreatmentSessionDto,
   CreateTreatmentSessionDto,
+  SaveProcedureNotesDto,
   SaveSessionFormDto,
   UploadSessionMediaDto,
 } from './dto/treatment-session.dto';
@@ -161,6 +162,24 @@ export class TreatmentSessionsController {
     @CurrentClinicalActor() actor: ClinicalActor,
   ) {
     return this.sessionsService.start(tenantId, id, actor);
+  }
+
+  @Put('treatment-sessions/:id/notes')
+  @UseGuards(ClinicalProfileGuard)
+  @Roles('MASTER', 'PROFESIONAL')
+  @RequirePermission('clinical_records.create')
+  @ApiOperation({
+    summary: 'Keep the procedure notes typed so far - Its professional only',
+    description:
+      'Stores the notes encrypted without closing anything, so they survive leaving the page; an empty text clears them. 409 TREATMENT_SESSION_INVALID_TRANSITION unless IN_PROGRESS.',
+  })
+  saveNotes(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+    @Body() dto: SaveProcedureNotesDto,
+  ) {
+    return this.sessionsService.saveNotes(tenantId, id, actor, dto);
   }
 
   @Post('treatment-sessions/:id/complete')
