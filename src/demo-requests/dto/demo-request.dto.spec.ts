@@ -22,8 +22,10 @@ async function rejectedFields(input: object): Promise<string[]> {
     await parse(input);
   } catch (error) {
     expect(error).toBeInstanceOf(BadRequestException);
-    const messages = (error as BadRequestException).getResponse() as { message: string[] };
-    return [...new Set(messages.message.map((message) => message.split(' ')[0]))];
+    const body = (error as BadRequestException).getResponse() as {
+      details: { field: string }[];
+    };
+    return [...new Set(body.details.map((issue) => issue.field))];
   }
   throw new Error('The request was accepted');
 }
@@ -62,6 +64,6 @@ describe('CreateDemoRequestDto', () => {
   });
 
   it('rejects fields the form does not send', async () => {
-    expect(await rejectedFields({ ...valid, status: 'CLOSED' })).toEqual(['property']);
+    expect(await rejectedFields({ ...valid, status: 'CLOSED' })).toEqual(['status']);
   });
 });

@@ -686,7 +686,7 @@ Routes under `/platform/*` belong to the platform administration panel. They req
 | `GET /platform/tenants/:tenantId/roles/:role/permissions` | Effective permissions and the configurable catalog for `MASTER`, `PROFESIONAL` or `ASISTENTE`. |
 | `PUT /platform/tenants/:tenantId/roles/:role/permissions` | Body `{ allowed: string[] }`: replaces the effective permissions of the role in this clinic; changes are audited. |
 | `GET /platform/specialty-catalog` | Active specialties and their clinical modules. |
-| `PUT /platform/tenants/:tenantId/specialties` | Body `{ specialtyCodes: string[] }`: assigns clinic specialties and their modules, answers the resulting monthly price (the plan price is not changed) and records an audit entry. |
+| `PUT /platform/tenants/:tenantId/specialties` | Body `{ specialtyCodes: string[] }`: assigns clinic specialties and their modules, answers the resulting monthly price (the plan price is not changed) and records an audit entry. On a `PERSONAL` practice, removing the owner's specialty moves their profile to the first code sent (`masterSpecialtyChange` in the answer); future appointments with it still block the removal. |
 | `PATCH /platform/tenants/:tenantId/modules/:moduleKey` | Body `{ enabled: boolean }`: enables or disables an assigned clinical module and records an audit entry. |
 | `POST /platform/tenants/:tenantId/master/reset-password` | Body `{ temporaryPassword }` (min. 8 characters). Stores the hash, sets `mustChangePassword = true` and revokes the owner's refresh tokens. Responds `200` without a body. |
 | `GET /platform/section-catalog` | The modules and submodules (key, name, parent, dependencies, health-only mark) and `nonHealthSpecialtyCodes`. Each plan says which keys it includes. |
@@ -721,6 +721,7 @@ Every route with `:tenantId` answers `404` if the clinic does not exist or is th
 - `phone`, `address`, `trialDays` and `sections` are optional. Without `trialDays` the plan's own apply; `0` starts a paid month. Without `sections` the clinic gets what the plan includes (health-only submodules off when every specialty is aesthetic); with them, what differs from the plan is stored as an override.
 - `temporaryPassword` has at least 8 characters and is stored exactly as typed. It is never logged or written to the audit log.
 - `specialtyCodes` needs at least one code.
+- On a `PERSONAL` practice the owner is the professional who attends: they get an active professional profile, taking the plan's seat, with `masterSpecialtyCode` (one of `specialtyCodes`, `400 MASTER_SPECIALTY_NOT_SELECTED` otherwise) or else the first of `specialtyCodes`. A `CLINIC` owner gets no profile, and sending `masterSpecialtyCode` answers `400 MASTER_SPECIALTY_NOT_ALLOWED`.
 - Everything runs in one serializable transaction. With trial days the clinic starts `TRIALING`; without them `ACTIVE` with a one-month period and no payment record. The owner is created with `mustChangePassword = true`.
 - The owner email must be unique across the platform (`409` otherwise). The plan must exist (`404 PLAN_NOT_FOUND`), not be archived (`409 PLAN_ARCHIVED`) and match the tenant type (`400 PLAN_TYPE_MISMATCH`).
 

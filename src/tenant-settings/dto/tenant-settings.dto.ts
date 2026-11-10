@@ -35,7 +35,7 @@ export class UpdateTenantSettingsDto {
   @IsString()
   @IsOptional()
   @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, {
-    message: 'workingHoursStart must be in HH:mm format',
+    message: 'La hora de inicio de la jornada debe tener el formato HH:mm (por ejemplo, 08:00).',
   })
   workingHoursStart?: string;
 
@@ -46,7 +46,7 @@ export class UpdateTenantSettingsDto {
   @IsString()
   @IsOptional()
   @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, {
-    message: 'workingHoursEnd must be in HH:mm format',
+    message: 'La hora de fin de la jornada debe tener el formato HH:mm (por ejemplo, 18:30).',
   })
   workingHoursEnd?: string;
 
@@ -89,7 +89,8 @@ export class UpdateTenantSettingsDto {
   @IsString({ each: true })
   @Matches(/^\d+(h|m)$/, {
     each: true,
-    message: 'reminderRules must use the format "<number>h" or "<number>m"',
+    message:
+      'Cada recordatorio debe usar el formato "<número>h" o "<número>m" (por ejemplo, "24h" o "30m").',
   })
   reminderRules?: string[];
 
