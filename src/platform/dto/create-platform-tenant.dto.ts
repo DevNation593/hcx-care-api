@@ -110,6 +110,17 @@ export class CreatePlatformTenantDto {
   specialtyCodes: string[];
 
   @ApiPropertyOptional({
+    description:
+      'PERSONAL only: the specialty the master attends with, one of specialtyCodes. ' +
+      'Defaults to the first of specialtyCodes.',
+  })
+  @Transform(trimCode)
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  masterSpecialtyCode?: string;
+
+  @ApiPropertyOptional({
     type: [String],
     description: 'Modules to turn on; what differs from the plan becomes an override.',
   })

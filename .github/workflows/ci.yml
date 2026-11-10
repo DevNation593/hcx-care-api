@@ -51,6 +51,9 @@ jobs:
       - name: Verify clinic role permission migration upgrade
         run: npm run prisma:verify-platform-role-permissions
 
+      - name: Verify personal owner profile migration upgrade
+        run: npm run prisma:verify-personal-owner-profile
+
       - name: Apply Prisma migrations
         run: npx prisma migrate deploy
 
