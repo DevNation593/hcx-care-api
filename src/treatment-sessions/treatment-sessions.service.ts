@@ -607,7 +607,8 @@ export class TreatmentSessionsService {
   /**
    * Keeps the notes typed during the procedure, encrypted, so that leaving the page does not
    * lose them. Only while the procedure is in progress; completing takes the stored notes when
-   * it brings none. Notes that did not change are neither written nor audited.
+   * it brings none. Notes that did not change are not written; the detail returned is then
+   * audited as read.
    */
   async saveNotes(
     tenantId: string,
@@ -625,6 +626,20 @@ export class TreatmentSessionsService {
         'SAVE_NOTES',
       );
       if (notes === (session.procedureNotes?.trim() || null)) {
+        // Nothing to write, but the detail returned discloses clinical content: audited as read.
+        await this.audit.record(
+          tenantId,
+          actor,
+          [
+            {
+              action: 'READ',
+              entity: 'TREATMENT_SESSION',
+              entityId: session.id,
+              patientId: session.patientId,
+            },
+          ],
+          tx,
+        );
         return this.detail(tx, session, version, policy, actor);
       }
       const saved = await this.transition(tx, session, {

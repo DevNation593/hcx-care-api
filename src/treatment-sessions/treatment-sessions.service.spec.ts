@@ -1131,7 +1131,7 @@ describe('TreatmentSessionsService', () => {
         expect(updateData()).toEqual({ procedureNotes: null, version: { increment: 1 } });
       });
 
-      it('writes and audits nothing when the notes did not change', async () => {
+      it('writes nothing when the notes did not change, and audits the detail it returns as read', async () => {
         db.treatmentSession.findFirst.mockResolvedValue(
           inProgress({ procedureNotes: cipher.encrypt('tenant-1', 'Borrador.') }),
         );
@@ -1141,7 +1141,14 @@ describe('TreatmentSessionsService', () => {
         });
 
         expect(db.treatmentSession.update).not.toHaveBeenCalled();
-        expect(sessionAudit()).toEqual([]);
+        expect(sessionAudit()).toEqual([
+          expect.objectContaining({
+            action: 'READ',
+            entityId: 'session-1',
+            patientId: 'patient-1',
+            userId: 'pro',
+          }),
+        ]);
         expect(saved).toMatchObject({ procedureNotes: 'Borrador.' });
       });
 
