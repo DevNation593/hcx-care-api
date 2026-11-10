@@ -49,7 +49,7 @@ const WITH_CONSENT: Record<TreatmentSessionStatus, SessionCommand[]> = {
     'CANCEL',
     'NO_SHOW',
   ],
-  IN_PROGRESS: ['UPLOAD_AFTER', 'UPLOAD_OTHER', 'COMPLETE', 'CANCEL'],
+  IN_PROGRESS: ['UPLOAD_AFTER', 'UPLOAD_OTHER', 'SAVE_NOTES', 'COMPLETE', 'CANCEL'],
   CLINICAL_COMPLETE: [],
   CONSENT_REFUSED: [],
   CONSENT_REVOKED: [],
