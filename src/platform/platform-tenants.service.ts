@@ -123,6 +123,7 @@ export class PlatformTenantsService {
         message: 'Cada especialidad debe aparecer una sola vez.',
       });
     }
+    const masterSpecialtyCode = this.masterSpecialtyCode(dto, specialtyCodes);
     // Answers 404/409 for an unknown, archived or mismatched plan before hashing the password.
     const chosenPlan = await this.plans.findAssignable(this.prisma, dto.planId, dto.tenantType);
     const enabledSections = new Set<string>(
@@ -190,7 +191,8 @@ export class PlatformTenantsService {
                 trialEndsAt: isTrial ? addDays(now, trialDays) : null,
                 currentPeriodStart: now,
                 currentPeriodEnd: isTrial ? null : addMonth(now),
-                seatsPsychologistsUsed: 0,
+                // The master of a personal practice takes the plan's professional seat.
+                seatsPsychologistsUsed: masterSpecialtyCode ? 1 : 0,
                 ...subscriptionValuesFromPlan(plan),
               },
             });
@@ -207,6 +209,9 @@ export class PlatformTenantsService {
             }
 
             const specialties = await this.catalog.resolveActiveCodes(specialtyCodes, tx);
+            const masterSpecialtyId = masterSpecialtyCode
+              ? specialties.find(({ code }) => code === masterSpecialtyCode)?.id
+              : undefined;
             await tx.user.create({
               data: {
                 tenantId: tenant.id,
@@ -220,6 +225,15 @@ export class PlatformTenantsService {
                 activatedAt: new Date(),
                 mustChangePassword: true,
                 managedByProvider: false,
+                // In a personal practice the master is the professional who attends.
+                ...(masterSpecialtyId && {
+                  professionalProfile: {
+                    create: { specialtyId: masterSpecialtyId, isActive: true },
+                  },
+                  professionalSpecialties: {
+                    create: { specialtyId: masterSpecialtyId, isPrimary: true },
+                  },
+                }),
               },
               select: { id: true },
             });
@@ -505,6 +519,33 @@ export class PlatformTenantsService {
         tx,
       );
     });
+  }
+
+  /**
+   * The specialty the master of a personal practice attends with; undefined for a clinic, whose
+   * master is only the account holder until the team gives them a profile.
+   */
+  private masterSpecialtyCode(
+    dto: CreatePlatformTenantDto,
+    specialtyCodes: string[],
+  ): string | undefined {
+    if (dto.tenantType !== TenantType.PERSONAL) {
+      if (dto.masterSpecialtyCode !== undefined) {
+        throw new BadRequestException({
+          code: 'MASTER_SPECIALTY_NOT_ALLOWED',
+          message: 'La especialidad del titular solo se elige en un consultorio personal.',
+        });
+      }
+      return undefined;
+    }
+    const [code] = normalizeSpecialtyCodes([dto.masterSpecialtyCode ?? specialtyCodes[0]]);
+    if (!code || !specialtyCodes.includes(code)) {
+      throw new BadRequestException({
+        code: 'MASTER_SPECIALTY_NOT_SELECTED',
+        message: 'La especialidad del titular debe ser una de las especialidades del consultorio.',
+      });
+    }
+    return code;
   }
 
   findOne(tenantId: string): Promise<PlatformTenantDetail> {
