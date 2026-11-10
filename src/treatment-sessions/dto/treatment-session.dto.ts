@@ -79,6 +79,17 @@ export class CompleteTreatmentSessionDto {
   procedureNotes?: string;
 }
 
+export class SaveProcedureNotesDto {
+  @ApiProperty({
+    example: 'Toxina 20 U en glabela, sin incidencias.',
+    description: 'The notes as typed so far; an empty text clears them.',
+  })
+  @Transform(trimText)
+  @IsString()
+  @MaxLength(10000)
+  procedureNotes: string;
+}
+
 export class CancelTreatmentSessionDto {
   @ApiProperty({ example: 'La paciente presentó una reacción vasovagal.' })
   @Transform(trimText)

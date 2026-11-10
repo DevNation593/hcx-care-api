@@ -14,6 +14,7 @@ import { TreatmentsService } from '../treatments/treatments.service';
 import {
   CancelTreatmentSessionDto,
   CompleteTreatmentSessionDto,
+  SaveProcedureNotesDto,
 } from './dto/treatment-session.dto';
 import { TreatmentSessionsService } from './treatment-sessions.service';
 
@@ -425,6 +426,65 @@ describe('TreatmentSessionsService', () => {
     });
   });
 
+  describe('list', () => {
+    it('returns the procedure notes decrypted, without the cancellation reason, and audits each session', async () => {
+      const cipher = new ClinicalCipher(
+        parseClinicalKeys(`test:${randomBytes(32).toString('base64')}`),
+      );
+      const keyedAudit = new ClinicalAuditService(prismaService, cipher);
+      const sessions = new TreatmentSessionsService(
+        prismaService,
+        keyedAudit,
+        cipher,
+        new TreatmentsService(prismaService, new ConsentTemplatesService(prismaService)),
+        new EncountersService(prismaService, keyedAudit, cipher, fileBytes),
+        new SpecialtyRecordsService(prismaService, keyedAudit, cipher),
+      );
+      const listed = (overrides = {}) => ({
+        ...session(overrides),
+        treatmentVersion: {
+          version: 1,
+          treatment: { id: 'treatment-1', name: 'Toxina botulínica' },
+        },
+        professional: { id: 'pro', firstName: 'Laura', lastName: 'Mora' },
+      });
+      db.treatmentSession.findMany.mockResolvedValue([
+        listed({
+          id: 'session-2',
+          status: 'CLINICAL_COMPLETE',
+          procedureNotes: cipher.encrypt('tenant-1', 'Sin incidencias.'),
+        }),
+        listed({
+          status: 'CANCELLED',
+          cancellationReason: cipher.encrypt('tenant-1', 'Reacción vasovagal.'),
+        }),
+      ]);
+
+      const result = await sessions.list('tenant-1', 'patient-1', professional);
+
+      expect(result).toEqual([
+        expect.objectContaining({ id: 'session-2', procedureNotes: 'Sin incidencias.' }),
+        expect.objectContaining({ id: 'session-1', procedureNotes: null }),
+      ]);
+      expect(result[0]).toMatchObject({
+        treatment: { id: 'treatment-1', name: 'Toxina botulínica', version: 1 },
+      });
+      expect(result.every((item) => !('cancellationReason' in item))).toBe(true);
+      expect(auditRows()).toEqual([
+        expect.objectContaining({
+          action: 'READ',
+          entity: 'TREATMENT_SESSION',
+          entityId: 'session-2',
+        }),
+        expect.objectContaining({
+          action: 'READ',
+          entity: 'TREATMENT_SESSION',
+          entityId: 'session-1',
+        }),
+      ]);
+    });
+  });
+
   describe('get', () => {
     it('returns the detail and audits the read', async () => {
       db.treatmentSession.findFirst.mockResolvedValue(
@@ -796,7 +856,7 @@ describe('TreatmentSessionsService', () => {
           consentDocumentId: 'consent-doc-1',
           startedAt: updateData().startedAt,
           requirements: { start: [], complete: ['CLINICAL_NOTES', 'AFTER_PHOTOS'] },
-          allowedCommands: ['UPLOAD_AFTER', 'UPLOAD_OTHER', 'COMPLETE', 'CANCEL'],
+          allowedCommands: ['UPLOAD_AFTER', 'UPLOAD_OTHER', 'SAVE_NOTES', 'COMPLETE', 'CANCEL'],
         });
         expect(sessionAudit()).toEqual([
           expect.objectContaining({
@@ -1014,6 +1074,114 @@ describe('TreatmentSessionsService', () => {
         expect(plainToInstance(CompleteTreatmentSessionDto, { procedureNotes: ' x ' })).toEqual({
           procedureNotes: 'x',
         });
+      });
+    });
+
+    describe('saveNotes', () => {
+      const inProgress = (overrides = {}) =>
+        loaded(fullPolicy, {
+          status: 'IN_PROGRESS',
+          formRecordId: 'record-1',
+          consentDocumentId: 'consent-doc-1',
+          startedAt: new Date('2026-10-15T14:30:00Z'),
+          ...overrides,
+        });
+
+      it('keeps the notes encrypted while the procedure is in progress, without closing anything', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(inProgress());
+        writes({ status: 'IN_PROGRESS', formRecordId: 'record-1' });
+
+        const saved = await sessions.saveNotes('tenant-1', 'session-1', professional, {
+          procedureNotes: '  Toxina 20 U en glabela.  ',
+        });
+
+        expect(db.treatmentSession.update.mock.calls[0][0].where).toEqual({
+          id: 'session-1',
+          version: 1,
+        });
+        expect(updateData()).toEqual({
+          procedureNotes: expect.stringMatching(/^enc:v1:/),
+          version: { increment: 1 },
+        });
+        expect(cipher.decrypt('tenant-1', updateData().procedureNotes)).toBe(
+          'Toxina 20 U en glabela.',
+        );
+        expect(db.encounter.update).not.toHaveBeenCalled();
+        expect(saved).toMatchObject({
+          status: 'IN_PROGRESS',
+          procedureNotes: 'Toxina 20 U en glabela.',
+        });
+        expect(sessionAudit()).toEqual([
+          expect.objectContaining({ action: 'UPDATE', entityId: 'session-1', userId: 'pro' }),
+        ]);
+        expect(cipher.decryptJson('tenant-1', sessionAudit()[0].changes)).toMatchObject({
+          before: { procedureNotes: null },
+          after: { procedureNotes: 'Toxina 20 U en glabela.', status: 'IN_PROGRESS' },
+        });
+      });
+
+      it('clears the notes when they are emptied', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(
+          inProgress({ procedureNotes: cipher.encrypt('tenant-1', 'Borrador.') }),
+        );
+        writes({ status: 'IN_PROGRESS' });
+
+        await sessions.saveNotes('tenant-1', 'session-1', professional, { procedureNotes: '  ' });
+
+        expect(updateData()).toEqual({ procedureNotes: null, version: { increment: 1 } });
+      });
+
+      it('writes nothing when the notes did not change, and audits the detail it returns as read', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(
+          inProgress({ procedureNotes: cipher.encrypt('tenant-1', 'Borrador.') }),
+        );
+
+        const saved = await sessions.saveNotes('tenant-1', 'session-1', professional, {
+          procedureNotes: 'Borrador.',
+        });
+
+        expect(db.treatmentSession.update).not.toHaveBeenCalled();
+        expect(sessionAudit()).toEqual([
+          expect.objectContaining({
+            action: 'READ',
+            entityId: 'session-1',
+            patientId: 'patient-1',
+            userId: 'pro',
+          }),
+        ]);
+        expect(saved).toMatchObject({ procedureNotes: 'Borrador.' });
+      });
+
+      it('is refused before the procedure has started and once it has ended', async () => {
+        for (const status of ['CONSENTED', 'CLINICAL_COMPLETE']) {
+          db.treatmentSession.findFirst.mockResolvedValue(loaded(reusablePolicy, { status }));
+
+          await expect(
+            sessions.saveNotes('tenant-1', 'session-1', professional, { procedureNotes: 'x' }),
+          ).rejects.toMatchObject({
+            status: 409,
+            response: { code: 'TREATMENT_SESSION_INVALID_TRANSITION', command: 'SAVE_NOTES' },
+          });
+        }
+        expect(db.treatmentSession.update).not.toHaveBeenCalled();
+      });
+
+      it('is refused to anyone but the professional of the session', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(inProgress());
+
+        await expect(
+          sessions.saveNotes('tenant-1', 'session-1', other, { procedureNotes: 'x' }),
+        ).rejects.toMatchObject({ status: 403, response: { code: 'CLINICAL_RECORD_FORBIDDEN' } });
+      });
+
+      it('takes empty notes and at most 10000 characters', () => {
+        const valid = (procedureNotes: unknown) =>
+          validateSync(plainToInstance(SaveProcedureNotesDto, { procedureNotes }));
+
+        expect(valid('')).toEqual([]);
+        expect(valid('a'.repeat(10000))).toEqual([]);
+        expect(valid('a'.repeat(10001))).not.toEqual([]);
+        expect(valid(undefined)).not.toEqual([]);
       });
     });
 
