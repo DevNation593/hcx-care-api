@@ -25,6 +25,7 @@ import {
 import { ENCRYPTED_NOTE_FIELDS } from '../clinical-notes/encrypted-note-fields';
 import { FILE_STORAGE, FileStorage } from '../patient-files/file-storage';
 import { PrismaService } from '../prisma/prisma.service';
+import { UNFINISHED_SESSION_STATUSES } from '../treatment-sessions/session-state';
 import {
   CloseEncounterDto,
   DeleteEncounterDto,
@@ -69,17 +70,6 @@ export function snapshotEncounter(encounter: Encounter) {
 
 const conflict = (code: string, message: string, extra: Record<string, unknown> = {}) =>
   new ConflictException({ statusCode: 409, code, message, ...extra });
-
-/** The encounter of a treatment session follows the session; the encounters routes leave it alone. */
-function assertNotManagedBySession(encounter: { treatmentSession?: { id: string } | null }) {
-  if (encounter.treatmentSession) {
-    throw conflict(
-      'ENCOUNTER_MANAGED_BY_SESSION',
-      'Esta atención pertenece a una sesión de tratamiento y se gestiona desde ella.',
-      { treatmentSessionId: encounter.treatmentSession.id },
-    );
-  }
-}
 
 /**
  * A record can be written into an encounter only while it is open and by the professional
@@ -136,6 +126,25 @@ export async function lockOpenEncounter(
   return rows.length > 0;
 }
 
+/**
+ * Like lockOpenEncounter, but exclusive: for an operation that ends by closing the encounter.
+ * Two of them cannot both hold a shared lock and then wait for each other (a deadlock); the
+ * second waits here, finds the encounter closed and returns false. closeEncounter taking the
+ * same row again later in the transaction is harmless.
+ */
+export async function lockOpenEncounterForUpdate(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  encounterId: string,
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Encounter"
+    WHERE "id" = ${encounterId} AND "tenantId" = ${tenantId}
+      AND "status" = 'OPEN' AND "deletedAt" IS NULL
+    FOR UPDATE`;
+  return rows.length > 0;
+}
+
 @Injectable()
 export class EncountersService {
   constructor(
@@ -154,6 +163,14 @@ export class EncountersService {
       include: {
         ...encounterInclude,
         _count: { select: { records: { where: { deletedAt: null } } } },
+        treatmentSessions: {
+          select: {
+            id: true,
+            status: true,
+            treatmentVersion: { select: { treatment: { select: { id: true, name: true } } } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
       },
       orderBy: { startedAt: 'desc' },
     });
@@ -169,9 +186,14 @@ export class EncountersService {
       })),
     );
 
-    return stored.map(({ _count, ...encounter }) => ({
+    return stored.map(({ _count, treatmentSessions, ...encounter }) => ({
       ...this.decrypt(encounter),
       recordCount: _count.records,
+      treatmentSessions: treatmentSessions.map((session) => ({
+        id: session.id,
+        status: session.status,
+        treatment: session.treatmentVersion.treatment,
+      })),
     }));
   }
 
@@ -286,7 +308,6 @@ export class EncountersService {
     return this.transaction(async (tx) => {
       await lockEncounterRow(tx, tenantId, encounterId);
       const current = await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'editar');
-      assertNotManagedBySession(current);
 
       const stored = await tx.encounter.update({
         where: { id: encounterId },
@@ -330,17 +351,15 @@ export class EncountersService {
     dto: CloseEncounterDto,
   ) {
     return this.transaction(async (tx) => {
-      const current = await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'cerrar');
-      assertNotManagedBySession(current);
+      await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'cerrar');
       return this.closeEncounter(tx, tenantId, encounterId, actor, dto.summary);
     });
   }
 
   /**
    * Closes an open encounter of the caller inside the caller's transaction, completes its
-   * appointment and audits it. Treatment sessions close their own encounter through it.
-   * `anyAuthor` lets a caller that already authorized the actor close another professional's
-   * encounter (the tenant MASTER revoking a consent); the audit still names the actor.
+   * appointment and audits it. Called by the close route and by the treatment session service
+   * (complete-and-close, and the no-show of the last waiting session); only the author closes.
    */
   async closeEncounter(
     tx: Prisma.TransactionClient,
@@ -348,19 +367,23 @@ export class EncountersService {
     encounterId: string,
     actor: ClinicalActor,
     summary?: string,
-    options: { anyAuthor?: boolean } = {},
   ): Promise<Encounter> {
     // Writes into the encounter hold a shared lock on it: closing waits for them to finish, and
     // the ones that come after find it closed. What is signed below is therefore final.
     await lockEncounterRow(tx, tenantId, encounterId);
-    const current = await this.findOwnOpen(
-      tx,
-      tenantId,
-      null,
-      encounterId,
-      options.anyAuthor ? null : actor,
-      'cerrar',
-    );
+    const current = await this.findOwnOpen(tx, tenantId, null, encounterId, actor, 'cerrar');
+    // The encounter closes once every treatment in it has ended (completed, cancelled or missed).
+    const unfinished = await tx.treatmentSession.findMany({
+      where: { tenantId, encounterId, status: { in: [...UNFINISHED_SESSION_STATUSES] } },
+      select: { id: true },
+    });
+    if (unfinished.length > 0) {
+      throw conflict(
+        'ENCOUNTER_HAS_UNFINISHED_TREATMENTS',
+        'La atención tiene tratamientos sin terminar. Complétalos o cancélalos antes de cerrarla.',
+        { treatmentSessionIds: unfinished.map((session) => session.id) },
+      );
+    }
     const trimmed = summary?.trim();
     const closedAt = new Date();
     const contentHash = await this.signContents(tx, tenantId, encounterId, closedAt, {
@@ -508,7 +531,6 @@ export class EncountersService {
     return this.transaction(async (tx) => {
       await lockEncounterRow(tx, tenantId, encounterId);
       const current = await this.findOwn(tx, tenantId, patientId, encounterId, actor, 'eliminar');
-      assertNotManagedBySession(current);
       if (current.status === 'CLOSED') {
         throw conflict(
           'ENCOUNTER_SIGNED',
@@ -522,6 +544,13 @@ export class EncountersService {
         throw conflict(
           'ENCOUNTER_HAS_RECORDS',
           'La atención tiene registros u órdenes. Elimina sus registros; si tiene órdenes, ciérrala en lugar de eliminarla.',
+        );
+      }
+      const treatments = await tx.treatmentSession.count({ where: { tenantId, encounterId } });
+      if (treatments > 0) {
+        throw conflict(
+          'ENCOUNTER_HAS_RECORDS',
+          'La atención tiene tratamientos. Cancela sus tratamientos y ciérrala en lugar de eliminarla.',
         );
       }
       // Notes and files of a removed encounter could not be changed nor removed any more (they
@@ -629,7 +658,6 @@ export class EncountersService {
   ) {
     const stored = await tx.encounter.findFirst({
       where: { id: encounterId, tenantId, ...(patientId ? { patientId } : {}), deletedAt: null },
-      include: { treatmentSession: { select: { id: true } } },
     });
     if (!stored) throw clinicalRecordNotFound('Atención no encontrada');
     // A null actor means the caller already decided who may act on this encounter.

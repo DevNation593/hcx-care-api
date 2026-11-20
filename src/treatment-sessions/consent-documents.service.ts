@@ -21,7 +21,6 @@ import { MAX_SIGNATURE_CHARS, PNG_MAGIC, SIGNATURE_PREFIX } from '../clinical-fo
 import { DEFAULT_CLINIC_TIMEZONE, formatLongDateInZone } from '../common/utils/timezone';
 import { renderConsentPdf } from '../consents/consent-pdf';
 import { consentChecksum, renderConsentText } from '../consents/consent-text';
-import { EncountersService } from '../encounters/encounters.service';
 import { FILE_STORAGE, FileStorage } from '../patient-files/file-storage';
 import { ADULT_AGE, ageInYears } from '../patients/patient-identity';
 import { PrismaService } from '../prisma/prisma.service';
@@ -112,7 +111,6 @@ export class ConsentDocumentsService {
     private readonly audit: ClinicalAuditService,
     private readonly crypto: ClinicalCryptoService,
     private readonly sessions: TreatmentSessionsService,
-    private readonly encounters: EncountersService,
     @Inject(FILE_STORAGE) private readonly storage: FileStorage,
   ) {}
 
@@ -428,7 +426,10 @@ export class ConsentDocumentsService {
     }
   }
 
-  /** Refuses a presented document: the session ends as CONSENT_REFUSED and its encounter closes. */
+  /**
+   * Refuses a presented document: the session ends as CONSENT_REFUSED. Its encounter stays open
+   * for its other treatments.
+   */
   async refuse(
     tenantId: string,
     documentId: string,
@@ -454,7 +455,6 @@ export class ConsentDocumentsService {
       const refusedSession = await this.sessions.transition(tx, session, {
         status: 'CONSENT_REFUSED',
       });
-      await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
       await tx.consentEvent.create({
         data: {
           tenantId,
@@ -496,9 +496,9 @@ export class ConsentDocumentsService {
 
   /**
    * Revokes a signed document, by the session's professional or the tenant MASTER. Its own
-   * session ends as CONSENT_REVOKED (closing its encounter) only while it is CONSENTED; a
-   * session in any other state is left alone. Other sessions that reused it and are still
-   * CONSENTED go back to READY_FOR_CONSENT without it.
+   * session ends as CONSENT_REVOKED only while it is CONSENTED (its encounter stays open for
+   * its other treatments); a session in any other state is left alone. Other sessions that
+   * reused it and are still CONSENTED go back to READY_FOR_CONSENT without it.
    */
   async revoke(
     tenantId: string,
@@ -535,9 +535,6 @@ export class ConsentDocumentsService {
         );
         const revokedSession = await this.sessions.transition(tx, session, {
           status: 'CONSENT_REVOKED',
-        });
-        await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor, undefined, {
-          anyAuthor: true,
         });
         sessionEntries.push({
           action: 'UPDATE',

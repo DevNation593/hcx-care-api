@@ -16,11 +16,12 @@ export class SectionGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const targets = [context.getHandler(), context.getClass()];
-    const section = this.reflector.getAllAndOverride<SectionKey | undefined>(
-      REQUIRE_SECTION_KEY,
-      targets,
-    );
-    if (!section) return true;
+    const required = this.reflector.getAllAndOverride<
+      SectionKey | readonly SectionKey[] | undefined
+    >(REQUIRE_SECTION_KEY, targets);
+    if (!required) return true;
+    const sections = typeof required === 'string' ? [required] : required;
+    if (sections.length === 0) return true;
 
     const skipped = [IS_PUBLIC_KEY, PLATFORM_ROUTE_KEY].some((key) =>
       this.reflector.getAllAndOverride<boolean>(key, targets),
@@ -28,7 +29,15 @@ export class SectionGuard implements CanActivate {
     if (skipped) return true;
 
     const tenantId = context.switchToHttp().getRequest().user?.tenantId;
-    await assertSectionInEffect(this.prisma, tenantId, section);
-    return true;
+    let firstError: unknown;
+    for (const section of sections) {
+      try {
+        await assertSectionInEffect(this.prisma, tenantId, section);
+        return true;
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    throw firstError;
   }
 }
