@@ -1875,6 +1875,29 @@ describe('TreatmentSessionsService', () => {
         });
       });
 
+      it('locks the encounter exclusively up front, as closing it does', async () => {
+        encounterSessions([{ id: 'session-1', status: 'INTAKE_IN_PROGRESS' }]);
+
+        await run();
+
+        const [strings, ...values] = db.$queryRaw.mock.calls[0];
+        expect(strings.join('?')).toContain('FOR UPDATE');
+        expect(strings.join('?')).not.toContain('FOR SHARE');
+        expect(strings.join('?')).toContain(`"status" = 'OPEN'`);
+        expect(values).toEqual(['encounter-1', 'tenant-1']);
+      });
+
+      it('answers ENCOUNTER_CLOSED when the encounter closed meanwhile', async () => {
+        encounterSessions([{ id: 'session-1', status: 'INTAKE_IN_PROGRESS' }]);
+        db.$queryRaw.mockResolvedValue([]);
+
+        await expect(run()).rejects.toMatchObject({
+          status: 409,
+          response: { code: 'ENCOUNTER_CLOSED' },
+        });
+        expect(db.treatmentSession.update).not.toHaveBeenCalled();
+      });
+
       it('refuses an encounter without treatments', async () => {
         encounterSessions([]);
 

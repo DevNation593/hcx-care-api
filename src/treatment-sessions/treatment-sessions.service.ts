@@ -29,6 +29,7 @@ import {
   assertOpenEncounter,
   EncountersService,
   lockOpenEncounter,
+  lockOpenEncounterForUpdate,
 } from '../encounters/encounters.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
@@ -836,9 +837,9 @@ export class TreatmentSessionsService {
     actor: ClinicalActor,
   ): Promise<SessionDetail[]> {
     return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
-      // Same hold as opening a session in it: a close or a new treatment running now waits.
+      // Exclusive, as closing it is: a concurrent close or no-show waits here and finds it closed.
       await assertOpenEncounter(tx, tenantId, patientId, encounterId, actor);
-      if (!(await lockOpenEncounter(tx, tenantId, encounterId))) {
+      if (!(await lockOpenEncounterForUpdate(tx, tenantId, encounterId))) {
         throw activityConflict('ENCOUNTER_CLOSED', 'La atención ya está cerrada.');
       }
       const all = await tx.treatmentSession.findMany({

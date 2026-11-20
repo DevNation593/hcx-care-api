@@ -126,6 +126,25 @@ export async function lockOpenEncounter(
   return rows.length > 0;
 }
 
+/**
+ * Like lockOpenEncounter, but exclusive: for an operation that ends by closing the encounter.
+ * Two of them cannot both hold a shared lock and then wait for each other (a deadlock); the
+ * second waits here, finds the encounter closed and returns false. closeEncounter taking the
+ * same row again later in the transaction is harmless.
+ */
+export async function lockOpenEncounterForUpdate(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  encounterId: string,
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Encounter"
+    WHERE "id" = ${encounterId} AND "tenantId" = ${tenantId}
+      AND "status" = 'OPEN' AND "deletedAt" IS NULL
+    FOR UPDATE`;
+  return rows.length > 0;
+}
+
 @Injectable()
 export class EncountersService {
   constructor(
