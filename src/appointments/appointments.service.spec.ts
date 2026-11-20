@@ -662,6 +662,47 @@ describe('AppointmentsService canonical appointments', () => {
     );
   });
 
+  describe('date range', () => {
+    const listedRange = () => db.appointment.findMany.mock.calls[0][0].where.startTime;
+
+    it('reads a date-only day as the whole day in the clinic time zone', async () => {
+      db.tenantSettings.findUnique.mockResolvedValue({ timezone: 'America/Guayaquil' });
+
+      await list({ from: '2026-11-20', to: '2026-11-20' });
+
+      // 13:00 and 16:00 in Guayaquil are 18:00Z and 21:00Z, both inside this range.
+      expect(listedRange()).toEqual({
+        gte: new Date('2026-11-20T05:00:00.000Z'),
+        lt: new Date('2026-11-21T05:00:00.000Z'),
+      });
+      expect(db.tenantSettings.findUnique).toHaveBeenCalledWith({
+        where: { tenantId },
+        select: { timezone: true },
+      });
+    });
+
+    it('uses the clinic default zone when the tenant has no settings', async () => {
+      db.tenantSettings.findUnique.mockResolvedValue(null);
+
+      await list({ from: '2026-11-16', to: '2026-11-22' });
+
+      expect(listedRange()).toEqual({
+        gte: new Date('2026-11-16T05:00:00.000Z'),
+        lt: new Date('2026-11-23T05:00:00.000Z'),
+      });
+    });
+
+    it('keeps exact instants as given', async () => {
+      await list({ from: '2026-11-20T05:00:00.000Z', to: '2026-11-21T04:59:59.999Z' });
+
+      expect(listedRange()).toEqual({
+        gte: new Date('2026-11-20T05:00:00.000Z'),
+        lte: new Date('2026-11-21T04:59:59.999Z'),
+      });
+      expect(db.tenantSettings.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
   describe('calendar scope', () => {
     const own = {
       OR: [
