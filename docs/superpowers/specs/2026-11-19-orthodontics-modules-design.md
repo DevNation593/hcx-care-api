@@ -111,7 +111,18 @@ Migración nueva que inserta los cuatro `SpecialtyModule` de `DENTISTRY` (idempo
 patrón que `20261108000000_gynecology_specialty`) y los activa (`TenantModule`) para todo consultorio
 que ya tenga Odontología, como hizo la migración de `dentistry.evolution`. Aún no hay consultorios,
 pero así la migración es correcta en cualquier base; los que activen Odontología después reciben
-los módulos como cualquier módulo de la especialidad.
+los módulos como cualquier módulo de la especialidad. Si el catálogo aún no tiene `DENTISTRY`, la
+migración la crea (sin tocar una fila existente, inactiva incluida), para que los módulos nunca
+queden sin especialidad.
+
+Verificación:
+
+- `npm run prisma:verify-orthodontic-modules` (CI): en esquemas desechables aplica la migración
+  sobre consultorios existentes (con Odontología, con otra especialidad, sin especialidades y con
+  una fila de módulo previa que debe conservarse) y sobre un catálogo sin `DENTISTRY`, y comprueba
+  las filas exactas de `SpecialtyModule` y `TenantModule`.
+- `npm run prisma:audit-orthodontic-modules`: solo lectura contra `DATABASE_URL`; lista las
+  asociaciones que falten y termina con código 1 si hay alguna. Para correr tras desplegar.
 
 ## Demo y pruebas
 
