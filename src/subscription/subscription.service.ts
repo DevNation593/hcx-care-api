@@ -28,7 +28,7 @@ export class SubscriptionService {
     });
 
     if (!subscription) {
-      throw new BadRequestException('No se encontró suscripción para este tenant');
+      throw new BadRequestException('No se encontró una suscripción para este consultorio.');
     }
 
     const professionalsCount = await this.prisma.professionalProfile.count({

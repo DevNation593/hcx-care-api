@@ -44,11 +44,11 @@ describe('TenantGuard scope errors', () => {
     }) as unknown as ExecutionContext;
 
   it.each([
-    [{ params: { tenantId: 'tenant-2' } }, 'Acceso denegado: El tenant no coincide'],
     [
-      { body: { tenantId: 'tenant-2' } },
-      'Acceso denegado: No puede crear recursos para otro tenant',
+      { params: { tenantId: 'tenant-2' } },
+      'No tienes acceso a la información de este consultorio.',
     ],
+    [{ body: { tenantId: 'tenant-2' } }, 'No puedes registrar información en otro consultorio.'],
   ])('returns stable scope errors without setting RLS for %j', (input, message) => {
     rls.run({}, () => {
       let caught: unknown;
@@ -63,6 +63,12 @@ describe('TenantGuard scope errors', () => {
       });
       expect(rls.get()).toEqual({});
     });
+  });
+
+  it('asks to sign in again when the session has no clinic', () => {
+    expect(() => guard.canActivate(context({ user: { ...user, tenantId: undefined } }))).toThrow(
+      'No se pudo identificar tu consultorio. Vuelve a iniciar sesión.',
+    );
   });
 
   it('initializes the matching request tenant and RLS context', () => {
