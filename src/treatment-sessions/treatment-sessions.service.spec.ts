@@ -14,6 +14,7 @@ import { TreatmentsService } from '../treatments/treatments.service';
 import {
   CancelTreatmentSessionDto,
   CompleteTreatmentSessionDto,
+  CreateTreatmentSessionDto,
   SaveProcedureNotesDto,
 } from './dto/treatment-session.dto';
 import { TreatmentSessionsService } from './treatment-sessions.service';
@@ -500,6 +501,40 @@ describe('TreatmentSessionsService', () => {
             treatmentIds: ids,
           }),
         ).rejects.toMatchObject({ status: 400 });
+        expect(db.treatmentSession.create).not.toHaveBeenCalled();
+      });
+
+      it('treats a JSON null as absent', async () => {
+        await expect(
+          service.create('tenant-1', 'patient-1', professional, {
+            treatmentId: null,
+            treatmentIds: undefined,
+          } as unknown as CreateTreatmentSessionDto),
+        ).rejects.toMatchObject({ status: 400 });
+        expect(db.treatment.findFirst).not.toHaveBeenCalled();
+        expect(db.treatmentSession.create).not.toHaveBeenCalled();
+      });
+
+      it("rejects another professional's encounter", async () => {
+        db.encounter.findFirst.mockResolvedValue(openEncounterRow({ professionalId: 'other' }));
+
+        await expect(createMany({ encounterId: 'encounter-9' })).rejects.toMatchObject({
+          status: 403,
+          response: { code: 'CLINICAL_RECORD_FORBIDDEN' },
+        });
+        expect(db.treatmentSession.create).not.toHaveBeenCalled();
+      });
+
+      it('rejects an encounter of another patient or tenant as not found', async () => {
+        db.encounter.findFirst.mockResolvedValue(null);
+
+        await expect(createMany({ encounterId: 'encounter-9' })).rejects.toMatchObject({
+          status: 404,
+        });
+        expect(db.encounter.findFirst.mock.calls[0][0].where).toMatchObject({
+          tenantId: 'tenant-1',
+          patientId: 'patient-1',
+        });
         expect(db.treatmentSession.create).not.toHaveBeenCalled();
       });
 

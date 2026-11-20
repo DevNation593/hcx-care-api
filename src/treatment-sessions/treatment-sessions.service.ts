@@ -302,11 +302,12 @@ export class TreatmentSessionsService {
     actor: ClinicalActor,
     dto: CreateTreatmentSessionDto,
   ): Promise<SessionDetail | SessionDetail[]> {
-    const single = dto.treatmentId !== undefined;
-    if (single === (dto.treatmentIds !== undefined)) {
+    // A JSON null counts as absent: the validators skip it with @IsOptional.
+    const single = dto.treatmentId != null;
+    if (single === (dto.treatmentIds != null)) {
       throw new BadRequestException('Indica treatmentId o treatmentIds, pero no ambos.');
     }
-    if (dto.encounterId && (dto.encounterType !== undefined || dto.reason !== undefined)) {
+    if (dto.encounterId && (dto.encounterType != null || dto.reason != null)) {
       throw new BadRequestException(
         'El tipo y el motivo solo se indican al abrir una atención nueva.',
       );
@@ -342,8 +343,8 @@ export class TreatmentSessionsService {
                   .map(({ treatment }) => treatment.name)
                   .join(', ')
                   .slice(0, MAX_REASON_LENGTH),
-              appointmentId: dto.appointmentId,
-              branchId: dto.branchId,
+              appointmentId: dto.appointmentId ?? undefined,
+              branchId: dto.branchId ?? undefined,
             });
 
         const opened: SessionDetail[] = [];
@@ -381,10 +382,10 @@ export class TreatmentSessionsService {
       select: { id: true, appointmentId: true, branchId: true },
     });
     if (!encounter) throw clinicalRecordNotFound('Atención no encontrada');
-    if (dto.appointmentId !== undefined && dto.appointmentId !== encounter.appointmentId) {
+    if (dto.appointmentId != null && dto.appointmentId !== encounter.appointmentId) {
       throw new BadRequestException('La cita no corresponde a la atención indicada.');
     }
-    if (dto.branchId !== undefined && dto.branchId !== encounter.branchId) {
+    if (dto.branchId != null && dto.branchId !== encounter.branchId) {
       throw new BadRequestException('La sede no corresponde a la atención indicada.');
     }
     return encounter;
