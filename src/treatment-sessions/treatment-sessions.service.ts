@@ -865,7 +865,8 @@ export class TreatmentSessionsService {
    * as NO_SHOW, its appointment (if still unattended or in progress) too, and the encounter
    * closes. It does not apply once anything was done with the patient: a treatment started or
    * finished, a record of its own, a note or an order (409 ENCOUNTER_HAS_ACTIVITY). Sessions
-   * already cancelled or missed do not count as activity.
+   * already cancelled or missed do not count as activity, unless they were started before being
+   * cancelled: the patient was attended then.
    */
   async noShowEncounter(
     tenantId: string,
@@ -882,7 +883,7 @@ export class TreatmentSessionsService {
       const all = await tx.treatmentSession.findMany({
         where: { tenantId, encounterId },
         orderBy: { createdAt: 'asc' },
-        select: { id: true, status: true, formRecordId: true },
+        select: { id: true, status: true, formRecordId: true, startedAt: true },
       });
       if (all.length === 0) {
         throw activityConflict(
@@ -891,8 +892,13 @@ export class TreatmentSessionsService {
         );
       }
       const waiting = all.filter((row) => NO_SHOW_ELIGIBLE_STATUSES.includes(row.status));
+      // A treatment cancelled after it started keeps its startedAt: the patient was attended.
       if (
-        all.some((row) => !NO_SHOW_IGNORED_STATUSES.includes(row.status) && !waiting.includes(row))
+        all.some(
+          (row) =>
+            row.startedAt !== null ||
+            (!NO_SHOW_IGNORED_STATUSES.includes(row.status) && !waiting.includes(row)),
+        )
       ) {
         throw activityConflict(
           'ENCOUNTER_HAS_ACTIVITY',

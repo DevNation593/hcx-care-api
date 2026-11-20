@@ -1890,6 +1890,20 @@ describe('TreatmentSessionsService', () => {
         expect(db.encounter.update).not.toHaveBeenCalled();
       });
 
+      it('refuses when a session was started and then cancelled', async () => {
+        encounterSessions([
+          { id: 'session-1', status: 'INTAKE_IN_PROGRESS' },
+          { id: 'session-2', status: 'CANCELLED', startedAt: new Date('2026-01-01T10:00:00Z') },
+        ]);
+
+        await expect(run()).rejects.toMatchObject({
+          status: 409,
+          response: { code: 'ENCOUNTER_HAS_ACTIVITY' },
+        });
+        expect(db.treatmentSession.update).not.toHaveBeenCalled();
+        expect(db.encounter.update).not.toHaveBeenCalled();
+      });
+
       it('refuses when a session is already finished', async () => {
         encounterSessions([{ id: 'session-1', status: 'CLINICAL_COMPLETE' }]);
 
