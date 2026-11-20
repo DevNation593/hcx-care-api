@@ -1,4 +1,9 @@
-import { formatLongDateInZone, getZonedDateParts, zonedDateString } from './timezone';
+import {
+  formatLongDateInZone,
+  getZonedDateParts,
+  zonedDateString,
+  zonedDayRange,
+} from './timezone';
 
 describe('zonedDateString', () => {
   const instant = new Date('2026-10-27T04:30:00Z');
@@ -58,5 +63,34 @@ describe('formatLongDateInZone', () => {
     const lateUtc = new Date('2026-10-15T03:00:00.000Z');
     expect(formatLongDateInZone(lateUtc, null)).toBe('15 de octubre de 2026');
     expect(formatLongDateInZone(lateUtc, 'Not/AZone')).toBe('15 de octubre de 2026');
+  });
+});
+
+describe('zonedDayRange', () => {
+  it('spans the calendar day as lived in the clinic time zone', () => {
+    expect(zonedDayRange('2026-11-20', 'America/Guayaquil')).toEqual({
+      start: new Date('2026-11-20T05:00:00.000Z'),
+      end: new Date('2026-11-21T05:00:00.000Z'),
+    });
+  });
+
+  it('follows daylight saving changes', () => {
+    expect(zonedDayRange('2026-03-08', 'America/New_York')).toEqual({
+      start: new Date('2026-03-08T05:00:00.000Z'),
+      end: new Date('2026-03-09T04:00:00.000Z'),
+    });
+  });
+
+  it('crosses month and year boundaries', () => {
+    expect(zonedDayRange('2026-12-31', 'UTC')).toEqual({
+      start: new Date('2026-12-31T00:00:00.000Z'),
+      end: new Date('2027-01-01T00:00:00.000Z'),
+    });
+  });
+
+  it('falls back to the clinic default zone when the zone is missing or invalid', () => {
+    const expected = zonedDayRange('2026-11-20', 'America/Guayaquil');
+    expect(zonedDayRange('2026-11-20', null)).toEqual(expected);
+    expect(zonedDayRange('2026-11-20', 'Not/AZone')).toEqual(expected);
   });
 });
