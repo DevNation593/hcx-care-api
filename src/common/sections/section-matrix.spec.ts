@@ -106,6 +106,33 @@ describe('section matrix', () => {
   });
 
   it.each([
+    [EncountersController, 'list'],
+    [EncountersController, 'close'],
+  ] as [Controller, string][])(
+    '%p.%s is reachable with either the specialties or the treatment sessions section',
+    (controller, handler) => {
+      expect(
+        Reflect.getMetadata(
+          REQUIRE_SECTION_KEY,
+          (controller.prototype as Record<string, object>)[handler],
+        ),
+      ).toEqual(['core.clinical.specialties', 'core.treatments.sessions']);
+    },
+  );
+
+  it.each([
+    [EncountersController, 'start'],
+    [EncountersController, 'update'],
+    [EncountersController, 'remove'],
+  ] as [Controller, string][])(
+    '%p.%s still requires the specialties section alone',
+    (controller, handler) => {
+      expect(handlerSection(controller, handler)).toBeUndefined();
+      expect(classSection(controller)).toBe('core.clinical.specialties');
+    },
+  );
+
+  it.each([
     [ClinicalModulesController, 'listForms'],
     [ClinicalModulesController, 'findForm'],
     [DocumentTemplatesController, 'list'],
