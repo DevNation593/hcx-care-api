@@ -18,19 +18,7 @@ export type ExpressionNode =
   | { kind: 'call'; name: FunctionName; args: ExpressionNode[] };
 
 type BinaryOperator =
-  | '+'
-  | '-'
-  | '*'
-  | '/'
-  | '^'
-  | '>'
-  | '>='
-  | '<'
-  | '<='
-  | '=='
-  | '!='
-  | 'and'
-  | 'or';
+  '+' | '-' | '*' | '/' | '^' | '>' | '>=' | '<' | '<=' | '==' | '!=' | 'and' | 'or';
 
 const FUNCTIONS = ['sum', 'avg', 'min', 'max', 'round', 'abs'] as const;
 type FunctionName = (typeof FUNCTIONS)[number];

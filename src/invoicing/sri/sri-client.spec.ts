@@ -28,8 +28,7 @@ interface Call {
 }
 
 type Fake =
-  | string
-  | { status?: number; body?: string; headers?: Record<string, string>; hang?: boolean };
+  string | { status?: number; body?: string; headers?: Record<string, string>; hang?: boolean };
 
 function fake(response: Fake, timeoutMs?: number) {
   const calls: Call[] = [];

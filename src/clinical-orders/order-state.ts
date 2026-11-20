@@ -16,13 +16,7 @@ export const CLOSED_ORDER_STATUSES: readonly ClinicalOrderStatus[] = [
 ];
 
 export type OrderCommand =
-  | 'collectSample'
-  | 'sendToLab'
-  | 'addResult'
-  | 'review'
-  | 'communicate'
-  | 'complete'
-  | 'cancel';
+  'collectSample' | 'sendToLab' | 'addResult' | 'review' | 'communicate' | 'complete' | 'cancel';
 
 /**
  * From which statuses each command is accepted. A result can arrive at any open step, also as a

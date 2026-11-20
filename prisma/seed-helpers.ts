@@ -122,7 +122,7 @@ export class Agenda {
 
     const length = duration * MINUTE_MS;
     const slots = this.taken.get(professionalId) ?? [];
-    for (let moved = true; moved; ) {
+    for (let moved = true; moved;) {
       moved = false;
       for (const slot of slots) {
         if (start < slot.end && slot.start < start + length) {

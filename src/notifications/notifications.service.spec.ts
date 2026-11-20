@@ -21,7 +21,10 @@ describe('NotificationsService', () => {
         return row;
       }),
       update: jest.fn(async ({ where, data }) =>
-        Object.assign(rows.find((row) => row.id === where.id)!, data),
+        Object.assign(
+          rows.find((row) => row.id === where.id)!,
+          data,
+        ),
       ),
     },
     user: { findFirst: jest.fn(async () => ({ fcmToken: null })) },
