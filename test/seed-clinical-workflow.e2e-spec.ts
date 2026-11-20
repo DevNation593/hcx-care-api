@@ -322,6 +322,64 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .expect(403);
   });
 
+  it('lets the dentist keep the orthodontic records of his patient', async () => {
+    const modules = await request(server())
+      .get(`${base()}/clinical-modules`)
+      .set(as('odonto'))
+      .expect(200);
+    const orthodontic = modules.body.filter((definition: { moduleKey: string }) =>
+      definition.moduleKey.startsWith('dentistry.ortho-'),
+    );
+    expect(
+      orthodontic.map((definition: { moduleKey: string }) => definition.moduleKey).sort(),
+    ).toEqual([
+      'dentistry.ortho-assessment',
+      'dentistry.ortho-cephalometry',
+      'dentistry.ortho-control',
+      'dentistry.ortho-treatment-plan',
+    ]);
+    expect(orthodontic.every((definition: { canRecord: boolean }) => definition.canRecord)).toBe(
+      true,
+    );
+
+    const records = await request(server())
+      .get(patientUrl('Sofía', 'specialty-records'))
+      .set(as('odonto'))
+      .expect(200);
+    const byModule = (key: string) =>
+      records.body.find((record: { moduleKey: string }) => record.moduleKey === key);
+    expect(byModule('dentistry.ortho-assessment').data).toMatchObject({
+      molarClassRight: 'CLASE_II',
+      overjetMm: 6.5,
+    });
+    expect(byModule('dentistry.ortho-treatment-plan').data).toMatchObject({
+      appliance: 'AUTOLIGADO',
+    });
+    expect(byModule('dentistry.ortho-control').data).toMatchObject({ visitType: 'AJUSTE' });
+
+    const data = {
+      visitType: 'EMERGENCIA',
+      debondedBrackets: ['36'],
+      procedurePerformed: 'Recementado de bracket 36.',
+    };
+    const write = (who: string) =>
+      request(server()).post(patientUrl('Sofía', 'specialty-records')).set(as(who)).send({
+        password: DEMO_PASSWORD,
+        moduleKey: 'dentistry.ortho-control',
+        schemaVersion: 1,
+        data,
+      });
+    const written = await write('odonto').expect(201);
+    expect(written.body.data).toEqual(data);
+
+    // A professional of another specialty cannot write it, and reception never reads it.
+    await write('medicina').expect(403);
+    await request(server())
+      .get(patientUrl('Sofía', 'specialty-records'))
+      .set(as('recepcion'))
+      .expect(403);
+  });
+
   it('reads a form of the clinic under the version each record was written with', async () => {
     const modules = await request(server())
       .get(`${base()}/clinical-modules`)
@@ -419,10 +477,11 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       .set(as('titular'))
       .expect(200);
 
-    expect(report.body.totals).toMatchObject({ cancelled: 1, noShow: 1, encounters: 7 });
+    // Sofía's orthodontic assessment, a month ago, falls before the period; her control does not.
+    expect(report.body.totals).toMatchObject({ cancelled: 1, noShow: 1, encounters: 8 });
     const branch = (name: string) =>
       report.body.branches.find((candidate: { name: string }) => candidate.name === name);
-    expect(branch('Sede Norte').encounters).toBe(3);
+    expect(branch('Sede Norte').encounters).toBe(4);
     expect(branch('Sede principal').encounters).toBe(3);
     // The teleconsultation was attended from no branch.
     expect(branch('Sin sede')).toMatchObject({ appointments: 0, encounters: 1 });
