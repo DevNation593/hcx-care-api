@@ -40,7 +40,9 @@ export class TenantGuard implements CanActivate {
     const user = request.user;
 
     if (!user || !user.tenantId) {
-      throw new ForbiddenException('Contexto del tenant no encontrado');
+      throw new ForbiddenException(
+        'No se pudo identificar tu consultorio. Vuelve a iniciar sesión.',
+      );
     }
 
     if (isPlatformRoute) {
@@ -99,7 +101,7 @@ export class TenantGuard implements CanActivate {
         throw new ForbiddenException({
           statusCode: 403,
           code: 'TENANT_SCOPE_VIOLATION',
-          message: 'Acceso denegado: No puede crear recursos para otro tenant',
+          message: 'No puedes registrar información en otro consultorio.',
         });
       }
     }
