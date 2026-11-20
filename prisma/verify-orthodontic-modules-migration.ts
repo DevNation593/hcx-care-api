@@ -11,7 +11,8 @@ import {
   OrthodonticModulesAudit,
 } from './audit-orthodontic-modules';
 
-const targetMigration = '20261119000000_orthodontics_modules';
+const modulesMigration = '20261119000000_orthodontics_modules';
+const catalogMigration = '20261120000000_orthodontics_dentistry_catalog';
 const schemaPattern = /^orthodontic_modules_[a-f0-9]{16}$/;
 const temporaryPrefix = 'orthodontic-modules-migration-';
 
@@ -47,7 +48,8 @@ function deploy(schemaPath: string, databaseUrl: string): void {
   }
 }
 
-function copyMigrations(destination: string, includeTarget: boolean): void {
+/** Copies every migration before the orthodontic ones, plus those up to `through` when given. */
+function copyMigrations(destination: string, through?: string): void {
   const source = join(__dirname, 'migrations');
   const target = join(destination, 'migrations');
   mkdirSync(target, { recursive: true });
@@ -56,7 +58,7 @@ function copyMigrations(destination: string, includeTarget: boolean): void {
     .filter(
       (item) =>
         /^\d+_/.test(item) &&
-        (item < targetMigration || (includeTarget && item === targetMigration)),
+        (item < modulesMigration || (through !== undefined && item <= through)),
     )
     .sort()) {
     cpSync(join(source, name), join(target, name), { recursive: true });
@@ -105,11 +107,12 @@ async function orthodonticTenantModules(client: PrismaClient): Promise<TenantMod
 
 /**
  * Runs `scenario` against a fresh schema of the disposable database that holds every migration
- * before the target one, then drops the schema.
+ * before the orthodontic ones, then drops the schema. `applyThrough` deploys the migrations up
+ * to the one it names.
  */
 async function inFreshSchema(
   baseUrl: string,
-  scenario: (client: PrismaClient, applyTarget: () => void) => Promise<void>,
+  scenario: (client: PrismaClient, applyThrough: (migration: string) => void) => Promise<void>,
 ): Promise<void> {
   const temporary = mkdtempSync(join(tmpdir(), temporaryPrefix));
   const schemaDir = join(temporary, 'prisma');
@@ -127,10 +130,10 @@ async function inFreshSchema(
   try {
     await administrator.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);
     schemaCreated = true;
-    copyMigrations(schemaDir, false);
+    copyMigrations(schemaDir);
     deploy(schemaPath, schemaUrl);
-    await scenario(client, () => {
-      copyMigrations(schemaDir, true);
+    await scenario(client, (migration) => {
+      copyMigrations(schemaDir, migration);
       deploy(schemaPath, schemaUrl);
     });
   } finally {
@@ -162,7 +165,7 @@ async function inFreshSchema(
 
 /**
  * Upgrades a database that already has clinics, and one whose catalog has no dentistry yet,
- * through the orthodontic modules migration, and checks what it leaves in SpecialtyModule and
+ * through the orthodontic migrations, and checks what they leave in SpecialtyModule and
  * TenantModule.
  */
 export async function verifyOrthodonticModulesMigration(
@@ -174,7 +177,7 @@ export async function verifyOrthodonticModulesMigration(
   let tenantModulesCreated = 0;
 
   // Clinics that existed before the migration.
-  await inFreshSchema(baseUrl, async (client, applyTarget) => {
+  await inFreshSchema(baseUrl, async (client, applyThrough) => {
     await addSpecialty(client, 'spec_dentistry', 'DENTISTRY');
     await addSpecialty(client, 'spec_other', 'VERIFY_OTHER');
     await addClinic(client, 'clinic_dental', ['spec_dentistry']);
@@ -201,7 +204,7 @@ export async function verifyOrthodonticModulesMigration(
         .map((moduleKey) => ({ tenantId: 'clinic_mixed', moduleKey })),
     ]);
 
-    applyTarget();
+    applyThrough(catalogMigration);
 
     expectEqual(
       'Dentistry modules',
@@ -225,12 +228,17 @@ export async function verifyOrthodonticModulesMigration(
     tenantModulesCreated = rows.length - 1;
   });
 
-  // A catalog without dentistry: the migration adds it instead of linking nothing.
-  await inFreshSchema(baseUrl, async (client, applyTarget) => {
-    const before = await auditOrthodonticModules(client);
-    expectEqual('Audit of a catalog without dentistry', before.dentistryInCatalog, false);
+  // A catalog without dentistry: the first migration links nothing, the second one repairs it.
+  await inFreshSchema(baseUrl, async (client, applyThrough) => {
+    applyThrough(modulesMigration);
+    const linkedNothing = await auditOrthodonticModules(client);
+    expectEqual('Audit after the modules migration alone', linkedNothing, {
+      dentistryInCatalog: false,
+      missingSpecialtyModules: keys,
+      missingTenantModules: [],
+    });
 
-    applyTarget();
+    applyThrough(catalogMigration);
 
     expectEqual(
       'Dentistry in the catalog',
