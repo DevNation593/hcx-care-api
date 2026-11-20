@@ -10,7 +10,7 @@ import { AppointmentStatus, Prisma } from '@prisma/client';
 import { assertBranchAvailable, assertProfessionalInBranch } from '../branches/branches.service';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
 import { PUBLIC_USER_SELECT } from '../common/utils/public-user-select';
-import { getZonedDateParts } from '../common/utils/timezone';
+import { DATE_ONLY_PATTERN, getZonedDateParts, zonedDayRange } from '../common/utils/timezone';
 import { PatientTeamService } from '../patient-team/patient-team.service';
 import { TeamActor, TeamDb } from '../patient-team/patient-team.types';
 import { ProfessionalEligibilityService } from '../patient-team/professional-eligibility.service';
@@ -151,10 +151,7 @@ export class AppointmentsService {
     if (filters.patientId) where.patientId = filters.patientId;
     if (filters.status) where.status = filters.status;
     if (filters.from || filters.to) {
-      where.startTime = {
-        ...(filters.from && { gte: new Date(filters.from) }),
-        ...(filters.to && { lte: new Date(filters.to) }),
-      };
+      where.startTime = await this.startTimeRange(tenantId, filters.from, filters.to);
     }
     const appointments = await this.prisma.appointment.findMany({
       where,
@@ -499,6 +496,33 @@ export class AppointmentsService {
       throw new BadRequestException('Duración inválida');
     }
     return new Date(start.getTime() + duration * 60000);
+  }
+
+  /**
+   * The startTime filter for a list. A bound written as a date ("2026-11-20") covers that
+   * whole day in the tenant's own time zone, so a dashboard asking for today gets today as
+   * the clinic lives it. A bound with a time of day is used as the exact instant it names.
+   */
+  private async startTimeRange(
+    tenantId: string,
+    from?: string,
+    to?: string,
+  ): Promise<Prisma.DateTimeFilter> {
+    const fromDay = from !== undefined && DATE_ONLY_PATTERN.test(from);
+    const toDay = to !== undefined && DATE_ONLY_PATTERN.test(to);
+    const timezone =
+      fromDay || toDay
+        ? (
+            await this.prisma.tenantSettings.findUnique({
+              where: { tenantId },
+              select: { timezone: true },
+            })
+          )?.timezone
+        : undefined;
+    return {
+      ...(from && { gte: fromDay ? zonedDayRange(from, timezone).start : new Date(from) }),
+      ...(to && (toDay ? { lt: zonedDayRange(to, timezone).end } : { lte: new Date(to) })),
+    };
   }
 
   /** Working days and hours are evaluated in the tenant's own time zone, not the server's. */
