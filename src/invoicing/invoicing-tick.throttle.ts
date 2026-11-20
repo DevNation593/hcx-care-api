@@ -95,6 +95,20 @@ export function buildThrottlers(
 }
 
 /**
+ * Invalid attempts of `key` still inside their window. The in-memory storage keeps each hit's
+ * expiry in `hitExpirations` and only prunes `totalHits` on the next increment (since
+ * @nestjs/throttler 6.8), so `totalHits` alone stays at its last value after the window ends.
+ * Older versions have no `hitExpirations` and decay `totalHits` with a timer per hit.
+ */
+function liveInvalidHits(storage: any, key: string, now: number): number {
+  const expirations: number[] | undefined = storage?.hitExpirations
+    ?.get?.(key)
+    ?.get?.('tick-invalid');
+  if (expirations) return expirations.filter((expiresAt) => expiresAt > now).length;
+  return storage?.storage?.get?.(key)?.totalHits?.get('tick-invalid') ?? 0;
+}
+
+/**
  * ThrottlerGuard that, before counting a valid tick call, checks (without incrementing) whether the
  * client already used its invalid attempts, and answers 429 if so. It reads the in-memory storage of
  * the library; with any other storage the check is skipped and only the two buckets apply.
@@ -106,13 +120,13 @@ export class TickAwareThrottlerGuard extends ThrottlerGuard {
       const tracker = await props.getTracker(req, props.context);
       const key = props.generateKey(props.context, tracker, 'tick-invalid');
       const record = (this.storageService as any).storage?.get?.(key);
-      const used: number = record?.totalHits?.get('tick-invalid') ?? 0;
       const now = Date.now();
+      const used = liveInvalidHits(this.storageService, key, now);
       // Blocked: the library keeps the block for one window after the 11th hit, while the counted
       // hits keep decaying, so the count alone can fall below the limit during the block.
       const blocked = !!record?.isBlocked && record.blockExpiresAt > now;
-      // The count is kept by the per-hit decay timers; `expiresAt` is a fixed window that only the
-      // next increment renews, so it must not be consulted here.
+      // The count is the hits still inside their window; `expiresAt` is a fixed window that only
+      // the next increment renews, so it must not be consulted here.
       const spent = used >= INVALID_TICK_ATTEMPTS_PER_MINUTE;
       if (record && (blocked || spent)) {
         // Change the state exactly as a wrong guess would (same key, ttl, limit and block duration as

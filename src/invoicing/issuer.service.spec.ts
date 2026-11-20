@@ -259,7 +259,11 @@ describe('IssuerService', () => {
 
   it('stores the certificate encrypted in file storage, not in the database, and returns only metadata', async () => {
     const view = await service.saveCertificate(tenant, actor, p12, 'clave-prueba');
-    expect(view.certificate).toMatchObject({ rucVerified: true, sha256: sha256(p12) });
+    expect(view.certificate).toMatchObject({
+      rucVerified: true,
+      sha256: sha256(p12),
+      holderName: 'TITULAR DE PRUEBA',
+    });
     const data = tx.invoicingIssuer.update.mock.calls[0][0].data;
     expect(data.certificateStorageKey).toMatch(
       /^invoicing-issuers\/clinic\/issuer\/certificate-[0-9a-f-]{36}$/,

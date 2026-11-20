@@ -54,6 +54,9 @@ jobs:
       - name: Verify personal owner profile migration upgrade
         run: npm run prisma:verify-personal-owner-profile
 
+      - name: Verify orthodontic modules migration upgrade
+        run: npm run prisma:verify-orthodontic-modules
+
       - name: Apply Prisma migrations
         run: npx prisma migrate deploy
 

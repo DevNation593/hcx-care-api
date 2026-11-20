@@ -3,12 +3,7 @@ import { AddressInfo } from 'net';
 import * as soap from '../../src/invoicing/sri/testing/sri-soap-samples';
 
 export type SriSimulatorMode =
-  | 'authorize'
-  | 'pending'
-  | 'return'
-  | 'not-authorized'
-  | 'reception-timeout'
-  | 'down';
+  'authorize' | 'pending' | 'return' | 'not-authorized' | 'reception-timeout' | 'down';
 
 export interface SriSimulator {
   baseUrl: string;

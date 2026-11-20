@@ -9,6 +9,7 @@ import { runSerializableTransaction } from '../prisma/serializable-transaction';
 import { IssuerEmissionPointDto, SaveIssuerDto } from './dto/issuer.dto';
 import { invoiceError } from './invoice-errors';
 import { certificateMatchesRuc, openCertificate, SigningMaterial } from './sri/certificate';
+import { certificateHolderName } from './sri/certificate-holder';
 import { SriClient } from './sri/sri-client';
 import { RimpeRegime, SriEnvironment, SriError } from './sri/sri-types';
 
@@ -35,6 +36,8 @@ export interface IssuerView {
   revision: number;
   certificate: {
     subject: string;
+    /** The holder's name without identifiers, for display; null when the subject names nobody. */
+    holderName: string | null;
     serial: string;
     validTo: string;
     sha256: string;
@@ -71,6 +74,7 @@ function toView(issuer: IssuerRow): IssuerView {
       issuer.certificateStorageKey && issuer.certificateSha256 && issuer.certificateValidTo
         ? {
             subject: issuer.certificateSubject ?? '',
+            holderName: certificateHolderName(issuer.certificateSubject),
             serial: issuer.certificateSerial ?? '',
             validTo: issuer.certificateValidTo.toISOString(),
             sha256: issuer.certificateSha256,

@@ -9,10 +9,7 @@ export type ClinicalBillingCode =
   | 'SESSION_NOT_BILLABLE';
 
 export type CashBillingCode =
-  | 'BILLING_PROFILE'
-  | 'INVOICE_ITEMS'
-  | 'BALANCE_DUE'
-  | 'INVOICING_NOT_CONFIGURED';
+  'BILLING_PROFILE' | 'INVOICE_ITEMS' | 'BALANCE_DUE' | 'INVOICING_NOT_CONFIGURED';
 
 export type BillingCode = ClinicalBillingCode | CashBillingCode;
 
