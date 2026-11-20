@@ -32,6 +32,7 @@ export class EncountersController {
     description: 'Requires an active professional profile. Every encounter returned is audited.',
   })
   @RequirePermission('clinical_records.view')
+  @RequireSection(['core.clinical.specialties', 'core.treatments.sessions'])
   list(
     @Param('tenantId') tenantId: string,
     @Param('patientId') patientId: string,
@@ -79,6 +80,7 @@ export class EncountersController {
       'The signature of the professional, who types their password again (403 SIGNATURE_PASSWORD_INVALID): the encounter, its records, notes and files get their SHA-256, take no more changes, and its appointment is completed.',
   })
   @RequirePermission('clinical_records.update')
+  @RequireSection(['core.clinical.specialties', 'core.treatments.sessions'])
   async close(
     @Param('tenantId') tenantId: string,
     @Param('patientId') patientId: string,

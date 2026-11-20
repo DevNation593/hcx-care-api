@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -7,6 +8,8 @@ import {
 import {
   ConsentDocument,
   ConsentSignerRole,
+  Encounter,
+  EncounterStatus,
   PatientFile,
   Prisma,
   Treatment,
@@ -17,9 +20,17 @@ import {
 import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
-import { clinicalRecordForbidden } from '../clinical-access/clinical-errors';
+import {
+  clinicalRecordForbidden,
+  clinicalRecordNotFound,
+} from '../clinical-access/clinical-errors';
 import { DEFAULT_CLINIC_TIMEZONE } from '../common/utils/timezone';
-import { EncountersService } from '../encounters/encounters.service';
+import {
+  assertOpenEncounter,
+  EncountersService,
+  lockOpenEncounter,
+  lockOpenEncounterForUpdate,
+} from '../encounters/encounters.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
 import { SpecialtyRecordsService } from '../specialty-records/specialty-records.service';
@@ -50,7 +61,17 @@ import {
 const ENCRYPTED_SESSION_FIELDS = ['procedureNotes', 'cancellationReason'] as const;
 const ENCRYPTED_FILE_FIELDS = ['fileName', 'description'] as const;
 
+/** Same limit as the encounter reason. */
+const MAX_REASON_LENGTH = 2000;
+/** Live treatments one encounter can hold; the DTO caps a single request at the same number. */
+const MAX_TREATMENTS_PER_ENCOUNTER = 10;
+
 type VersionWithTreatment = TreatmentVersion & { treatment: Treatment };
+type OpenedSession = {
+  session: TreatmentSession;
+  version: VersionWithTreatment;
+  policy: ReturnType<typeof parseTreatmentRequirements>;
+};
 
 const sessionInclude = {
   treatmentVersion: { include: { treatment: true } },
@@ -152,7 +173,16 @@ export type SessionDetail = TreatmentSession & {
   requirements: { start: MissingRequirement[]; complete: MissingRequirement[] };
   /** What the reader may do now: empty for anyone but the owner, except a MASTER's revocation. */
   allowedCommands: SessionCommand[];
+  encounterStatus: EncounterStatus;
+  /** The other sessions of the same encounter, in the order they were opened. */
+  encounterSessions: EncounterSiblingSession[];
 };
+
+export interface EncounterSiblingSession {
+  id: string;
+  status: TreatmentSessionStatus;
+  treatmentName: string;
+}
 
 /** The commands of the status the actor may send: the owner all, a MASTER only the revocation. */
 function commandsForActor(
@@ -215,13 +245,22 @@ const invalidTransition = (status: TreatmentSessionStatus, message: string, extr
     ...extra,
   });
 
+/** A no-show of the encounter ends the sessions in these statuses: nothing was done with the patient. */
+const NO_SHOW_ELIGIBLE_STATUSES: readonly TreatmentSessionStatus[] = [
+  'INTAKE_IN_PROGRESS',
+  'READY_FOR_CONSENT',
+  'CONSENTED',
+];
+/** Sessions that already ended without the patient being attended; they stay as they are. */
+const NO_SHOW_IGNORED_STATUSES: readonly TreatmentSessionStatus[] = ['CANCELLED', 'NO_SHOW'];
+
+const activityConflict = (code: string, message: string) =>
+  new ConflictException({ statusCode: 409, code, message });
+
 const STARTED_STATUSES: readonly TreatmentSessionStatus[] = ['IN_PROGRESS', 'CLINICAL_COMPLETE'];
 
-/** Appointments a cancellation or a no-show of the session still applies to. */
+/** Appointments a no-show of the session still applies to. */
 const OPEN_APPOINTMENT_STATUSES = ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] as const;
-
-/** The appointment keeps a plain note; the clinical reason stays encrypted on the session. */
-const APPOINTMENT_CANCELLATION_NOTE = 'Atención de tratamiento cancelada';
 
 @Injectable()
 export class TreatmentSessionsService {
@@ -277,85 +316,197 @@ export class TreatmentSessionsService {
   }
 
   /**
-   * Opens a session of the treatment's current version on a new PROCEDURE encounter. It starts
-   * waiting for the form, or ready for the consent, or already consented when an earlier
-   * consent of the same treatment still applies.
+   * Opens one session per treatment (the current version of each) in one encounter: a new
+   * PROCEDURE encounter, or an open encounter of the caller when `encounterId` comes. Everything
+   * is validated before anything is written, and all of it commits or none. Each session starts
+   * waiting for the form, or ready for the consent, or already consented when an earlier consent
+   * of the same treatment still applies. Answers one session for `treatmentId` and a list, in
+   * the order of `treatmentIds`, for `treatmentIds`.
    */
   async create(
     tenantId: string,
     patientId: string,
     actor: ClinicalActor,
     dto: CreateTreatmentSessionDto,
-  ): Promise<SessionDetail> {
-    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
-      const version = await this.treatments.currentVersionFor(tx, tenantId, dto.treatmentId);
-      const { treatment } = version;
-      if (treatment.specialtyId && treatment.specialtyId !== actor.specialtyId) {
-        throw new ForbiddenException({
-          statusCode: 403,
-          code: 'TREATMENT_SPECIALTY_MISMATCH',
-          message: 'El tratamiento pertenece a otra especialidad.',
-        });
-      }
-      const policy = parseTreatmentRequirements(version.requirements);
-
-      const encounter = await this.encounters.openEncounter(tx, tenantId, patientId, actor, {
-        encounterType: 'PROCEDURE',
-        reason: treatment.name,
-        appointmentId: dto.appointmentId,
-        branchId: dto.branchId,
-      });
-
-      const created = await tx.treatmentSession.create({
-        data: {
-          tenantId,
-          patientId,
-          professionalId: actor.userId,
-          branchId: encounter.branchId,
-          appointmentId: encounter.appointmentId,
-          treatmentVersionId: version.id,
-          encounterId: encounter.id,
-        },
-      });
-
-      const facts = await loadSessionFacts(
-        tx,
-        created,
-        policy,
-        version.consentTemplateVersionId,
-        new Date(),
+  ): Promise<SessionDetail | SessionDetail[]> {
+    // A JSON null counts as absent: the validators skip it with @IsOptional.
+    const single = dto.treatmentId != null;
+    if (single === (dto.treatmentIds != null)) {
+      throw new BadRequestException('Indica treatmentId o treatmentIds, pero no ambos.');
+    }
+    if (dto.encounterId && (dto.encounterType != null || dto.reason != null)) {
+      throw new BadRequestException(
+        'El tipo y el motivo solo se indican al abrir una atención nueva.',
       );
-      const status = statusAfterIntake(policy, facts);
-      const session =
-        status !== created.status || facts.applicableConsentId
-          ? await tx.treatmentSession.update({
-              where: { id: created.id },
-              data: {
-                status,
-                ...(facts.applicableConsentId
-                  ? { consentDocumentId: facts.applicableConsentId }
-                  : {}),
-              },
-            })
-          : created;
+    }
+    const treatmentIds = single ? [dto.treatmentId as string] : (dto.treatmentIds as string[]);
 
-      await this.audit.record(
-        tenantId,
-        actor,
-        [
-          {
-            action: 'CREATE',
-            entity: 'TREATMENT_SESSION',
-            entityId: session.id,
-            patientId,
-            after: snapshotTreatmentSession(session),
-          },
-        ],
-        tx,
-      );
+    const details = await runSerializableTransaction(
+      this.prisma,
+      tenantId,
+      actor.userId,
+      async (tx) => {
+        const versions: VersionWithTreatment[] = [];
+        for (const treatmentId of treatmentIds) {
+          const version = await this.treatments.currentVersionFor(tx, tenantId, treatmentId);
+          const { treatment } = version;
+          if (treatment.specialtyId && treatment.specialtyId !== actor.specialtyId) {
+            throw new ForbiddenException({
+              statusCode: 403,
+              code: 'TREATMENT_SPECIALTY_MISMATCH',
+              message: 'El tratamiento pertenece a otra especialidad.',
+            });
+          }
+          versions.push(version);
+        }
 
-      return this.detail(tx, session, version, policy, actor);
+        const encounter = dto.encounterId
+          ? await this.openEncounterOf(tx, tenantId, patientId, actor, dto, treatmentIds)
+          : await this.encounters.openEncounter(tx, tenantId, patientId, actor, {
+              encounterType: dto.encounterType ?? 'PROCEDURE',
+              reason:
+                dto.reason ??
+                versions
+                  .map(({ treatment }) => treatment.name)
+                  .join(', ')
+                  .slice(0, MAX_REASON_LENGTH),
+              appointmentId: dto.appointmentId ?? undefined,
+              branchId: dto.branchId ?? undefined,
+            });
+
+        // Every session exists before any detail is built, so each detail lists all its siblings.
+        const created: OpenedSession[] = [];
+        for (const version of versions) {
+          created.push(
+            await this.openSessionIn(tx, tenantId, patientId, encounter, version, actor),
+          );
+        }
+        const opened: SessionDetail[] = [];
+        for (const { session, version, policy } of created) {
+          opened.push(await this.detail(tx, session, version, policy, actor));
+        }
+        return opened;
+      },
+    );
+    return single ? details[0] : details;
+  }
+
+  /**
+   * An open encounter of the caller, held open until the transaction ends so a close running
+   * now waits for it. A given appointment or branch must be the encounter's own.
+   */
+  private async openEncounterOf(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    patientId: string,
+    actor: ClinicalActor,
+    dto: CreateTreatmentSessionDto,
+    treatmentIds: string[],
+  ): Promise<Pick<Encounter, 'id' | 'appointmentId' | 'branchId'>> {
+    const encounterId = dto.encounterId as string;
+    await assertOpenEncounter(tx, tenantId, patientId, encounterId, actor);
+    if (!(await lockOpenEncounter(tx, tenantId, encounterId))) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'ENCOUNTER_CLOSED',
+        message: 'La atención ya está cerrada.',
+      });
+    }
+    const encounter = await tx.encounter.findFirst({
+      where: { id: encounterId, tenantId, patientId, deletedAt: null },
+      select: { id: true, appointmentId: true, branchId: true },
     });
+    if (!encounter) throw clinicalRecordNotFound('Atención no encontrada');
+    if (dto.appointmentId != null && dto.appointmentId !== encounter.appointmentId) {
+      throw new BadRequestException('La cita no corresponde a la atención indicada.');
+    }
+    if (dto.branchId != null && dto.branchId !== encounter.branchId) {
+      throw new BadRequestException('La sede no corresponde a la atención indicada.');
+    }
+
+    // The cap and the no-repeat rule hold for the whole encounter, not only for this request.
+    // Cancelled and missed sessions do not count, so a cancelled treatment can be added again.
+    const live = await tx.treatmentSession.findMany({
+      where: { tenantId, encounterId, status: { notIn: [...NO_SHOW_IGNORED_STATUSES] } },
+      select: { treatmentVersion: { select: { treatmentId: true } } },
+    });
+    if (live.length + treatmentIds.length > MAX_TREATMENTS_PER_ENCOUNTER) {
+      throw new BadRequestException(
+        `Una atención admite como máximo ${MAX_TREATMENTS_PER_ENCOUNTER} tratamientos activos.`,
+      );
+    }
+    const liveTreatmentIds = new Set(live.map((row) => row.treatmentVersion.treatmentId));
+    const repeated = treatmentIds.find((id) => liveTreatmentIds.has(id));
+    if (repeated) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'TREATMENT_ALREADY_IN_ENCOUNTER',
+        message: 'La atención ya tiene una sesión activa de ese tratamiento.',
+        treatmentId: repeated,
+      });
+    }
+    return encounter;
+  }
+
+  /** One session of the version inside the encounter, audited, with its intake status. */
+  private async openSessionIn(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    patientId: string,
+    encounter: Pick<Encounter, 'id' | 'appointmentId' | 'branchId'>,
+    version: VersionWithTreatment,
+    actor: ClinicalActor,
+  ): Promise<OpenedSession> {
+    const policy = parseTreatmentRequirements(version.requirements);
+    const created = await tx.treatmentSession.create({
+      data: {
+        tenantId,
+        patientId,
+        professionalId: actor.userId,
+        branchId: encounter.branchId,
+        appointmentId: encounter.appointmentId,
+        treatmentVersionId: version.id,
+        encounterId: encounter.id,
+      },
+    });
+
+    const facts = await loadSessionFacts(
+      tx,
+      created,
+      policy,
+      version.consentTemplateVersionId,
+      new Date(),
+    );
+    const status = statusAfterIntake(policy, facts);
+    const session =
+      status !== created.status || facts.applicableConsentId
+        ? await tx.treatmentSession.update({
+            where: { id: created.id },
+            data: {
+              status,
+              ...(facts.applicableConsentId
+                ? { consentDocumentId: facts.applicableConsentId }
+                : {}),
+            },
+          })
+        : created;
+
+    await this.audit.record(
+      tenantId,
+      actor,
+      [
+        {
+          action: 'CREATE',
+          entity: 'TREATMENT_SESSION',
+          entityId: session.id,
+          patientId,
+          after: snapshotTreatmentSession(session),
+        },
+      ],
+      tx,
+    );
+
+    return { session, version, policy };
   }
 
   /** The session with its policy, form, consents, photos and what is missing. Audited. */
@@ -542,8 +693,11 @@ export class TreatmentSessionsService {
 
   /**
    * Completes the procedure when the complete requirements are met, with the notes of the
-   * request or, without them, the stored ones. The notes become the summary of the encounter,
-   * which closes.
+   * request or, without them, the stored ones. The encounter stays open for its other
+   * treatments; with `closeEncounter` it also closes, in the same transaction, with the
+   * `encounterSummary` given (the caller has verified the password: closing signs it). The
+   * close fails, and the completion with it, while another session of the encounter is
+   * unfinished.
    */
   async complete(
     tenantId: string,
@@ -592,13 +746,16 @@ export class TreatmentSessionsService {
           ? { procedureNotes: notes ? this.crypto.encrypt(tenantId, notes) : null }
           : {}),
       });
-      await this.encounters.closeEncounter(
-        tx,
-        tenantId,
-        session.encounterId,
-        actor,
-        notes ?? undefined,
-      );
+      // After the transition: this session no longer counts among the unfinished ones.
+      if (dto.closeEncounter === true) {
+        await this.encounters.closeEncounter(
+          tx,
+          tenantId,
+          session.encounterId,
+          actor,
+          dto.encounterSummary,
+        );
+      }
       await this.auditTransition(tx, actor, session, completed);
       return this.detail(tx, completed, version, policy, actor);
     });
@@ -651,9 +808,8 @@ export class TreatmentSessionsService {
   }
 
   /**
-   * Cancels the session with a reason, stored encrypted, and closes its encounter. Its
-   * appointment (if still unattended or in progress) is cancelled when the procedure had not
-   * started, and completed when it had: the patient attended.
+   * Cancels the session with a reason, stored encrypted. Its encounter stays open for its other
+   * treatments, and its appointment is left to the close of the encounter.
    */
   async cancel(
     tenantId: string,
@@ -675,62 +831,137 @@ export class TreatmentSessionsService {
         cancelledAt: new Date(),
         cancellationReason: this.crypto.encrypt(tenantId, reason),
       });
-      // Before the encounter closes, which would otherwise complete the appointment.
-      if (session.appointmentId) {
-        await tx.appointment.updateMany({
-          where: {
-            id: session.appointmentId,
-            tenantId,
-            status: { in: [...OPEN_APPOINTMENT_STATUSES] },
-          },
-          data:
-            session.status === 'IN_PROGRESS'
-              ? { status: 'COMPLETED' }
-              : {
-                  status: 'CANCELLED',
-                  cancelledAt: new Date(),
-                  cancelledBy: actor.userId,
-                  cancellationReason: APPOINTMENT_CANCELLATION_NOTE,
-                },
-        });
-      }
-      await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
       await this.auditTransition(tx, actor, session, cancelled, reason);
       return this.detail(tx, cancelled, version, policy, actor);
     });
   }
 
   /**
-   * Records that the patient did not come: the session ends as NO_SHOW, its appointment (if
-   * still unattended or in progress) too, and its encounter closes.
+   * Records that the patient did not come to the session: the no-show is of its whole
+   * encounter (see noShowEncounter), and this returns the session as it ended.
    */
   async noShow(tenantId: string, sessionId: string, actor: ClinicalActor): Promise<SessionDetail> {
-    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
-      const { session, version, policy } = await this.loadForCommand(
-        tx,
-        tenantId,
-        sessionId,
-        actor,
+    const found = await this.transaction(async (tx) => {
+      const { session, version } = await this.findSession(tx, tenantId, sessionId);
+      if (session.professionalId !== actor.userId) {
+        throw clinicalRecordForbidden('Solo el profesional de la atención puede registrar en ella');
+      }
+      // A session that cannot take a no-show is refused as such, before the encounter is looked at.
+      assertCommandAllowed(
+        session.status,
         'NO_SHOW',
+        parseTreatmentRequirements(version.requirements),
       );
-      const missed = await this.transition(tx, session, {
-        status: 'NO_SHOW',
-        cancelledAt: new Date(),
+      return session;
+    });
+    const missed = await this.noShowEncounter(tenantId, found.patientId, found.encounterId, actor);
+    const own = missed.find((row) => row.id === sessionId);
+    if (!own) throw sessionNotFound();
+    return own;
+  }
+
+  /**
+   * Records that the patient did not come to the encounter: every treatment still waiting ends
+   * as NO_SHOW, its appointment (if still unattended or in progress) too, and the encounter
+   * closes. It does not apply once anything was done with the patient: a treatment started or
+   * finished, a record of its own, a note or an order (409 ENCOUNTER_HAS_ACTIVITY). Sessions
+   * already cancelled or missed do not count as activity, unless they were started before being
+   * cancelled: the patient was attended then.
+   */
+  async noShowEncounter(
+    tenantId: string,
+    patientId: string,
+    encounterId: string,
+    actor: ClinicalActor,
+  ): Promise<SessionDetail[]> {
+    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
+      // Exclusive, as closing it is: a concurrent close or no-show waits here and finds it closed.
+      await assertOpenEncounter(tx, tenantId, patientId, encounterId, actor);
+      if (!(await lockOpenEncounterForUpdate(tx, tenantId, encounterId))) {
+        throw activityConflict('ENCOUNTER_CLOSED', 'La atención ya está cerrada.');
+      }
+      const all = await tx.treatmentSession.findMany({
+        where: { tenantId, encounterId },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, status: true, formRecordId: true, startedAt: true },
       });
+      if (all.length === 0) {
+        throw activityConflict(
+          'ENCOUNTER_HAS_NO_TREATMENTS',
+          'Esta atención no tiene tratamientos.',
+        );
+      }
+      const waiting = all.filter((row) => NO_SHOW_ELIGIBLE_STATUSES.includes(row.status));
+      // A treatment cancelled after it started keeps its startedAt: the patient was attended.
+      if (
+        all.some(
+          (row) =>
+            row.startedAt !== null ||
+            (!NO_SHOW_IGNORED_STATUSES.includes(row.status) && !waiting.includes(row)),
+        )
+      ) {
+        throw activityConflict(
+          'ENCOUNTER_HAS_ACTIVITY',
+          'La atención ya tiene actividad con el paciente: no se puede marcar como no asistió.',
+        );
+      }
+      if (waiting.length === 0) {
+        throw activityConflict(
+          'ENCOUNTER_HAS_NO_TREATMENTS',
+          'Esta atención no tiene tratamientos pendientes.',
+        );
+      }
+      // What the encounter holds besides the medical forms its treatments keep.
+      const formRecordIds = all.flatMap((row) => (row.formRecordId ? [row.formRecordId] : []));
+      const [records, notes, orders] = await Promise.all([
+        tx.specialtyRecord.count({
+          where: { tenantId, encounterId, deletedAt: null, id: { notIn: formRecordIds } },
+        }),
+        tx.clinicalNote.count({ where: { tenantId, encounterId, deletedAt: null } }),
+        tx.clinicalOrder.count({ where: { tenantId, encounterId } }),
+      ]);
+      if (records + notes + orders > 0) {
+        throw activityConflict(
+          'ENCOUNTER_HAS_ACTIVITY',
+          'La atención ya tiene registros, notas u órdenes: no se puede marcar como no asistió.',
+        );
+      }
+
+      const ended: {
+        after: TreatmentSession;
+        version: VersionWithTreatment;
+        policy: TreatmentRequirements;
+      }[] = [];
+      const appointmentIds = new Set<string>();
+      for (const { id } of waiting) {
+        const { session, version, policy } = await this.loadForCommand(
+          tx,
+          tenantId,
+          id,
+          actor,
+          'NO_SHOW',
+        );
+        if (session.appointmentId) appointmentIds.add(session.appointmentId);
+        const after = await this.transition(tx, session, {
+          status: 'NO_SHOW',
+          cancelledAt: new Date(),
+        });
+        await this.auditTransition(tx, actor, session, after);
+        ended.push({ after, version, policy });
+      }
       // Before the encounter closes, which would otherwise complete the appointment.
-      if (session.appointmentId) {
+      for (const id of appointmentIds) {
         await tx.appointment.updateMany({
-          where: {
-            id: session.appointmentId,
-            tenantId,
-            status: { in: [...OPEN_APPOINTMENT_STATUSES] },
-          },
+          where: { id, tenantId, status: { in: [...OPEN_APPOINTMENT_STATUSES] } },
           data: { status: 'NO_SHOW' },
         });
       }
-      await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
-      await this.auditTransition(tx, actor, session, missed);
-      return this.detail(tx, missed, version, policy, actor);
+      await this.encounters.closeEncounter(tx, tenantId, encounterId, actor);
+      const missed: SessionDetail[] = [];
+      for (const { after, version, policy } of ended) {
+        missed.push(await this.detail(tx, after, version, policy, actor));
+      }
+      return missed;
     });
   }
 
@@ -871,6 +1102,20 @@ export class TreatmentSessionsService {
       select: mediaSelect,
       orderBy: { createdAt: 'asc' },
     });
+    const encounter = await tx.encounter.findFirst({
+      where: { id: session.encounterId, tenantId },
+      select: { status: true },
+    });
+    if (!encounter) throw clinicalRecordNotFound('Atención no encontrada');
+    const siblings = await tx.treatmentSession.findMany({
+      where: { tenantId, encounterId: session.encounterId, id: { not: session.id } },
+      select: {
+        id: true,
+        status: true,
+        treatmentVersion: { select: { treatment: { select: { name: true } } } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
 
     const facts = await loadSessionFacts(
       tx,
@@ -900,6 +1145,12 @@ export class TreatmentSessionsService {
       media: media.map((file) => this.crypto.decryptFields(tenantId, file, ENCRYPTED_FILE_FIELDS)),
       requirements: evaluateSession(policy, facts),
       allowedCommands: commandsForActor(session, policy, actor),
+      encounterStatus: encounter.status,
+      encounterSessions: siblings.map(({ id, status, treatmentVersion }) => ({
+        id,
+        status,
+        treatmentName: treatmentVersion.treatment.name,
+      })),
     };
   }
 

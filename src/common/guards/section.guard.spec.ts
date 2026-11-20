@@ -28,6 +28,11 @@ class PublicHandlerController {
   handler() {}
 }
 
+class AnyOfController {
+  @RequireSection(['core.clinical.specialties', 'core.treatments.sessions'])
+  handler() {}
+}
+
 class UngatedController {
   handler() {}
 }
@@ -110,6 +115,21 @@ describe('SectionGuard', () => {
 
     await expect(guard.canActivate(contextFor(TasksLikeController))).rejects.toMatchObject({
       response: { code: 'SECTION_NOT_ENABLED', section: 'core.agenda.tasks' },
+    });
+  });
+
+  it('passes when any listed section is in effect', async () => {
+    enabledRows('core.treatments', 'core.treatments.sessions');
+
+    await expect(guard.canActivate(contextFor(AnyOfController))).resolves.toBe(true);
+  });
+
+  it("rejects with the first section's error when none is in effect", async () => {
+    enabledRows();
+
+    await expect(guard.canActivate(contextFor(AnyOfController))).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'SECTION_NOT_ENABLED', section: 'core.clinical.specialties' },
     });
   });
 

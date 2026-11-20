@@ -1084,12 +1084,12 @@ model Encounter {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  records          SpecialtyRecord[]
-  notes            ClinicalNote[]
-  files            PatientFile[]
-  treatmentSession TreatmentSession?
-  clinicalOrders   ClinicalOrder[]
-  consentDocuments ConsentDocument[]
+  records           SpecialtyRecord[]
+  notes             ClinicalNote[]
+  files             PatientFile[]
+  treatmentSessions TreatmentSession[]
+  clinicalOrders    ClinicalOrder[]
+  consentDocuments  ConsentDocument[]
 
   @@index([tenantId, patientId, startedAt])
   @@index([tenantId, professionalId, status])
@@ -2046,8 +2046,8 @@ model TreatmentSession {
   treatmentVersionId String
   treatmentVersion   TreatmentVersion @relation(fields: [treatmentVersionId], references: [id], onDelete: Restrict)
 
-  // The PROCEDURE encounter that opens the session.
-  encounterId String    @unique
+  // The PROCEDURE encounter that opens the session; an encounter may hold several sessions.
+  encounterId String
   encounter   Encounter @relation(fields: [encounterId], references: [id], onDelete: Restrict)
 
   // The answers to the medical form the treatment requires.
@@ -2079,6 +2079,7 @@ model TreatmentSession {
   orderItems        OrderItem[]
 
   @@index([tenantId, patientId, createdAt])
+  @@index([encounterId])
 }
 
 enum BillingProfileKind {
