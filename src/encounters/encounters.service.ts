@@ -71,12 +71,13 @@ const conflict = (code: string, message: string, extra: Record<string, unknown> 
   new ConflictException({ statusCode: 409, code, message, ...extra });
 
 /** The encounter of a treatment session follows the session; the encounters routes leave it alone. */
-function assertNotManagedBySession(encounter: { treatmentSession?: { id: string } | null }) {
-  if (encounter.treatmentSession) {
+function assertNotManagedBySession(encounter: { treatmentSessions?: { id: string }[] }) {
+  const [session] = encounter.treatmentSessions ?? [];
+  if (session) {
     throw conflict(
       'ENCOUNTER_MANAGED_BY_SESSION',
       'Esta atención pertenece a una sesión de tratamiento y se gestiona desde ella.',
-      { treatmentSessionId: encounter.treatmentSession.id },
+      { treatmentSessionId: session.id },
     );
   }
 }
@@ -629,7 +630,7 @@ export class EncountersService {
   ) {
     const stored = await tx.encounter.findFirst({
       where: { id: encounterId, tenantId, ...(patientId ? { patientId } : {}), deletedAt: null },
-      include: { treatmentSession: { select: { id: true } } },
+      include: { treatmentSessions: { select: { id: true }, take: 1 } },
     });
     if (!stored) throw clinicalRecordNotFound('Atención no encontrada');
     // A null actor means the caller already decided who may act on this encounter.

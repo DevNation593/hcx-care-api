@@ -599,7 +599,7 @@ describe('EncountersService', () => {
   });
 
   describe('an encounter that belongs to a treatment session', () => {
-    const managed = () => encounter({ treatmentSession: { id: 'session-1' } });
+    const managed = () => encounter({ treatmentSessions: [{ id: 'session-1' }] });
     const refusal = { status: 409, response: { code: 'ENCOUNTER_MANAGED_BY_SESSION' } };
 
     beforeEach(() => db.encounter.findFirst.mockResolvedValue(managed()));
