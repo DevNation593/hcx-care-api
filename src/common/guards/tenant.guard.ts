@@ -88,7 +88,7 @@ export class TenantGuard implements CanActivate {
         throw new ForbiddenException({
           statusCode: 403,
           code: 'TENANT_SCOPE_VIOLATION',
-          message: 'Acceso denegado: El tenant no coincide',
+          message: 'No tienes acceso a la información de este consultorio.',
         });
       }
     }

@@ -339,23 +339,24 @@ export class AppointmentsService {
   }
 
   private assertNonNullUpdateFields(input: UpdateAppointmentDto) {
-    const fields = [
-      'patientId',
-      'professionalId',
-      'psychologistId',
-      'specialtyId',
-      'startTime',
-      'duration',
-      'status',
-      'title',
-      'isOnline',
-    ];
-    for (const field of fields) {
+    /** What each field is called in the message the user reads. */
+    const fieldLabels: Record<string, string> = {
+      patientId: 'el paciente',
+      professionalId: 'el profesional',
+      psychologistId: 'el profesional',
+      specialtyId: 'la especialidad',
+      startTime: 'la fecha y hora de inicio',
+      duration: 'la duración',
+      status: 'el estado',
+      title: 'el título',
+      isOnline: 'si la cita es presencial o en línea',
+    };
+    for (const [field, label] of Object.entries(fieldLabels)) {
       if ((input as unknown as Record<string, unknown>)[field] === null) {
         throw new BadRequestException({
           statusCode: 400,
           code: 'APPOINTMENT_FIELD_INVALID',
-          message: `${field} no puede ser nulo.`,
+          message: `Indica ${label} de la cita.`,
         });
       }
     }
@@ -366,7 +367,7 @@ export class AppointmentsService {
       throw new ForbiddenException({
         statusCode: 403,
         code: 'TENANT_SCOPE_VIOLATION',
-        message: 'Acceso denegado: El tenant no coincide',
+        message: 'No tienes acceso a la información de este consultorio.',
       });
     }
     if (!['MASTER', 'ASISTENTE', 'PROFESIONAL'].includes(toCanonicalRole(actor.role) ?? '')) {
@@ -392,7 +393,8 @@ export class AppointmentsService {
       throw new BadRequestException({
         statusCode: 400,
         code: 'PROFESSIONAL_REFERENCE_MISMATCH',
-        message: 'professionalId y psychologistId deben identificar a la misma persona.',
+        message:
+          'No se pudo identificar al profesional seleccionado. Vuelve a elegirlo e inténtalo de nuevo.',
       });
     }
     if (!hasProfessional && !hasPsychologist) {

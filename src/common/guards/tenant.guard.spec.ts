@@ -44,7 +44,10 @@ describe('TenantGuard scope errors', () => {
     }) as unknown as ExecutionContext;
 
   it.each([
-    [{ params: { tenantId: 'tenant-2' } }, 'Acceso denegado: El tenant no coincide'],
+    [
+      { params: { tenantId: 'tenant-2' } },
+      'No tienes acceso a la información de este consultorio.',
+    ],
     [
       { body: { tenantId: 'tenant-2' } },
       'Acceso denegado: No puede crear recursos para otro tenant',

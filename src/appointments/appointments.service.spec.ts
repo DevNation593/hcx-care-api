@@ -378,6 +378,17 @@ describe('AppointmentsService canonical appointments', () => {
     expect(db.appointment.create).not.toHaveBeenCalled();
   });
 
+  it('names a nulled field in user language instead of its property name', async () => {
+    await expect(update({ specialtyId: null })).rejects.toMatchObject({
+      status: 400,
+      response: {
+        code: 'APPOINTMENT_FIELD_INVALID',
+        message: 'Indica la especialidad de la cita.',
+      },
+    });
+    expect(db.appointment.update).not.toHaveBeenCalled();
+  });
+
   it('rejects contradictory identifiers on reassignment before writing', async () => {
     await expect(
       update({
@@ -385,7 +396,14 @@ describe('AppointmentsService canonical appointments', () => {
         psychologistId: 'professional-3',
         specialtyId: 'nutrition',
       }),
-    ).rejects.toMatchObject({ status: 400, response: { code: 'PROFESSIONAL_REFERENCE_MISMATCH' } });
+    ).rejects.toMatchObject({
+      status: 400,
+      response: {
+        code: 'PROFESSIONAL_REFERENCE_MISMATCH',
+        message:
+          'No se pudo identificar al profesional seleccionado. Vuelve a elegirlo e inténtalo de nuevo.',
+      },
+    });
     expect(db.appointment.update).not.toHaveBeenCalled();
   });
 
