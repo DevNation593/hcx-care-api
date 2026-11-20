@@ -896,6 +896,184 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     expect(await appointmentStatus()).toBe('COMPLETED');
   });
 
+  describe('two treatments in one encounter', () => {
+    const NO_REQUIREMENTS = { photos: { minimumBefore: 0, minimumAfter: 0 } };
+
+    const simpleTreatment = async () =>
+      (await newTreatment(NO_REQUIREMENTS, { withConsent: false, withForm: false })).treatmentId;
+
+    const newAppointment = async (patientId: string, hour: number) =>
+      (
+        await request(server())
+          .post(`${base()}/appointments`)
+          .set(as('master'))
+          .send({
+            patientId,
+            professionalId,
+            specialtyId,
+            startTime: nextWeekday(hour),
+            duration: 60,
+            title: 'Dos tratamientos',
+          })
+          .expect(201)
+      ).body.id as string;
+
+    /** Two sessions opened together in one encounter, with an appointment when asked for. */
+    const openPair = async (appointmentHour?: number) => {
+      const patientId = await newPatient();
+      const appointmentId = appointmentHour
+        ? await newAppointment(patientId, appointmentHour)
+        : undefined;
+      const response = await request(server())
+        .post(`${base()}/patients/${patientId}/treatment-sessions`)
+        .set(as('pro'))
+        .send({
+          treatmentIds: [await simpleTreatment(), await simpleTreatment()],
+          ...(appointmentId ? { appointmentId } : {}),
+        })
+        .expect(201);
+      const [a, b] = response.body as { id: string; encounterId: string }[];
+      expect(response.body).toHaveLength(2);
+      expect(a.encounterId).toBe(b.encounterId);
+      return { patientId, appointmentId, a, b, encounterId: a.encounterId };
+    };
+
+    const startSession = (sessionId: string) =>
+      request(server()).post(sessionUrl(sessionId, '/start')).set(as('pro')).expect(201);
+
+    const rowStatus = async (sessionId: string) =>
+      (await prisma.treatmentSession.findUniqueOrThrow({ where: { id: sessionId } })).status;
+
+    const encounterStatus = async (encounterId: string) =>
+      (await prisma.encounter.findUniqueOrThrow({ where: { id: encounterId } })).status;
+
+    const closeUrl = (patientId: string, encounterId: string) =>
+      `${base()}/patients/${patientId}/encounters/${encounterId}/close`;
+
+    it('completes one, cancels the other and closes the encounter once none is unfinished', async () => {
+      const { patientId, appointmentId, a, b, encounterId } = await openPair(16);
+
+      await startSession(a.id);
+      const completed = await request(server())
+        .post(sessionUrl(a.id, '/complete'))
+        .set(as('pro'))
+        .send({ procedureNotes: 'Primer tratamiento sin incidencias.' })
+        .expect(201);
+      // Completing does not close the encounter: B is still waiting.
+      expect(completed.body.encounterStatus).toBe('OPEN');
+      expect(await encounterStatus(encounterId)).toBe('OPEN');
+
+      const refused = await request(server())
+        .post(closeUrl(patientId, encounterId))
+        .set(as('pro'))
+        .send({ password: TEST_PASSWORD })
+        .expect(409);
+      expect(refused.body.code).toBe('ENCOUNTER_HAS_UNFINISHED_TREATMENTS');
+      expect(refused.body.treatmentSessionIds).toEqual([b.id]);
+
+      await request(server())
+        .post(sessionUrl(b.id, '/cancel'))
+        .set(as('pro'))
+        .send({ reason: 'El paciente prefirió dejarlo para otra visita.' })
+        .expect(201);
+      // Cancelling does not touch the appointment either.
+      expect(await encounterStatus(encounterId)).toBe('OPEN');
+      expect(
+        (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
+      ).toBe('IN_PROGRESS');
+
+      await request(server())
+        .post(closeUrl(patientId, encounterId))
+        .set(as('pro'))
+        .send({ password: TEST_PASSWORD })
+        .expect(201);
+      expect(await encounterStatus(encounterId)).toBe('CLOSED');
+      expect(
+        (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
+      ).toBe('COMPLETED');
+
+      // The detail carries the encounter status and the other sessions of the encounter.
+      const reread = await detail(a.id);
+      expect(reread.encounterStatus).toBe('CLOSED');
+      expect(reread.encounterSessions).toEqual([
+        expect.objectContaining({ id: b.id, status: 'CANCELLED' }),
+      ]);
+
+      // A can be billed; the cancelled B cannot.
+      const billable = await request(server())
+        .get(`${base()}/treatment-sessions/billable?patientId=${patientId}`)
+        .set(as('master'))
+        .expect(200);
+      const ids = billable.body.map((entry: { id: string }) => entry.id);
+      expect(ids).toContain(a.id);
+      expect(ids).not.toContain(b.id);
+    });
+
+    it('rolls the whole complete-and-close back while a sibling is unfinished', async () => {
+      const { a, b, encounterId } = await openPair();
+      await startSession(a.id);
+
+      const response = await request(server())
+        .post(sessionUrl(a.id, '/complete'))
+        .set(as('pro'))
+        .send({
+          procedureNotes: 'Notas.',
+          closeEncounter: true,
+          password: TEST_PASSWORD,
+          encounterSummary: 'Resumen.',
+        })
+        .expect(409);
+      expect(response.body.code).toBe('ENCOUNTER_HAS_UNFINISHED_TREATMENTS');
+      expect(response.body.treatmentSessionIds).toEqual([b.id]);
+      expect(await rowStatus(a.id)).toBe('IN_PROGRESS');
+      expect(await encounterStatus(encounterId)).toBe('OPEN');
+    });
+
+    it('refuses complete-and-close with a wrong password and completes nothing', async () => {
+      const { a, b, encounterId } = await openPair();
+      await request(server())
+        .post(sessionUrl(b.id, '/cancel'))
+        .set(as('pro'))
+        .send({ reason: 'No se hará hoy.' })
+        .expect(201);
+      await startSession(a.id);
+
+      const response = await request(server())
+        .post(sessionUrl(a.id, '/complete'))
+        .set(as('pro'))
+        .send({ procedureNotes: 'Notas.', closeEncounter: true, password: 'not-the-password' })
+        .expect(403);
+      expect(response.body.code).toBe('SIGNATURE_PASSWORD_INVALID');
+      expect(await rowStatus(a.id)).toBe('IN_PROGRESS');
+      expect(await encounterStatus(encounterId)).toBe('OPEN');
+
+      // With the right one it completes and closes in one call.
+      await request(server())
+        .post(sessionUrl(a.id, '/complete'))
+        .set(as('pro'))
+        .send({ procedureNotes: 'Notas.', closeEncounter: true, password: TEST_PASSWORD })
+        .expect(201);
+      expect(await rowStatus(a.id)).toBe('CLINICAL_COMPLETE');
+      expect(await encounterStatus(encounterId)).toBe('CLOSED');
+    });
+
+    it('records a no-show for the whole encounter once, and refuses a second time', async () => {
+      const { patientId, appointmentId, a, b, encounterId } = await openPair(19);
+      const url = `${base()}/patients/${patientId}/encounters/${encounterId}/no-show`;
+
+      await request(server()).post(url).set(as('pro')).expect(201);
+      expect(await rowStatus(a.id)).toBe('NO_SHOW');
+      expect(await rowStatus(b.id)).toBe('NO_SHOW');
+      expect(
+        (await prisma.appointment.findUniqueOrThrow({ where: { id: appointmentId } })).status,
+      ).toBe('NO_SHOW');
+      expect(await encounterStatus(encounterId)).toBe('CLOSED');
+
+      const again = await request(server()).post(url).set(as('pro')).expect(409);
+      expect(again.body.code).toBe('ENCOUNTER_CLOSED');
+    });
+  });
+
   it('compliance: only status and missing, for an assistant once billing.view is granted', async () => {
     const { session } = await presentedSession();
     const url = sessionUrl(session.id, '/compliance');
