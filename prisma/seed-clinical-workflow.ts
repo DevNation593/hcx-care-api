@@ -530,6 +530,26 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     },
     { current: [gabriela] },
   );
+  // A teenager in orthodontic treatment with the dentist: a minor, so her mother is on record.
+  const sofia = await createPatient(
+    ctx,
+    clinic,
+    {
+      firstName: 'Sofía',
+      lastName: 'Cevallos',
+      dateOfBirth: new Date('2012-04-17T00:00:00.000Z'),
+      gender: 'Femenino',
+      identificationType: 'CEDULA',
+      identificationNumber: '1725839409',
+      nationality: 'Ecuatoriana',
+      guardianName: 'Patricia Cevallos',
+      guardianRelationship: 'Madre',
+      guardianIdentification: '1708462153',
+      guardianPhone: '+593998100008',
+      createdAt: clock.days(-32),
+    },
+    { current: [esteban] },
+  );
 
   // ------------------------------------------------------------------ helpers
   let sequential = 0;
@@ -1550,6 +1570,150 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
     status: 'SCHEDULED',
     title: 'Consulta de control',
     data: { branchId: mainBranch.id, location: 'Consultorio 2' },
+  });
+
+  // ------------------------------------------------------------------ Sofía: orthodontics
+  // Synthetic data only. The dentist assessed her a month ago (breathing left as not assessed),
+  // transcribed the cephalometry and agreed a self-ligating plan; this week was an adjustment.
+  const sofiaAssessment = await createAppointment(ctx, clinic, {
+    patient: sofia,
+    professional: esteban,
+    slot: book(esteban, -30, '11:00'),
+    status: 'COMPLETED',
+    title: 'Valoración de ortodoncia',
+    data: { branchId: northBranch.id, location: 'Consultorio odontológico' },
+  });
+  const orthodonticEncounter = await openEncounter({
+    patient: sofia,
+    professional: esteban,
+    encounterType: 'FIRST_VISIT',
+    reason: 'Dientes superiores adelantados y apiñados.',
+    startedAt: sofiaAssessment.startTime,
+    appointment: sofiaAssessment,
+  });
+  const atAssessment = {
+    patient: sofia,
+    professional: esteban,
+    encounter: orthodonticEncounter,
+    appointment: sofiaAssessment,
+    at: sofiaAssessment.startTime,
+  };
+  await writeRecord({
+    ...atAssessment,
+    moduleKey: 'dentistry.ortho-assessment',
+    data: {
+      chiefComplaint: 'Dientes superiores adelantados y apiñados; la paciente quiere corregirlos.',
+      dentition: 'PERMANENTE',
+      facialProfile: 'CONVEXO',
+      facialSymmetry: 'SIMETRICO',
+      lipCompetence: 'INCOMPETENTE',
+      breathing: 'NO_EVALUADA',
+      swallowing: 'NORMAL',
+      habits: ['INTERPOSICION_LINGUAL'],
+      molarClassRight: 'CLASE_II',
+      molarClassLeft: 'CLASE_II',
+      canineClassRight: 'CLASE_II',
+      canineClassLeft: 'CLASE_II',
+      classIIDivision: 'DIVISION_1',
+      overjetMm: 6.5,
+      overbiteMm: 4,
+      crossbite: 'AUSENTE',
+      openBite: 'AUSENTE',
+      upperMidlineDirection: 'CENTRADA',
+      lowerMidlineDirection: 'IZQUIERDA',
+      lowerMidlineDeviationMm: 1.5,
+      upperCrowding: 'MODERADO',
+      lowerCrowding: 'LEVE',
+      recordsTaken: ['FOTOS_EXTRAORALES', 'FOTOS_INTRAORALES', 'PANORAMICA', 'CEFALICA_LATERAL'],
+      orthodonticDiagnosis: 'Maloclusión Clase II división 1 con apiñamiento superior moderado.',
+    },
+  });
+  await writeRecord({
+    ...atAssessment,
+    moduleKey: 'dentistry.ortho-cephalometry',
+    data: {
+      radiographDate: isoDate(clock.days(-31)),
+      analysisMethod: 'STEINER',
+      measurements: [
+        { measure: 'SNA', value: 83, unit: '°' },
+        { measure: 'SNB', value: 77.5, unit: '°' },
+        { measure: 'ANB', value: 5.5, unit: '°' },
+      ],
+      professionalInterpretation: 'Relación esquelética Clase II por retrusión mandibular.',
+    },
+  });
+  await writeRecord({
+    ...atAssessment,
+    moduleKey: 'dentistry.ortho-treatment-plan',
+    data: {
+      treatmentGoals: 'Alinear las arcadas, reducir el resalte y lograr Clase I canina.',
+      appliance: 'AUTOLIGADO',
+      bracketPrescription: 'MBT',
+      slot: 'SLOT_022',
+      arches: 'AMBAS',
+      extractionsIndicated: 'NO',
+      auxiliaries: ['ELASTICOS_INTERMAXILARES'],
+      phases: [
+        { phase: 'Alineación y nivelación', estimatedMonths: 8, status: 'EN_CURSO' },
+        { phase: 'Corrección de Clase II', estimatedMonths: 12, status: 'PENDIENTE' },
+      ],
+      estimatedDurationMonths: 24,
+      plannedRetention: 'FIJA',
+      estimatedCost: 1800,
+    },
+  });
+  await closeEncounter(
+    orthodonticEncounter,
+    'Valoración y registros de ortodoncia. Plan acordado con la paciente y su madre.',
+    new Date(sofiaAssessment.startTime.getTime() + 45 * 60 * 1000),
+  );
+
+  const sofiaControl = await createAppointment(ctx, clinic, {
+    patient: sofia,
+    professional: esteban,
+    slot: book(esteban, -2, '11:00'),
+    status: 'COMPLETED',
+    title: 'Control de ortodoncia',
+    data: { branchId: northBranch.id, location: 'Consultorio odontológico' },
+  });
+  const controlEncounter = await openEncounter({
+    patient: sofia,
+    professional: esteban,
+    encounterType: 'CONTROL',
+    reason: 'Control mensual de ortodoncia.',
+    startedAt: sofiaControl.startTime,
+    appointment: sofiaControl,
+  });
+  await writeRecord({
+    patient: sofia,
+    professional: esteban,
+    encounter: controlEncounter,
+    appointment: sofiaControl,
+    at: sofiaControl.startTime,
+    moduleKey: 'dentistry.ortho-control',
+    data: {
+      visitType: 'AJUSTE',
+      upperArchwire: 'NiTi .016',
+      lowerArchwire: 'NiTi .014',
+      hygiene: 'REGULAR',
+      cooperation: 'BUENA',
+      procedurePerformed: 'Cambio de arcos y ligaduras.',
+      patientInstructions: 'Reforzar el cepillado alrededor de los brackets.',
+      nextControlDate: isoDate(clock.days(26)),
+    },
+  });
+  await closeEncounter(
+    controlEncounter,
+    'Ajuste de ortodoncia sin incidencias.',
+    new Date(sofiaControl.startTime.getTime() + 30 * 60 * 1000),
+  );
+  await createAppointment(ctx, clinic, {
+    patient: sofia,
+    professional: esteban,
+    slot: book(esteban, 26, '11:00'),
+    status: 'SCHEDULED',
+    title: 'Control de ortodoncia',
+    data: { branchId: northBranch.id, location: 'Consultorio odontológico' },
   });
 
   // ------------------------------------------------------------------ Jorge: the report
