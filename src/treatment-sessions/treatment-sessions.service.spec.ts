@@ -198,7 +198,10 @@ describe('TreatmentSessionsService', () => {
     prisma.$transaction.mockImplementation((callback: (tx: unknown) => unknown) => callback(db));
     db.patient.findFirst.mockResolvedValue(patient);
     db.user.findFirst.mockResolvedValue({ id: 'pro', firstName: 'Laura', lastName: 'Mora' });
-    db.encounter.findFirst.mockResolvedValue(null);
+    // No open encounter is found for the patient; the one a session detail reads by id is open.
+    db.encounter.findFirst.mockImplementation(({ where }) =>
+      Promise.resolve(where.id ? { status: 'OPEN' } : null),
+    );
     db.encounter.create.mockImplementation(({ data }) =>
       Promise.resolve({ id: 'encounter-1', status: 'OPEN', summary: null, ...data }),
     );
@@ -855,6 +858,56 @@ describe('TreatmentSessionsService', () => {
       expect((await service.get('tenant-1', 'session-1', master)).allowedCommands).toEqual([]);
     });
 
+    it('detail lists the other sessions of the encounter', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy, { status: 'CONSENTED' }));
+      db.encounter.findFirst.mockResolvedValue({ status: 'OPEN' });
+      db.treatmentSession.findMany.mockResolvedValue([
+        {
+          id: 'session-2',
+          status: 'IN_PROGRESS',
+          treatmentVersion: { treatment: { name: 'Peeling químico' } },
+        },
+        {
+          id: 'session-3',
+          status: 'CANCELLED',
+          treatmentVersion: { treatment: { name: 'Ácido hialurónico' } },
+        },
+      ]);
+
+      const found = await service.get('tenant-1', 'session-1', other);
+
+      expect(found.encounterStatus).toBe('OPEN');
+      expect(found.encounterSessions).toEqual([
+        { id: 'session-2', status: 'IN_PROGRESS', treatmentName: 'Peeling químico' },
+        { id: 'session-3', status: 'CANCELLED', treatmentName: 'Ácido hialurónico' },
+      ]);
+      expect(db.encounter.findFirst.mock.calls[0][0]).toEqual({
+        where: { id: 'encounter-1', tenantId: 'tenant-1' },
+        select: { status: true },
+      });
+      // Its own session left out, within the tenant, in the order they were opened.
+      expect(db.treatmentSession.findMany.mock.calls[0][0]).toEqual({
+        where: { tenantId: 'tenant-1', encounterId: 'encounter-1', id: { not: 'session-1' } },
+        select: {
+          id: true,
+          status: true,
+          treatmentVersion: { select: { treatment: { select: { name: true } } } },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+    });
+
+    it('reports a closed encounter and no other sessions', async () => {
+      db.treatmentSession.findFirst.mockResolvedValue(
+        loaded(fullPolicy, { status: 'CLINICAL_COMPLETE' }),
+      );
+      db.encounter.findFirst.mockResolvedValue({ status: 'CLOSED' });
+
+      const found = await service.get('tenant-1', 'session-1', other);
+
+      expect(found).toMatchObject({ encounterStatus: 'CLOSED', encounterSessions: [] });
+    });
+
     it('falls back to America/Guayaquil when the tenant has no settings', async () => {
       db.treatmentSession.findFirst.mockResolvedValue(loaded(fullPolicy));
       db.tenant.findUnique.mockResolvedValue({ settings: null });
@@ -959,12 +1012,13 @@ describe('TreatmentSessionsService', () => {
       parseClinicalKeys(`test:${randomBytes(32).toString('base64')}`),
     );
     const keyedAudit = new ClinicalAuditService(prismaService, cipher);
+    const encounters = new EncountersService(prismaService, keyedAudit, cipher, fileBytes);
     const sessions = new TreatmentSessionsService(
       prismaService,
       keyedAudit,
       cipher,
       new TreatmentsService(prismaService, new ConsentTemplatesService(prismaService)),
-      new EncountersService(prismaService, keyedAudit, cipher, fileBytes),
+      encounters,
       new SpecialtyRecordsService(prismaService, keyedAudit, cipher),
     );
     const signedConsent = (overrides = {}) => ({
@@ -1028,6 +1082,8 @@ describe('TreatmentSessionsService', () => {
         }),
       );
     });
+
+    afterEach(() => jest.restoreAllMocks());
 
     describe('start', () => {
       const start = () => sessions.start('tenant-1', 'session-1', professional);
@@ -1204,10 +1260,11 @@ describe('TreatmentSessionsService', () => {
         expect(error.getResponse()).toMatchObject({ missing: ['CLINICAL_NOTES'] });
       });
 
-      it('completes a satisfied session, stores the notes encrypted and closes the encounter', async () => {
+      it('completes without closing the encounter', async () => {
         db.treatmentSession.findFirst.mockResolvedValue(inProgress());
         photos(1, 2);
         writes({ status: 'IN_PROGRESS', formRecordId: 'record-1' });
+        const close = jest.spyOn(encounters, 'closeEncounter');
         const before = Date.now();
 
         const completed = await sessions.complete('tenant-1', 'session-1', professional, {
@@ -1224,26 +1281,95 @@ describe('TreatmentSessionsService', () => {
         expect(cipher.decrypt('tenant-1', updateData().procedureNotes)).toBe(
           'Toxina 20 U en glabela, sin incidencias.',
         );
-        expect(db.encounter.update.mock.calls[0][0]).toMatchObject({
-          where: { id: 'encounter-1' },
-          data: { status: 'CLOSED', closedAt: expect.any(Date) },
-        });
-        expect(cipher.decrypt('tenant-1', db.encounter.update.mock.calls[0][0].data.summary)).toBe(
-          'Toxina 20 U en glabela, sin incidencias.',
-        );
+        expect(close).not.toHaveBeenCalled();
+        expect(db.encounter.update).not.toHaveBeenCalled();
         expect(completed).toMatchObject({
           status: 'CLINICAL_COMPLETE',
           procedureNotes: 'Toxina 20 U en glabela, sin incidencias.',
+          encounterStatus: 'OPEN',
           allowedCommands: [],
         });
         expect(sessionAudit()).toEqual([
           expect.objectContaining({ action: 'UPDATE', entityId: 'session-1' }),
         ]);
-        expect(auditRows()).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ action: 'UPDATE', entity: 'ENCOUNTER' }),
-          ]),
+        expect(auditRows().some((row: { entity: string }) => row.entity === 'ENCOUNTER')).toBe(
+          false,
         );
+      });
+
+      it('ignores a password and summary sent without closeEncounter', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(inProgress());
+        photos(1, 1);
+        writes({ status: 'IN_PROGRESS', formRecordId: 'record-1' });
+        const close = jest.spyOn(encounters, 'closeEncounter');
+
+        await sessions.complete('tenant-1', 'session-1', professional, {
+          procedureNotes: 'Sin incidencias.',
+          closeEncounter: false,
+          password: 'secret',
+          encounterSummary: 'Ok',
+        });
+
+        expect(close).not.toHaveBeenCalled();
+        expect(db.encounter.update).not.toHaveBeenCalled();
+      });
+
+      it('completes and closes the encounter with its summary', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(inProgress());
+        photos(1, 1);
+        writes({ status: 'IN_PROGRESS', formRecordId: 'record-1' });
+        const close = jest.spyOn(encounters, 'closeEncounter');
+
+        const completed = await sessions.complete('tenant-1', 'session-1', professional, {
+          procedureNotes: 'Toxina 20 U en glabela, sin incidencias.',
+          closeEncounter: true,
+          encounterSummary: 'Ok',
+        });
+
+        // Inside the same serializable transaction, after the session itself has finished.
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+        expect(close.mock.calls).toEqual([[db, 'tenant-1', 'encounter-1', professional, 'Ok']]);
+        expect(db.treatmentSession.update.mock.invocationCallOrder[0]).toBeLessThan(
+          close.mock.invocationCallOrder[0],
+        );
+        expect(db.encounter.update.mock.calls[0][0]).toMatchObject({
+          where: { id: 'encounter-1' },
+          data: { status: 'CLOSED', closedAt: expect.any(Date) },
+        });
+        // The summary is the one sent, not the procedure notes.
+        expect(cipher.decrypt('tenant-1', db.encounter.update.mock.calls[0][0].data.summary)).toBe(
+          'Ok',
+        );
+        expect(completed).toMatchObject({ status: 'CLINICAL_COMPLETE' });
+      });
+
+      it('rolls back the completion when another session is unfinished', async () => {
+        db.treatmentSession.findFirst.mockResolvedValue(inProgress());
+        photos(1, 1);
+        writes({ status: 'IN_PROGRESS', formRecordId: 'record-1' });
+        // The close looks for the unfinished sessions of the encounter: a sibling is still open.
+        db.treatmentSession.findMany.mockImplementation(({ where }) =>
+          Promise.resolve(where.status ? [{ id: 'session-2' }] : []),
+        );
+        const close = jest.spyOn(encounters, 'closeEncounter');
+
+        const error = await failure(
+          sessions.complete('tenant-1', 'session-1', professional, {
+            procedureNotes: 'Sin incidencias.',
+            closeEncounter: true,
+          }),
+        );
+
+        expect(error.getStatus()).toBe(409);
+        expect(error.getResponse()).toMatchObject({
+          code: 'ENCOUNTER_HAS_UNFINISHED_TREATMENTS',
+          treatmentSessionIds: ['session-2'],
+        });
+        // Thrown inside the transaction callback, so the session update is rolled back with it.
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+        expect(db.encounter.update).not.toHaveBeenCalled();
+        expect(sessionAudit()).toEqual([]);
       });
 
       it('leaves an early-billed session pending while its invoice is in progress', async () => {
@@ -1274,12 +1400,10 @@ describe('TreatmentSessionsService', () => {
         photos(1, 1);
         writes({ status: 'IN_PROGRESS', procedureNotes: 'Notas guardadas.' });
 
-        await sessions.complete('tenant-1', 'session-1', professional, {});
+        const completed = await sessions.complete('tenant-1', 'session-1', professional, {});
 
         expect(updateData()).not.toHaveProperty('procedureNotes');
-        expect(cipher.decrypt('tenant-1', db.encounter.update.mock.calls[0][0].data.summary)).toBe(
-          'Notas guardadas.',
-        );
+        expect(completed).toMatchObject({ procedureNotes: 'Notas guardadas.' });
       });
 
       it('is refused before the procedure has started', async () => {
@@ -1304,6 +1428,26 @@ describe('TreatmentSessionsService', () => {
         expect(valid(undefined)).toEqual([]);
         expect(plainToInstance(CompleteTreatmentSessionDto, { procedureNotes: ' x ' })).toEqual({
           procedureNotes: 'x',
+        });
+      });
+
+      it('takes closeEncounter only as a real boolean, a password and a summary of at most 5000 characters', () => {
+        const errors = (body: Record<string, unknown>) =>
+          validateSync(
+            plainToInstance(CompleteTreatmentSessionDto, body, { enableImplicitConversion: true }),
+          ).map((error) => error.property);
+
+        expect(errors({ closeEncounter: true, password: 'x', encounterSummary: 'Ok' })).toEqual([]);
+        expect(errors({ closeEncounter: false })).toEqual([]);
+        expect(errors({})).toEqual([]);
+        // Implicit conversion would read the text "false" as true.
+        expect(errors({ closeEncounter: 'false' })).toEqual(['closeEncounter']);
+        expect(errors({ closeEncounter: 1 })).toEqual(['closeEncounter']);
+        expect(errors({ password: 'a'.repeat(201) })).toEqual(['password']);
+        expect(errors({ encounterSummary: 'a'.repeat(5000) })).toEqual([]);
+        expect(errors({ encounterSummary: 'a'.repeat(5001) })).toEqual(['encounterSummary']);
+        expect(plainToInstance(CompleteTreatmentSessionDto, { encounterSummary: ' Ok ' })).toEqual({
+          encounterSummary: 'Ok',
         });
       });
     });
@@ -1432,7 +1576,7 @@ describe('TreatmentSessionsService', () => {
         expect(db.treatmentSession.update).not.toHaveBeenCalled();
       });
 
-      it('cancels a session in progress with an encrypted reason and closes its encounter', async () => {
+      it('cancels a session in progress with an encrypted reason', async () => {
         db.treatmentSession.findFirst.mockResolvedValue(
           loaded(fullPolicy, { status: 'IN_PROGRESS', startedAt: new Date() }),
         );
@@ -1451,7 +1595,6 @@ describe('TreatmentSessionsService', () => {
         expect(cipher.decrypt('tenant-1', updateData().cancellationReason)).toBe(
           'Reacción vasovagal',
         );
-        expect(db.encounter.update.mock.calls[0][0].data).toMatchObject({ status: 'CLOSED' });
         expect(cancelled).toMatchObject({
           status: 'CANCELLED',
           cancellationReason: 'Reacción vasovagal',
@@ -1461,83 +1604,29 @@ describe('TreatmentSessionsService', () => {
         expect(cipher.decrypt('tenant-1', entry.reason)).toBe('Reacción vasovagal');
       });
 
-      it('cancels the unattended appointment of the session without its clinical reason', async () => {
-        db.treatmentSession.findFirst.mockResolvedValue(
-          loaded(fullPolicy, { status: 'INTAKE_IN_PROGRESS', appointmentId: 'appointment-1' }),
-        );
-        openEncounter({ appointmentId: 'appointment-1' });
-        writes({ status: 'INTAKE_IN_PROGRESS', appointmentId: 'appointment-1' });
+      it('cancels without touching the encounter or the appointment', async () => {
+        for (const status of ['INTAKE_IN_PROGRESS', 'IN_PROGRESS']) {
+          db.treatmentSession.findFirst.mockResolvedValue(
+            loaded(fullPolicy, {
+              status,
+              startedAt: status === 'IN_PROGRESS' ? new Date() : null,
+              appointmentId: 'appointment-1',
+            }),
+          );
+          openEncounter({ appointmentId: 'appointment-1' });
+          writes({ status, appointmentId: 'appointment-1' });
+          const close = jest.spyOn(encounters, 'closeEncounter');
 
-        await sessions.cancel('tenant-1', 'session-1', professional, {
-          reason: 'Embarazo no informado',
-        });
+          const cancelled = await sessions.cancel('tenant-1', 'session-1', professional, {
+            reason: 'Embarazo no informado',
+          });
 
-        expect(db.appointment.updateMany.mock.calls[0][0]).toEqual({
-          where: {
-            id: 'appointment-1',
-            tenantId: 'tenant-1',
-            status: { in: ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] },
-          },
-          data: {
-            status: 'CANCELLED',
-            cancelledAt: expect.any(Date),
-            cancelledBy: 'pro',
-            cancellationReason: 'Atención de tratamiento cancelada',
-          },
-        });
-        // Cancelled before the encounter closes, whose completion only reaches open appointments.
-        expect(db.appointment.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
-          db.encounter.update.mock.invocationCallOrder[0],
-        );
-        expect(db.appointment.updateMany.mock.calls[1][0]).toMatchObject({
-          where: { status: { in: ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] } },
-          data: { status: 'COMPLETED' },
-        });
-        expect(db.encounter.update.mock.calls[0][0].data).toMatchObject({ status: 'CLOSED' });
-      });
-
-      it('completes the appointment of a session cancelled after its start: the patient attended', async () => {
-        db.treatmentSession.findFirst.mockResolvedValue(
-          loaded(fullPolicy, {
-            status: 'IN_PROGRESS',
-            startedAt: new Date(),
-            appointmentId: 'appointment-1',
-          }),
-        );
-        openEncounter({ appointmentId: 'appointment-1' });
-        writes({ status: 'IN_PROGRESS', appointmentId: 'appointment-1' });
-
-        await sessions.cancel('tenant-1', 'session-1', professional, {
-          reason: 'Reacción vasovagal',
-        });
-
-        expect(db.appointment.updateMany.mock.calls[0][0]).toEqual({
-          where: {
-            id: 'appointment-1',
-            tenantId: 'tenant-1',
-            status: { in: ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] },
-          },
-          data: { status: 'COMPLETED' },
-        });
-        const appointmentData = db.appointment.updateMany.mock.calls.map(([args]) => args.data);
-        expect(appointmentData).not.toContainEqual(
-          expect.objectContaining({ status: 'CANCELLED' }),
-        );
-        expect(updateData()).toMatchObject({ status: 'CANCELLED' });
-      });
-
-      it('touches no appointment when the session has none', async () => {
-        db.treatmentSession.findFirst.mockResolvedValue(
-          loaded(fullPolicy, { status: 'IN_PROGRESS', startedAt: new Date() }),
-        );
-        writes({ status: 'IN_PROGRESS' });
-
-        await sessions.cancel('tenant-1', 'session-1', professional, {
-          reason: 'Paciente se retira',
-        });
-
-        expect(db.appointment.updateMany).not.toHaveBeenCalled();
-        expect(updateData()).toMatchObject({ status: 'CANCELLED' });
+          // The appointment is resolved when the encounter closes, with every treatment in it.
+          expect(close).not.toHaveBeenCalled();
+          expect(db.appointment.updateMany).not.toHaveBeenCalled();
+          expect(db.encounter.update).not.toHaveBeenCalled();
+          expect(cancelled).toMatchObject({ status: 'CANCELLED', encounterStatus: 'OPEN' });
+        }
       });
 
       it('requires a reason of 3 to 1000 characters', () => {

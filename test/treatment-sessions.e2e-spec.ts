@@ -324,10 +324,11 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     const setup = await consentedSession();
     await request(server()).post(sessionUrl(setup.session.id, '/start')).set(as('pro')).expect(201);
     await upload(setup.session.id, 'AFTER').expect(201);
+    // Closing too, so that the patient can be attended again.
     await request(server())
       .post(sessionUrl(setup.session.id, '/complete'))
       .set(as('pro'))
-      .send({ procedureNotes: 'Sin incidencias.' })
+      .send({ procedureNotes: 'Sin incidencias.', closeEncounter: true, password: TEST_PASSWORD })
       .expect(201);
     return setup;
   };
@@ -439,9 +440,18 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     const completed = await request(server())
       .post(sessionUrl(session.id, '/complete'))
       .set(as('pro'))
-      .send({ procedureNotes: 'Toxina 20 U en glabela, sin incidencias.' })
+      .send({
+        procedureNotes: 'Toxina 20 U en glabela, sin incidencias.',
+        closeEncounter: true,
+        password: TEST_PASSWORD,
+        encounterSummary: 'Control en 15 días.',
+      })
       .expect(201);
-    expect(completed.body.status).toBe('CLINICAL_COMPLETE');
+    expect(completed.body).toMatchObject({
+      status: 'CLINICAL_COMPLETE',
+      encounterStatus: 'CLOSED',
+      encounterSessions: [],
+    });
 
     // The detail exposes the document and the hash of its PDF, and nothing else is missing.
     const finished = await detail(session.id);
@@ -461,11 +471,12 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     expect(sha256(pdf.body)).toBe(finished.consentDocuments[0].pdfChecksum);
     expect(sha256(pdf.body)).toBe(signed.body.pdfChecksum);
 
-    // The encounter follows the session, with the notes as its summary.
+    // Completing and closing signed the encounter, with the summary sent (not the notes).
     const encounter = await prisma.encounter.findUniqueOrThrow({
       where: { id: session.encounterId },
     });
-    expect(encounter.status).toBe('CLOSED');
+    expect(encounter).toMatchObject({ status: 'CLOSED', signedById: professionalId });
+    expect(encounter.summary).toMatch(/^enc:v1:/);
 
     // Photos are stored encrypted, keeping of the EXIF only the orientation, which the download confirms.
     const photos = await prisma.patientFile.findMany({
@@ -630,10 +641,11 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
       .set(as('pro'))
       .expect(409);
     expect(start.body.code).toBe('TREATMENT_SESSION_INVALID_TRANSITION');
+    // The encounter stays open for any other treatment of it; the professional closes it.
     const encounter = await prisma.encounter.findUniqueOrThrow({
       where: { id: session.encounterId },
     });
-    expect(encounter.status).toBe('CLOSED');
+    expect(encounter.status).toBe('OPEN');
   });
 
   it('revoking a consent sends a later session that reused it back to the consent', async () => {
@@ -841,7 +853,7 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     ).toBe('CLOSED');
   });
 
-  it('marks the appointment of a cancelled session as CANCELLED', async () => {
+  it('leaves the appointment of a cancelled session to the close of its encounter', async () => {
     const patientId = await newPatient();
     const appointment = await request(server())
       .post(`${base()}/appointments`)
@@ -864,47 +876,24 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
       .send({ reason: 'La paciente presentó una reacción vasovagal.' })
       .expect(201);
 
+    // The encounter may hold other treatments: it stays open and the appointment in progress.
+    const appointmentStatus = async () =>
+      (await prisma.appointment.findUniqueOrThrow({ where: { id: appointment.body.id } })).status;
+    expect(await appointmentStatus()).toBe('IN_PROGRESS');
     expect(
-      (await prisma.appointment.findUniqueOrThrow({ where: { id: appointment.body.id } })).status,
-    ).toBe('CANCELLED');
+      (await prisma.encounter.findUniqueOrThrow({ where: { id: session.encounterId } })).status,
+    ).toBe('OPEN');
     const row = await prisma.treatmentSession.findUniqueOrThrow({ where: { id: session.id } });
     expect(row.status).toBe('CANCELLED');
     expect(row.cancellationReason).not.toContain('vasovagal');
-  });
 
-  it('marks the appointment of a session cancelled after its start as COMPLETED', async () => {
-    const patientId = await newPatient();
-    const appointment = await request(server())
-      .post(`${base()}/appointments`)
-      .set(as('master'))
-      .send({
-        patientId,
-        professionalId,
-        specialtyId,
-        startTime: nextWeekday(18),
-        duration: 60,
-        title: 'Toxina botulínica',
-      })
-      .expect(201);
-    const { treatmentId } = await newTreatment(
-      { photos: { minimumBefore: 0, minimumAfter: 0 } },
-      { withConsent: false, withForm: false },
-    );
-    const session = await openSession(patientId, treatmentId, appointment.body.id);
-    await request(server()).post(sessionUrl(session.id, '/start')).set(as('pro')).expect(201);
-
+    // Closing the encounter resolves the appointment.
     await request(server())
-      .post(sessionUrl(session.id, '/cancel'))
+      .post(`${base()}/patients/${patientId}/encounters/${session.encounterId}/close`)
       .set(as('pro'))
-      .send({ reason: 'La paciente pidió suspender el procedimiento.' })
+      .send({ password: TEST_PASSWORD })
       .expect(201);
-
-    // The patient attended: the appointment is completed, not cancelled.
-    expect(
-      (await prisma.appointment.findUniqueOrThrow({ where: { id: appointment.body.id } })).status,
-    ).toBe('COMPLETED');
-    const row = await prisma.treatmentSession.findUniqueOrThrow({ where: { id: session.id } });
-    expect(row.status).toBe('CANCELLED');
+    expect(await appointmentStatus()).toBe('COMPLETED');
   });
 
   it('compliance: only status and missing, for an assistant once billing.view is granted', async () => {

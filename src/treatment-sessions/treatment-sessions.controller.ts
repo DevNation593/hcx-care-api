@@ -13,6 +13,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ClinicalActor, CurrentClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalProfileGuard } from '../clinical-access/clinical-profile.guard';
+import { SignerVerificationService } from '../clinical-access/signer-verification.service';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
@@ -38,6 +39,7 @@ export class TreatmentSessionsController {
     private readonly sessionsService: TreatmentSessionsService,
     private readonly consentsService: ConsentDocumentsService,
     private readonly mediaService: SessionMediaService,
+    private readonly signer: SignerVerificationService,
   ) {}
 
   @Get('patients/:patientId/treatment-sessions')
@@ -81,7 +83,7 @@ export class TreatmentSessionsController {
   @ApiOperation({
     summary: 'A treatment session',
     description:
-      'With its policy, form, consents (without body), photos, requirements { start, complete } and allowed commands. Audited.',
+      'With its policy, form, consents (without body), photos, requirements { start, complete }, allowed commands, the status of its encounter (encounterStatus) and the other sessions of that encounter (encounterSessions: id, status, treatmentName). Audited.',
   })
   get(
     @Param('tenantId') tenantId: string,
@@ -189,14 +191,16 @@ export class TreatmentSessionsController {
   @ApiOperation({
     summary: 'Complete the procedure - Its professional only',
     description:
-      'Stores the procedure notes encrypted and closes the encounter with them as summary. 422 TREATMENT_REQUIREMENTS_MISSING with missing when the notes or after photos are not there; 409 TREATMENT_SESSION_INVALID_TRANSITION unless IN_PROGRESS.',
+      'Stores the procedure notes encrypted. The encounter stays open for its other treatments: it no longer closes with the session. With closeEncounter: true it also closes, in the same transaction, with encounterSummary as its summary (not the notes); closing signs it, so the password is checked first (403 SIGNATURE_PASSWORD_INVALID), and 409 ENCOUNTER_HAS_UNFINISHED_TREATMENTS with treatmentSessionIds while another treatment of it is unfinished, completing nothing. password and encounterSummary are ignored without closeEncounter: true. 422 TREATMENT_REQUIREMENTS_MISSING with missing when the notes or after photos are not there; 409 TREATMENT_SESSION_INVALID_TRANSITION unless IN_PROGRESS.',
   })
-  complete(
+  async complete(
     @Param('tenantId') tenantId: string,
     @Param('id') id: string,
     @CurrentClinicalActor() actor: ClinicalActor,
     @Body() dto: CompleteTreatmentSessionDto,
   ) {
+    // Closing the encounter signs it: who signs types their password again.
+    if (dto.closeEncounter === true) await this.signer.verify(actor.userId, dto.password);
     return this.sessionsService.complete(tenantId, id, actor, dto);
   }
 
@@ -207,7 +211,7 @@ export class TreatmentSessionsController {
   @ApiOperation({
     summary: 'Cancel the session - Its professional only',
     description:
-      'Requires a reason, stored encrypted; closes the encounter. 409 TREATMENT_SESSION_INVALID_TRANSITION once the session has ended.',
+      'Requires a reason, stored encrypted. The encounter stays open for its other treatments and the appointment is left as it is: both are resolved when the encounter closes. 409 TREATMENT_SESSION_INVALID_TRANSITION once the session has ended.',
   })
   cancel(
     @Param('tenantId') tenantId: string,

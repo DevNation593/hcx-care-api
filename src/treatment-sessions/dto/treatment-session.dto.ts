@@ -6,6 +6,7 @@ import {
   ArrayMinSize,
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsIn,
   IsNotEmpty,
@@ -18,6 +19,9 @@ import {
 
 const trimText = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
+
+// A flag is only a real boolean: implicit conversion would read the text "false" as true.
+const rawValue = ({ obj, key }: { obj: Record<string, unknown>; key: string }) => obj[key];
 
 export const SESSION_MEDIA_PHASES = ['BEFORE', 'AFTER', 'OTHER'] as const;
 
@@ -133,6 +137,36 @@ export class CompleteTreatmentSessionDto {
   @IsOptional()
   @MaxLength(10000)
   procedureNotes?: string;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'Also close the encounter, in the same transaction: it signs the encounter, so it needs the password, and answers 409 ENCOUNTER_HAS_UNFINISHED_TREATMENTS while another treatment of it is unfinished. Without it the encounter stays open.',
+  })
+  @Transform(rawValue)
+  @IsBoolean()
+  @IsOptional()
+  closeEncounter?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'The password of the professional, only with closeEncounter: true (ignored otherwise). A wrong or missing one answers 403 SIGNATURE_PASSWORD_INVALID.',
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  password?: string;
+
+  @ApiPropertyOptional({
+    example: 'Se indica control en 15 días.',
+    description:
+      'The summary the encounter closes with, only with closeEncounter: true (ignored otherwise). The procedure notes are not used as summary.',
+  })
+  @Transform(trimText)
+  @IsString()
+  @IsOptional()
+  @MaxLength(5000)
+  encounterSummary?: string;
 }
 
 export class SaveProcedureNotesDto {

@@ -9,6 +9,7 @@ import {
   ConsentDocument,
   ConsentSignerRole,
   Encounter,
+  EncounterStatus,
   PatientFile,
   Prisma,
   Treatment,
@@ -164,7 +165,16 @@ export type SessionDetail = TreatmentSession & {
   requirements: { start: MissingRequirement[]; complete: MissingRequirement[] };
   /** What the reader may do now: empty for anyone but the owner, except a MASTER's revocation. */
   allowedCommands: SessionCommand[];
+  encounterStatus: EncounterStatus;
+  /** The other sessions of the same encounter, in the order they were opened. */
+  encounterSessions: EncounterSiblingSession[];
 };
+
+export interface EncounterSiblingSession {
+  id: string;
+  status: TreatmentSessionStatus;
+  treatmentName: string;
+}
 
 /** The commands of the status the actor may send: the owner all, a MASTER only the revocation. */
 function commandsForActor(
@@ -229,11 +239,8 @@ const invalidTransition = (status: TreatmentSessionStatus, message: string, extr
 
 const STARTED_STATUSES: readonly TreatmentSessionStatus[] = ['IN_PROGRESS', 'CLINICAL_COMPLETE'];
 
-/** Appointments a cancellation or a no-show of the session still applies to. */
+/** Appointments a no-show of the session still applies to. */
 const OPEN_APPOINTMENT_STATUSES = ['SCHEDULED', 'CONFIRMED', 'IN_PROGRESS'] as const;
-
-/** The appointment keeps a plain note; the clinical reason stays encrypted on the session. */
-const APPOINTMENT_CANCELLATION_NOTE = 'Atención de tratamiento cancelada';
 
 @Injectable()
 export class TreatmentSessionsService {
@@ -636,8 +643,11 @@ export class TreatmentSessionsService {
 
   /**
    * Completes the procedure when the complete requirements are met, with the notes of the
-   * request or, without them, the stored ones. The notes become the summary of the encounter,
-   * which closes.
+   * request or, without them, the stored ones. The encounter stays open for its other
+   * treatments; with `closeEncounter` it also closes, in the same transaction, with the
+   * `encounterSummary` given (the caller has verified the password: closing signs it). The
+   * close fails, and the completion with it, while another session of the encounter is
+   * unfinished.
    */
   async complete(
     tenantId: string,
@@ -686,13 +696,16 @@ export class TreatmentSessionsService {
           ? { procedureNotes: notes ? this.crypto.encrypt(tenantId, notes) : null }
           : {}),
       });
-      await this.encounters.closeEncounter(
-        tx,
-        tenantId,
-        session.encounterId,
-        actor,
-        notes ?? undefined,
-      );
+      // After the transition: this session no longer counts among the unfinished ones.
+      if (dto.closeEncounter === true) {
+        await this.encounters.closeEncounter(
+          tx,
+          tenantId,
+          session.encounterId,
+          actor,
+          dto.encounterSummary,
+        );
+      }
       await this.auditTransition(tx, actor, session, completed);
       return this.detail(tx, completed, version, policy, actor);
     });
@@ -745,9 +758,8 @@ export class TreatmentSessionsService {
   }
 
   /**
-   * Cancels the session with a reason, stored encrypted, and closes its encounter. Its
-   * appointment (if still unattended or in progress) is cancelled when the procedure had not
-   * started, and completed when it had: the patient attended.
+   * Cancels the session with a reason, stored encrypted. Its encounter stays open for its other
+   * treatments, and its appointment is left to the close of the encounter.
    */
   async cancel(
     tenantId: string,
@@ -769,26 +781,6 @@ export class TreatmentSessionsService {
         cancelledAt: new Date(),
         cancellationReason: this.crypto.encrypt(tenantId, reason),
       });
-      // Before the encounter closes, which would otherwise complete the appointment.
-      if (session.appointmentId) {
-        await tx.appointment.updateMany({
-          where: {
-            id: session.appointmentId,
-            tenantId,
-            status: { in: [...OPEN_APPOINTMENT_STATUSES] },
-          },
-          data:
-            session.status === 'IN_PROGRESS'
-              ? { status: 'COMPLETED' }
-              : {
-                  status: 'CANCELLED',
-                  cancelledAt: new Date(),
-                  cancelledBy: actor.userId,
-                  cancellationReason: APPOINTMENT_CANCELLATION_NOTE,
-                },
-        });
-      }
-      await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
       await this.auditTransition(tx, actor, session, cancelled, reason);
       return this.detail(tx, cancelled, version, policy, actor);
     });
@@ -965,6 +957,20 @@ export class TreatmentSessionsService {
       select: mediaSelect,
       orderBy: { createdAt: 'asc' },
     });
+    const encounter = await tx.encounter.findFirst({
+      where: { id: session.encounterId, tenantId },
+      select: { status: true },
+    });
+    if (!encounter) throw clinicalRecordNotFound('Atención no encontrada');
+    const siblings = await tx.treatmentSession.findMany({
+      where: { tenantId, encounterId: session.encounterId, id: { not: session.id } },
+      select: {
+        id: true,
+        status: true,
+        treatmentVersion: { select: { treatment: { select: { name: true } } } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
 
     const facts = await loadSessionFacts(
       tx,
@@ -994,6 +1000,12 @@ export class TreatmentSessionsService {
       media: media.map((file) => this.crypto.decryptFields(tenantId, file, ENCRYPTED_FILE_FIELDS)),
       requirements: evaluateSession(policy, facts),
       allowedCommands: commandsForActor(session, policy, actor),
+      encounterStatus: encounter.status,
+      encounterSessions: siblings.map(({ id, status, treatmentVersion }) => ({
+        id,
+        status,
+        treatmentName: treatmentVersion.treatment.name,
+      })),
     };
   }
 
