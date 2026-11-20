@@ -46,9 +46,9 @@ describe('TenantGuard scope errors', () => {
   it.each([
     [
       { params: { tenantId: 'tenant-2' } },
-      'No tienes acceso a la información de esta cuenta master.',
+      'No tienes acceso a la información de este consultorio.',
     ],
-    [{ body: { tenantId: 'tenant-2' } }, 'No puedes registrar información en otra cuenta master.'],
+    [{ body: { tenantId: 'tenant-2' } }, 'No puedes registrar información en otro consultorio.'],
   ])('returns stable scope errors without setting RLS for %j', (input, message) => {
     rls.run({}, () => {
       let caught: unknown;
@@ -67,7 +67,7 @@ describe('TenantGuard scope errors', () => {
 
   it('asks to sign in again when the session has no clinic', () => {
     expect(() => guard.canActivate(context({ user: { ...user, tenantId: undefined } }))).toThrow(
-      'No se pudo identificar tu cuenta master. Vuelve a iniciar sesión.',
+      'No se pudo identificar tu consultorio. Vuelve a iniciar sesión.',
     );
   });
 

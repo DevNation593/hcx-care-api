@@ -596,7 +596,7 @@ export class EncountersService {
       },
     });
     if (!appointment) {
-      throw new BadRequestException('La cita no pertenece al paciente o a la cuenta master.');
+      throw new BadRequestException('La cita no pertenece al paciente o al consultorio.');
     }
     if ((appointment.professionalId ?? appointment.psychologistId) !== actor.userId) {
       throw clinicalRecordForbidden('Solo el profesional de la cita puede atenderla');

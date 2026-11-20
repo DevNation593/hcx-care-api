@@ -24,7 +24,7 @@ export class TenantSettingsService {
     });
 
     if (!settings) {
-      throw new NotFoundException('No se encontró la configuración de la cuenta master.');
+      throw new NotFoundException('No se encontró la configuración del consultorio.');
     }
 
     return {
@@ -46,7 +46,7 @@ export class TenantSettingsService {
     });
 
     if (!existing) {
-      throw new NotFoundException('No se encontró la configuración de la cuenta master.');
+      throw new NotFoundException('No se encontró la configuración del consultorio.');
     }
 
     // Validate working hours order if both provided

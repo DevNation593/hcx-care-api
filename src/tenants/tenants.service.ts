@@ -17,7 +17,7 @@ export class TenantsService {
     });
 
     if (!tenant) {
-      throw new NotFoundException('Cuenta master no encontrada.');
+      throw new NotFoundException('Consultorio no encontrado.');
     }
 
     return tenant;

@@ -41,7 +41,7 @@ export class TenantGuard implements CanActivate {
 
     if (!user || !user.tenantId) {
       throw new ForbiddenException(
-        'No se pudo identificar tu cuenta master. Vuelve a iniciar sesión.',
+        'No se pudo identificar tu consultorio. Vuelve a iniciar sesión.',
       );
     }
 
@@ -90,7 +90,7 @@ export class TenantGuard implements CanActivate {
         throw new ForbiddenException({
           statusCode: 403,
           code: 'TENANT_SCOPE_VIOLATION',
-          message: 'No tienes acceso a la información de esta cuenta master.',
+          message: 'No tienes acceso a la información de este consultorio.',
         });
       }
     }
@@ -101,7 +101,7 @@ export class TenantGuard implements CanActivate {
         throw new ForbiddenException({
           statusCode: 403,
           code: 'TENANT_SCOPE_VIOLATION',
-          message: 'No puedes registrar información en otra cuenta master.',
+          message: 'No puedes registrar información en otro consultorio.',
         });
       }
     }

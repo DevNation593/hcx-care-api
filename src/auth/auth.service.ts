@@ -174,7 +174,7 @@ export class AuthService {
           const user = storedToken.user;
 
           if (!user.isActive || !user.tenant.isActive) {
-            throw new UnauthorizedException('El usuario o la cuenta master están inactivos.');
+            throw new UnauthorizedException('El usuario o el consultorio están inactivos.');
           }
 
           // Issued under an earlier session version: the second factor was enabled or reset
