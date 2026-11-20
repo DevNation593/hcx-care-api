@@ -78,7 +78,12 @@ function memoryDb() {
       return view(row);
     }),
     update: jest.fn(async ({ where, data }: Row) =>
-      view(apply(tables[name].find(({ id }) => id === where.id)!, data)),
+      view(
+        apply(
+          tables[name].find(({ id }) => id === where.id)!,
+          data,
+        ),
+      ),
     ),
     updateMany: jest.fn(async ({ where, data }: Row) => {
       const rows = tables[name].filter((row) => matches(row, where));
