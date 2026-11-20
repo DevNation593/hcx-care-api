@@ -63,8 +63,15 @@ const ENCRYPTED_FILE_FIELDS = ['fileName', 'description'] as const;
 
 /** Same limit as the encounter reason. */
 const MAX_REASON_LENGTH = 2000;
+/** Live treatments one encounter can hold; the DTO caps a single request at the same number. */
+const MAX_TREATMENTS_PER_ENCOUNTER = 10;
 
 type VersionWithTreatment = TreatmentVersion & { treatment: Treatment };
+type OpenedSession = {
+  session: TreatmentSession;
+  version: VersionWithTreatment;
+  policy: ReturnType<typeof parseTreatmentRequirements>;
+};
 
 const sessionInclude = {
   treatmentVersion: { include: { treatment: true } },
@@ -354,7 +361,7 @@ export class TreatmentSessionsService {
         }
 
         const encounter = dto.encounterId
-          ? await this.openEncounterOf(tx, tenantId, patientId, actor, dto)
+          ? await this.openEncounterOf(tx, tenantId, patientId, actor, dto, treatmentIds)
           : await this.encounters.openEncounter(tx, tenantId, patientId, actor, {
               encounterType: dto.encounterType ?? 'PROCEDURE',
               reason:
@@ -367,9 +374,16 @@ export class TreatmentSessionsService {
               branchId: dto.branchId ?? undefined,
             });
 
-        const opened: SessionDetail[] = [];
+        // Every session exists before any detail is built, so each detail lists all its siblings.
+        const created: OpenedSession[] = [];
         for (const version of versions) {
-          opened.push(await this.openSessionIn(tx, tenantId, patientId, encounter, version, actor));
+          created.push(
+            await this.openSessionIn(tx, tenantId, patientId, encounter, version, actor),
+          );
+        }
+        const opened: SessionDetail[] = [];
+        for (const { session, version, policy } of created) {
+          opened.push(await this.detail(tx, session, version, policy, actor));
         }
         return opened;
       },
@@ -387,6 +401,7 @@ export class TreatmentSessionsService {
     patientId: string,
     actor: ClinicalActor,
     dto: CreateTreatmentSessionDto,
+    treatmentIds: string[],
   ): Promise<Pick<Encounter, 'id' | 'appointmentId' | 'branchId'>> {
     const encounterId = dto.encounterId as string;
     await assertOpenEncounter(tx, tenantId, patientId, encounterId, actor);
@@ -408,6 +423,28 @@ export class TreatmentSessionsService {
     if (dto.branchId != null && dto.branchId !== encounter.branchId) {
       throw new BadRequestException('La sede no corresponde a la atención indicada.');
     }
+
+    // The cap and the no-repeat rule hold for the whole encounter, not only for this request.
+    // Cancelled and missed sessions do not count, so a cancelled treatment can be added again.
+    const live = await tx.treatmentSession.findMany({
+      where: { tenantId, encounterId, status: { notIn: [...NO_SHOW_IGNORED_STATUSES] } },
+      select: { treatmentVersion: { select: { treatmentId: true } } },
+    });
+    if (live.length + treatmentIds.length > MAX_TREATMENTS_PER_ENCOUNTER) {
+      throw new BadRequestException(
+        `Una atención admite como máximo ${MAX_TREATMENTS_PER_ENCOUNTER} tratamientos activos.`,
+      );
+    }
+    const liveTreatmentIds = new Set(live.map((row) => row.treatmentVersion.treatmentId));
+    const repeated = treatmentIds.find((id) => liveTreatmentIds.has(id));
+    if (repeated) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'TREATMENT_ALREADY_IN_ENCOUNTER',
+        message: 'La atención ya tiene una sesión activa de ese tratamiento.',
+        treatmentId: repeated,
+      });
+    }
     return encounter;
   }
 
@@ -419,7 +456,7 @@ export class TreatmentSessionsService {
     encounter: Pick<Encounter, 'id' | 'appointmentId' | 'branchId'>,
     version: VersionWithTreatment,
     actor: ClinicalActor,
-  ): Promise<SessionDetail> {
+  ): Promise<OpenedSession> {
     const policy = parseTreatmentRequirements(version.requirements);
     const created = await tx.treatmentSession.create({
       data: {
@@ -469,7 +506,7 @@ export class TreatmentSessionsService {
       tx,
     );
 
-    return this.detail(tx, session, version, policy, actor);
+    return { session, version, policy };
   }
 
   /** The session with its policy, form, consents, photos and what is missing. Audited. */

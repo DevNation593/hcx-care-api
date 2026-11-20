@@ -486,6 +486,79 @@ describe('TreatmentSessionsService', () => {
         expect(db.treatmentSession.create).not.toHaveBeenCalled();
       });
 
+      it('lists every sibling in each detail, including sessions created after it', async () => {
+        const created: { id: string; status: string; treatmentVersionId: string }[] = [];
+        db.treatmentSession.create.mockImplementation(({ data }) => {
+          const row = session({ ...data, id: `session-${created.length + 1}` });
+          created.push(row as never);
+          return Promise.resolve(row);
+        });
+        db.treatmentSession.findMany.mockImplementation(({ where }) =>
+          Promise.resolve(
+            created
+              .filter((row) => row.id !== where.id?.not)
+              .map((row) => ({
+                id: row.id,
+                status: row.status,
+                treatmentVersion: {
+                  treatment: { name: names[row.treatmentVersionId.replace('version-', '')] },
+                },
+              })),
+          ),
+        );
+
+        const details = (await createMany()) as unknown as {
+          id: string;
+          encounterSessions: { id: string; treatmentName: string }[];
+        }[];
+
+        expect(details[0].encounterSessions.map((s) => s.id)).toEqual(['session-2']);
+        expect(details[0].encounterSessions[0].treatmentName).toBe('Relleno');
+        expect(details[1].encounterSessions.map((s) => s.id)).toEqual(['session-1']);
+      });
+
+      describe('encounter limits across requests', () => {
+        const liveRows = (treatmentIds: string[]) =>
+          treatmentIds.map((treatmentId) => ({ treatmentVersion: { treatmentId } }));
+
+        it('rejects more than 10 live treatments in the encounter', async () => {
+          db.encounter.findFirst.mockResolvedValue(openEncounterRow());
+          db.treatmentSession.findMany.mockResolvedValueOnce(
+            liveRows(Array.from({ length: 9 }, (_, i) => `other-${i}`)),
+          );
+
+          await expect(createMany({ encounterId: 'encounter-9' })).rejects.toMatchObject({
+            status: 400,
+          });
+          expect(db.treatmentSession.create).not.toHaveBeenCalled();
+        });
+
+        it('rejects a treatment that already has a live session in the encounter', async () => {
+          db.encounter.findFirst.mockResolvedValue(openEncounterRow());
+          db.treatmentSession.findMany.mockResolvedValueOnce(liveRows(['treatment-b']));
+
+          await expect(createMany({ encounterId: 'encounter-9' })).rejects.toMatchObject({
+            status: 409,
+            response: { code: 'TREATMENT_ALREADY_IN_ENCOUNTER', treatmentId: 'treatment-b' },
+          });
+          expect(db.treatmentSession.create).not.toHaveBeenCalled();
+        });
+
+        it('counts only live sessions, so a cancelled treatment can be added again', async () => {
+          db.encounter.findFirst.mockResolvedValue(openEncounterRow());
+
+          await createMany({ encounterId: 'encounter-9' });
+
+          const where = db.treatmentSession.findMany.mock.calls[0][0].where;
+          expect(where).toMatchObject({
+            tenantId: 'tenant-1',
+            encounterId: 'encounter-9',
+            status: { notIn: ['CANCELLED', 'NO_SHOW'] },
+          });
+          expect(db.treatmentSession.create).toHaveBeenCalledTimes(2);
+        });
+      });
+
       it('creates nothing when one treatment belongs to another specialty', async () => {
         specialties['treatment-b'] = 'dermatology';
 

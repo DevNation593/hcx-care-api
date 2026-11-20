@@ -1109,4 +1109,57 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     await setAllowed('PROFESIONAL', professionalAllowed);
     await request(server()).get(url).set(as('assistant')).expect(403);
   });
+
+  describe('encounter routes by section', () => {
+    const toggle = (moduleKey: string, enabled: boolean) =>
+      prisma.tenantModule.updateMany({ where: { tenantId, moduleKey }, data: { enabled } });
+
+    it('serves the list and the close with sessions on and specialties off, and refuses the rest', async () => {
+      const patientId = await newPatient();
+      const { treatmentId } = await newTreatment(
+        { photos: { minimumBefore: 0, minimumAfter: 0 } },
+        { withConsent: false, withForm: false },
+      );
+      const session = await openSession(patientId, treatmentId);
+      await request(server()).post(sessionUrl(session.id, '/start')).set(as('pro')).expect(201);
+      await request(server())
+        .post(sessionUrl(session.id, '/complete'))
+        .set(as('pro'))
+        .send({ procedureNotes: 'Sin incidencias.' })
+        .expect(201);
+      const encounters = `${base()}/patients/${patientId}/encounters`;
+
+      await toggle('core.clinical.specialties', false);
+      try {
+        const list = await request(server()).get(encounters).set(as('pro')).expect(200);
+        expect(list.body.map((row: { id: string }) => row.id)).toContain(session.encounterId);
+
+        const start = await request(server()).post(encounters).set(as('pro')).send({}).expect(403);
+        expect(start.body.code).toBe('SECTION_NOT_ENABLED');
+        const record = await request(server())
+          .post(`${base()}/patients/${patientId}/specialty-records`)
+          .set(as('pro'))
+          .send({})
+          .expect(403);
+        expect(record.body.code).toBe('SECTION_NOT_ENABLED');
+
+        await request(server())
+          .post(`${encounters}/${session.encounterId}/close`)
+          .set(as('pro'))
+          .send({ password: TEST_PASSWORD })
+          .expect(201);
+        expect(
+          (await prisma.encounter.findUniqueOrThrow({ where: { id: session.encounterId } })).status,
+        ).toBe('CLOSED');
+
+        // Neither section on: even the list is refused.
+        await toggle('core.treatments.sessions', false);
+        const refused = await request(server()).get(encounters).set(as('pro')).expect(403);
+        expect(refused.body.code).toBe('SECTION_NOT_ENABLED');
+      } finally {
+        await toggle('core.treatments.sessions', true);
+        await toggle('core.clinical.specialties', true);
+      }
+    });
+  });
 });

@@ -358,9 +358,8 @@ export class EncountersService {
 
   /**
    * Closes an open encounter of the caller inside the caller's transaction, completes its
-   * appointment and audits it. Treatment sessions close their own encounter through it.
-   * `anyAuthor` lets a caller that already authorized the actor close another professional's
-   * encounter (the tenant MASTER revoking a consent); the audit still names the actor.
+   * appointment and audits it. Called by the close route and by the treatment session service
+   * (complete-and-close, and the no-show of the last waiting session); only the author closes.
    */
   async closeEncounter(
     tx: Prisma.TransactionClient,
@@ -368,19 +367,11 @@ export class EncountersService {
     encounterId: string,
     actor: ClinicalActor,
     summary?: string,
-    options: { anyAuthor?: boolean } = {},
   ): Promise<Encounter> {
     // Writes into the encounter hold a shared lock on it: closing waits for them to finish, and
     // the ones that come after find it closed. What is signed below is therefore final.
     await lockEncounterRow(tx, tenantId, encounterId);
-    const current = await this.findOwnOpen(
-      tx,
-      tenantId,
-      null,
-      encounterId,
-      options.anyAuthor ? null : actor,
-      'cerrar',
-    );
+    const current = await this.findOwnOpen(tx, tenantId, null, encounterId, actor, 'cerrar');
     // The encounter closes once every treatment in it has ended (completed, cancelled or missed).
     const unfinished = await tx.treatmentSession.findMany({
       where: { tenantId, encounterId, status: { in: [...UNFINISHED_SESSION_STATUSES] } },

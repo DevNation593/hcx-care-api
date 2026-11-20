@@ -38,7 +38,7 @@
 
 **Files:**
 - Modify: `prisma/schema.prisma` (`Encounter.treatmentSession` → `treatmentSessions TreatmentSession[]`; `TreatmentSession.encounterId` sin `@unique`, con `@@index([encounterId])`)
-- Create: `prisma/migrations/20261120000000_encounter_many_treatment_sessions/migration.sql`
+- Create: `prisma/migrations/20261121000000_encounter_many_treatment_sessions/migration.sql`
 - Modify: `src/encounters/encounters.service.ts` (todos los usos de `treatmentSession` en `include`/`select`)
 
 **Interfaces:**
