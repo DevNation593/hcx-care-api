@@ -10,7 +10,7 @@ import { AppointmentStatus, Prisma } from '@prisma/client';
 import { assertBranchAvailable, assertProfessionalInBranch } from '../branches/branches.service';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
 import { PUBLIC_USER_SELECT } from '../common/utils/public-user-select';
-import { getZonedDateParts } from '../common/utils/timezone';
+import { DATE_ONLY_PATTERN, getZonedDateParts, zonedDayRange } from '../common/utils/timezone';
 import { PatientTeamService } from '../patient-team/patient-team.service';
 import { TeamActor, TeamDb } from '../patient-team/patient-team.types';
 import { ProfessionalEligibilityService } from '../patient-team/professional-eligibility.service';
@@ -151,10 +151,7 @@ export class AppointmentsService {
     if (filters.patientId) where.patientId = filters.patientId;
     if (filters.status) where.status = filters.status;
     if (filters.from || filters.to) {
-      where.startTime = {
-        ...(filters.from && { gte: new Date(filters.from) }),
-        ...(filters.to && { lte: new Date(filters.to) }),
-      };
+      where.startTime = await this.startTimeRange(tenantId, filters.from, filters.to);
     }
     const appointments = await this.prisma.appointment.findMany({
       where,
@@ -339,23 +336,24 @@ export class AppointmentsService {
   }
 
   private assertNonNullUpdateFields(input: UpdateAppointmentDto) {
-    const fields = [
-      'patientId',
-      'professionalId',
-      'psychologistId',
-      'specialtyId',
-      'startTime',
-      'duration',
-      'status',
-      'title',
-      'isOnline',
-    ];
-    for (const field of fields) {
+    /** What each field is called in the message the user reads. */
+    const fieldLabels: Record<string, string> = {
+      patientId: 'el paciente',
+      professionalId: 'el profesional',
+      psychologistId: 'el profesional',
+      specialtyId: 'la especialidad',
+      startTime: 'la fecha y hora de inicio',
+      duration: 'la duración',
+      status: 'el estado',
+      title: 'el título',
+      isOnline: 'si la cita es presencial o en línea',
+    };
+    for (const [field, label] of Object.entries(fieldLabels)) {
       if ((input as unknown as Record<string, unknown>)[field] === null) {
         throw new BadRequestException({
           statusCode: 400,
           code: 'APPOINTMENT_FIELD_INVALID',
-          message: `${field} no puede ser nulo.`,
+          message: `Indica ${label} de la cita.`,
         });
       }
     }
@@ -366,7 +364,7 @@ export class AppointmentsService {
       throw new ForbiddenException({
         statusCode: 403,
         code: 'TENANT_SCOPE_VIOLATION',
-        message: 'Acceso denegado: El tenant no coincide',
+        message: 'No tienes acceso a la información de este consultorio.',
       });
     }
     if (!['MASTER', 'ASISTENTE', 'PROFESIONAL'].includes(toCanonicalRole(actor.role) ?? '')) {
@@ -392,7 +390,8 @@ export class AppointmentsService {
       throw new BadRequestException({
         statusCode: 400,
         code: 'PROFESSIONAL_REFERENCE_MISMATCH',
-        message: 'professionalId y psychologistId deben identificar a la misma persona.',
+        message:
+          'No se pudo identificar al profesional seleccionado. Vuelve a elegirlo e inténtalo de nuevo.',
       });
     }
     if (!hasProfessional && !hasPsychologist) {
@@ -499,6 +498,33 @@ export class AppointmentsService {
       throw new BadRequestException('Duración inválida');
     }
     return new Date(start.getTime() + duration * 60000);
+  }
+
+  /**
+   * The startTime filter for a list. A bound written as a date ("2026-11-20") covers that
+   * whole day in the tenant's own time zone, so a dashboard asking for today gets today as
+   * the clinic lives it. A bound with a time of day is used as the exact instant it names.
+   */
+  private async startTimeRange(
+    tenantId: string,
+    from?: string,
+    to?: string,
+  ): Promise<Prisma.DateTimeFilter> {
+    const fromDay = from !== undefined && DATE_ONLY_PATTERN.test(from);
+    const toDay = to !== undefined && DATE_ONLY_PATTERN.test(to);
+    const timezone =
+      fromDay || toDay
+        ? (
+            await this.prisma.tenantSettings.findUnique({
+              where: { tenantId },
+              select: { timezone: true },
+            })
+          )?.timezone
+        : undefined;
+    return {
+      ...(from && { gte: fromDay ? zonedDayRange(from, timezone).start : new Date(from) }),
+      ...(to && (toDay ? { lt: zonedDayRange(to, timezone).end } : { lte: new Date(to) })),
+    };
   }
 
   /** Working days and hours are evaluated in the tenant's own time zone, not the server's. */

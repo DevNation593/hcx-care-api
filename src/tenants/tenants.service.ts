@@ -17,7 +17,7 @@ export class TenantsService {
     });
 
     if (!tenant) {
-      throw new NotFoundException('Tenant no encontrado');
+      throw new NotFoundException('Consultorio no encontrado.');
     }
 
     return tenant;
