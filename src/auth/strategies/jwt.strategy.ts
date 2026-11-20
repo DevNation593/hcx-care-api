@@ -45,7 +45,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     );
 
     if (!user || !user.isActive || !user.tenant.isActive || user.tenantId !== payload.tenantId) {
-      throw new UnauthorizedException('User or tenant is inactive');
+      throw new UnauthorizedException('El usuario o la cuenta master están inactivos.');
     }
 
     if (sessionEnded(payload, user)) {

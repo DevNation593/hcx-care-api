@@ -306,7 +306,7 @@ export class SpecialtyRecordsService {
         where: { id: dto.appointmentId, tenantId, patientId },
       });
       if (!appointment) {
-        throw new BadRequestException('La cita no pertenece al paciente o tenant');
+        throw new BadRequestException('La cita no pertenece al paciente o a la cuenta master.');
       }
     }
     if (dto.encounterId) {
@@ -775,7 +775,7 @@ export class SpecialtyRecordsService {
       },
     });
     if (!specialty) {
-      throw new BadRequestException('La especialidad no está habilitada para este tenant');
+      throw new BadRequestException('La especialidad no está habilitada para esta cuenta master.');
     }
 
     // The history is shared for reading, but each professional writes only under their own specialty.
