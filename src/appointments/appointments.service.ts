@@ -524,16 +524,27 @@ export class AppointmentsService {
     };
     if (!settings.workingDays.includes(dayOfWeek)) {
       const days = settings.workingDays.map((day) => dayLabels[day] || day).join(', ');
-      throw new BadRequestException(
-        `No se pueden programar citas el día ${dayLabels[dayOfWeek] || dayOfWeek}. Días laborales: ${days}`,
-      );
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'NON_WORKING_DAY',
+        error: 'NON_WORKING_DAY',
+        message: `No se pueden programar citas el día ${dayLabels[dayOfWeek] || dayOfWeek}. Días laborales: ${days}`,
+        details: { dayOfWeek, workingDays: settings.workingDays },
+      });
     }
     const [startHour, startMinute] = settings.workingHoursStart.split(':').map(Number);
     const [endHour, endMinute] = settings.workingHoursEnd.split(':').map(Number);
     if (minutesOfDay < startHour * 60 + startMinute || minutesOfDay >= endHour * 60 + endMinute) {
-      throw new BadRequestException(
-        `Las citas deben estar dentro del horario laboral: ${settings.workingHoursStart} - ${settings.workingHoursEnd}`,
-      );
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'OUTSIDE_WORKING_HOURS',
+        error: 'OUTSIDE_WORKING_HOURS',
+        message: `Las citas deben estar dentro del horario laboral: ${settings.workingHoursStart} - ${settings.workingHoursEnd}`,
+        details: {
+          workingHoursStart: settings.workingHoursStart,
+          workingHoursEnd: settings.workingHoursEnd,
+        },
+      });
     }
   }
 

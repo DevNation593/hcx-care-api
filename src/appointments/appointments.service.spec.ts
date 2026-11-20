@@ -336,9 +336,46 @@ describe('AppointmentsService canonical appointments', () => {
     });
     await expect(
       update({ professionalId: 'professional-2', specialtyId: 'nutrition' }),
-    ).rejects.toMatchObject({ status: 400 });
+    ).rejects.toMatchObject({
+      status: 400,
+      response: { code: expect.stringMatching(/^(NON_WORKING_DAY|OUTSIDE_WORKING_HOURS)$/) },
+    });
     expect(db.appointment.update).not.toHaveBeenCalled();
     expect(team.ensureActive).not.toHaveBeenCalled();
+  });
+
+  it('reports a non-working day with a stable code and the configured days', async () => {
+    db.tenantSettings.findUnique.mockResolvedValue({
+      workingDays: ['MONDAY', 'WEDNESDAY'],
+      workingHoursStart: '00:00',
+      workingHoursEnd: '23:59',
+      timezone: 'UTC',
+    });
+    await expect(create(createInput())).rejects.toMatchObject({
+      status: 400,
+      response: {
+        code: 'NON_WORKING_DAY',
+        details: { dayOfWeek: 'TUESDAY', workingDays: ['MONDAY', 'WEDNESDAY'] },
+      },
+    });
+    expect(db.appointment.create).not.toHaveBeenCalled();
+  });
+
+  it('reports a time outside working hours with a stable code and the configured hours', async () => {
+    db.tenantSettings.findUnique.mockResolvedValue({
+      workingDays: ['TUESDAY'],
+      workingHoursStart: '14:00',
+      workingHoursEnd: '18:00',
+      timezone: 'UTC',
+    });
+    await expect(create(createInput())).rejects.toMatchObject({
+      status: 400,
+      response: {
+        code: 'OUTSIDE_WORKING_HOURS',
+        details: { workingHoursStart: '14:00', workingHoursEnd: '18:00' },
+      },
+    });
+    expect(db.appointment.create).not.toHaveBeenCalled();
   });
 
   it('rejects contradictory identifiers on reassignment before writing', async () => {
