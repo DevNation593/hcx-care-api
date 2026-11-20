@@ -7,8 +7,9 @@ const invalid = (message: string) =>
 
 /**
  * A signature revalidates who signs: the professional types their password again, even with a
- * valid session. Closing an encounter, saving an addendum and saving a record outside any
- * encounter are signatures; the encounter a treatment session closes by itself is not asked.
+ * valid session. Closing an encounter (also when completing a treatment session closes it),
+ * saving an addendum and saving a record outside any encounter are signatures; the encounter
+ * a treatment session's no-show closes by itself is not asked.
  * It answers 403, never 401: a wrong password must not end the session. The password is only
  * compared, never stored nor logged.
  */

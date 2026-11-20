@@ -13,6 +13,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ClinicalActor, CurrentClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalProfileGuard } from '../clinical-access/clinical-profile.guard';
+import { SignerVerificationService } from '../clinical-access/signer-verification.service';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
@@ -38,6 +39,7 @@ export class TreatmentSessionsController {
     private readonly sessionsService: TreatmentSessionsService,
     private readonly consentsService: ConsentDocumentsService,
     private readonly mediaService: SessionMediaService,
+    private readonly signer: SignerVerificationService,
   ) {}
 
   @Get('patients/:patientId/treatment-sessions')
@@ -61,9 +63,9 @@ export class TreatmentSessionsController {
   @Roles('MASTER', 'PROFESIONAL')
   @RequirePermission('clinical_records.create')
   @ApiOperation({
-    summary: 'Open a treatment session',
+    summary: 'Open one or several treatment sessions',
     description:
-      'Pins the current version of the treatment and opens a PROCEDURE encounter. 403 TREATMENT_SPECIALTY_MISMATCH, 404 TREATMENT_NOT_FOUND, 409 TREATMENT_INACTIVE or ENCOUNTER_ALREADY_OPEN.',
+      'Pins the current version of each treatment. Send exactly one of treatmentId (answers one session) and treatmentIds (answers a list in the same order). The sessions go in a new encounter (PROCEDURE by default, with the optional encounterType and reason) or, with encounterId, in an open encounter of the caller, whose appointment and branch they use. All or none are created. 400 for an invalid combination or a different appointment or branch, 403 TREATMENT_SPECIALTY_MISMATCH, 404 TREATMENT_NOT_FOUND, 409 TREATMENT_INACTIVE, ENCOUNTER_ALREADY_OPEN or ENCOUNTER_CLOSED.',
   })
   create(
     @Param('tenantId') tenantId: string,
@@ -81,7 +83,7 @@ export class TreatmentSessionsController {
   @ApiOperation({
     summary: 'A treatment session',
     description:
-      'With its policy, form, consents (without body), photos, requirements { start, complete } and allowed commands. Audited.',
+      'With its policy, form, consents (without body), photos, requirements { start, complete }, allowed commands, the status of its encounter (encounterStatus) and the other sessions of that encounter (encounterSessions: id, status, treatmentName). Audited.',
   })
   get(
     @Param('tenantId') tenantId: string,
@@ -189,14 +191,16 @@ export class TreatmentSessionsController {
   @ApiOperation({
     summary: 'Complete the procedure - Its professional only',
     description:
-      'Stores the procedure notes encrypted and closes the encounter with them as summary. 422 TREATMENT_REQUIREMENTS_MISSING with missing when the notes or after photos are not there; 409 TREATMENT_SESSION_INVALID_TRANSITION unless IN_PROGRESS.',
+      'Stores the procedure notes encrypted. The encounter stays open for its other treatments: it no longer closes with the session. With closeEncounter: true it also closes, in the same transaction, with encounterSummary as its summary (not the notes); closing signs it, so the password is checked first (403 SIGNATURE_PASSWORD_INVALID), and 409 ENCOUNTER_HAS_UNFINISHED_TREATMENTS with treatmentSessionIds while another treatment of it is unfinished, completing nothing. password and encounterSummary are ignored without closeEncounter: true. 422 TREATMENT_REQUIREMENTS_MISSING with missing when the notes or after photos are not there; 409 TREATMENT_SESSION_INVALID_TRANSITION unless IN_PROGRESS.',
   })
-  complete(
+  async complete(
     @Param('tenantId') tenantId: string,
     @Param('id') id: string,
     @CurrentClinicalActor() actor: ClinicalActor,
     @Body() dto: CompleteTreatmentSessionDto,
   ) {
+    // Closing the encounter signs it: who signs types their password again.
+    if (dto.closeEncounter === true) await this.signer.verify(actor.userId, dto.password);
     return this.sessionsService.complete(tenantId, id, actor, dto);
   }
 
@@ -207,7 +211,7 @@ export class TreatmentSessionsController {
   @ApiOperation({
     summary: 'Cancel the session - Its professional only',
     description:
-      'Requires a reason, stored encrypted; closes the encounter. 409 TREATMENT_SESSION_INVALID_TRANSITION once the session has ended.',
+      'Requires a reason, stored encrypted. The encounter stays open for its other treatments and the appointment is left as it is: both are resolved when the encounter closes. 409 TREATMENT_SESSION_INVALID_TRANSITION once the session has ended.',
   })
   cancel(
     @Param('tenantId') tenantId: string,
@@ -233,6 +237,24 @@ export class TreatmentSessionsController {
     @CurrentClinicalActor() actor: ClinicalActor,
   ) {
     return this.sessionsService.noShow(tenantId, id, actor);
+  }
+
+  @Post('patients/:patientId/encounters/:encounterId/no-show')
+  @UseGuards(ClinicalProfileGuard)
+  @Roles('MASTER', 'PROFESIONAL')
+  @RequirePermission('clinical_records.update')
+  @ApiOperation({
+    summary: 'Record that the patient did not come to the encounter - Its professional only',
+    description:
+      'Every treatment of the encounter still waiting ends as NO_SHOW, its appointment too, and the encounter closes. Returns the sessions it ended. Sessions already cancelled or missed are left as they are. 409 ENCOUNTER_HAS_ACTIVITY once a treatment started or finished, or the encounter holds a record of its own, a clinical note or an order; 409 ENCOUNTER_HAS_NO_TREATMENTS when it has no treatment waiting; 409 ENCOUNTER_CLOSED; 403 when the encounter is not the caller own; 404 when it is not found.',
+  })
+  noShowEncounter(
+    @Param('tenantId') tenantId: string,
+    @Param('patientId') patientId: string,
+    @Param('encounterId') encounterId: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+  ) {
+    return this.sessionsService.noShowEncounter(tenantId, patientId, encounterId, actor);
   }
 
   @Get('treatment-sessions/:id/compliance')

@@ -1,7 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { SessionMediaPhase } from '@prisma/client';
+import { EncounterType, SessionMediaPhase } from '@prisma/client';
 import { Transform } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
+  IsBoolean,
+  IsEnum,
   IsIn,
   IsNotEmpty,
   IsObject,
@@ -14,13 +20,67 @@ import {
 const trimText = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
 
+// A flag is only a real boolean: implicit conversion would read the text "false" as true.
+const rawValue = ({ obj, key }: { obj: Record<string, unknown>; key: string }) => obj[key];
+
 export const SESSION_MEDIA_PHASES = ['BEFORE', 'AFTER', 'OTHER'] as const;
 
 export class CreateTreatmentSessionDto {
-  @ApiProperty({ example: 'treatment_cuid', description: 'Its current version is pinned.' })
+  @ApiPropertyOptional({
+    example: 'treatment_cuid',
+    description:
+      'Its current version is pinned. Send exactly one of treatmentId and treatmentIds; with treatmentId the response is a single session.',
+  })
   @IsString()
   @IsNotEmpty()
-  treatmentId: string;
+  @IsOptional()
+  treatmentId?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['treatment_cuid_1', 'treatment_cuid_2'],
+    description:
+      'Several treatments (1 to 10, no repeats): one session each, in this order, in the same encounter. The response is a list.',
+  })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(10)
+  @ArrayUnique()
+  @IsString({ each: true })
+  @IsNotEmpty({ each: true })
+  @IsOptional()
+  treatmentIds?: string[];
+
+  @ApiPropertyOptional({
+    example: 'encounter_cuid',
+    description:
+      'An open encounter of the caller to add the sessions to. Without it a new encounter is opened.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @IsOptional()
+  encounterId?: string;
+
+  @ApiPropertyOptional({
+    enum: EncounterType,
+    example: EncounterType.PROCEDURE,
+    description: 'Type of the new encounter (PROCEDURE by default). Not valid with encounterId.',
+  })
+  @IsEnum(EncounterType)
+  @IsOptional()
+  encounterType?: EncounterType;
+
+  @ApiPropertyOptional({
+    example: 'Valoración y toxina.',
+    description:
+      'Reason of the new encounter (the treatment names by default). Not valid with encounterId.',
+  })
+  @Transform(trimText)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  @IsOptional()
+  reason?: string;
 
   @ApiPropertyOptional({
     example: 'appointment_cuid',
@@ -77,6 +137,36 @@ export class CompleteTreatmentSessionDto {
   @IsOptional()
   @MaxLength(10000)
   procedureNotes?: string;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'Also close the encounter, in the same transaction: it signs the encounter, so it needs the password, and answers 409 ENCOUNTER_HAS_UNFINISHED_TREATMENTS while another treatment of it is unfinished. Without it the encounter stays open.',
+  })
+  @Transform(rawValue)
+  @IsBoolean()
+  @IsOptional()
+  closeEncounter?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'The password of the professional, only with closeEncounter: true (ignored otherwise). A wrong or missing one answers 403 SIGNATURE_PASSWORD_INVALID.',
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  password?: string;
+
+  @ApiPropertyOptional({
+    example: 'Se indica control en 15 días.',
+    description:
+      'The summary the encounter closes with, only with closeEncounter: true (ignored otherwise). The procedure notes are not used as summary.',
+  })
+  @Transform(trimText)
+  @IsString()
+  @IsOptional()
+  @MaxLength(5000)
+  encounterSummary?: string;
 }
 
 export class SaveProcedureNotesDto {
