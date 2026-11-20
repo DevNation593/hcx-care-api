@@ -31,6 +31,8 @@
     "prisma:verify-master-role-migration": "ts-node prisma/verify-master-role-migration.ts",
     "prisma:verify-platform-role-permissions": "ts-node prisma/verify-platform-role-permissions.ts",
     "prisma:verify-personal-owner-profile": "ts-node prisma/verify-personal-owner-profile-migration.ts",
+    "prisma:verify-orthodontic-modules": "ts-node prisma/verify-orthodontic-modules-migration.ts",
+    "prisma:audit-orthodontic-modules": "ts-node prisma/audit-orthodontic-modules.ts",
     "platform:create-admin": "ts-node prisma/create-platform-admin.ts",
     "prisma:verify-platform-sections": "ts-node prisma/verify-platform-sections.ts",
     "prisma:encrypt-clinical-data": "ts-node prisma/encrypt-clinical-data.ts",

@@ -1,6 +1,20 @@
 -- The orthodontic modules join dentistry, so the same professional keeps the odontogram and the
 -- orthodontic records of a patient.
 
+-- Dentistry joins the catalog here when it is not there yet, so that the modules below are never
+-- linked to nothing. An existing row is left as it is, inactive included.
+INSERT INTO "Specialty" ("id", "code", "name", "description", "isActive", "createdAt", "updatedAt")
+VALUES (
+  'specialty-dentistry',
+  'DENTISTRY',
+  'Odontología',
+  'Prevención y atención odontológica.',
+  true,
+  CURRENT_TIMESTAMP,
+  CURRENT_TIMESTAMP
+)
+ON CONFLICT ("code") DO NOTHING;
+
 INSERT INTO "SpecialtyModule" ("id", "specialtyId", "moduleKey", "createdAt")
 SELECT 'sm_' || md5(s."id" || ':' || m.module_key), s."id", m.module_key, CURRENT_TIMESTAMP
 FROM (VALUES
