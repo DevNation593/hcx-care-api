@@ -62,7 +62,9 @@ Se eligió A por dar todo lo clínico con el menor riesgo.
   no evaluada), hábitos (selección múltiple: succión digital, interposición lingual, respiración
   oral, onicofagia, bruxismo, otro), ATM (texto).
 - Oclusión: clase molar derecha/izquierda y clase canina derecha/izquierda (I, II, III, no
-  evaluable); overjet y overbite en mm (decimales, admiten negativos); mordida cruzada
+  evaluable); división de la Clase II (1, 2, no aplica, no evaluada); plano terminal derecho e
+  izquierdo para dentición temporal (recto, escalón mesial, escalón distal, no evaluable); overjet y
+  overbite en mm (decimales, admiten negativos); mordida cruzada
   (anterior, posterior derecha, posterior izquierda, ausente, no evaluada); mordida abierta
   (anterior, posterior, ausente, no evaluada); desviación de línea media superior e inferior
   (mm y dirección); apiñamiento superior e inferior (ausente, leve, moderado, severo, no
@@ -93,8 +95,9 @@ Se eligió A por dar todo lo clínico con el menor riesgo.
 
 ### `dentistry.ortho-control` — Control ortodóntico
 
-- Tipo de cita (obligatorio): instalación, ajuste, recementado, emergencia, retiro de
-  aparatología, control de retención.
+- Tipo de cita (obligatorio): instalación, ajuste, control de rutina o entrega de alineadores,
+  observación o control de crecimiento, recementado, emergencia, retiro de aparatología, control
+  de retención.
 - Arco superior e inferior (texto, p. ej. "NiTi .014"), ligaduras (texto), elásticos indicados
   (texto), alineador actual y total (enteros).
 - Brackets despegados (piezas FDI, selección múltiple).
@@ -105,9 +108,10 @@ Se eligió A por dar todo lo clínico con el menor riesgo.
 ## Alta en la base de datos
 
 Migración nueva que inserta los cuatro `SpecialtyModule` de `DENTISTRY` (idempotente, mismo
-patrón que `20261108000000_gynecology_specialty`). No hay consultorios en producción todavía, así
-que no se crean filas `TenantModule` para consultorios existentes; los que activen Odontología
-reciben los módulos como cualquier módulo de la especialidad.
+patrón que `20261108000000_gynecology_specialty`) y los activa (`TenantModule`) para todo consultorio
+que ya tenga Odontología, como hizo la migración de `dentistry.evolution`. Aún no hay consultorios,
+pero así la migración es correcta en cualquier base; los que activen Odontología después reciben
+los módulos como cualquier módulo de la especialidad.
 
 ## Demo y pruebas
 
