@@ -8,7 +8,7 @@ import { TreatmentSessionsService } from './treatment-sessions.service';
 
 describe('TreatmentSessionsController', () => {
   const actor: ClinicalActor = { userId: 'pro', role: 'PROFESIONAL', specialtyId: 'aesthetics' };
-  const sessions = { complete: jest.fn() };
+  const sessions = { complete: jest.fn(), noShowEncounter: jest.fn() };
   const signer = { verify: jest.fn() };
   const controller = new TreatmentSessionsController(
     sessions as unknown as TreatmentSessionsService,
@@ -20,6 +20,22 @@ describe('TreatmentSessionsController', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     sessions.complete.mockResolvedValue({ id: 'session-1', status: 'CLINICAL_COMPLETE' });
+  });
+
+  describe('noShowEncounter', () => {
+    it('records the no-show of the encounter of the patient', async () => {
+      sessions.noShowEncounter.mockResolvedValue([{ id: 'session-1', status: 'NO_SHOW' }]);
+
+      await expect(
+        controller.noShowEncounter('tenant-1', 'patient-1', 'encounter-1', actor),
+      ).resolves.toEqual([{ id: 'session-1', status: 'NO_SHOW' }]);
+      expect(sessions.noShowEncounter).toHaveBeenCalledWith(
+        'tenant-1',
+        'patient-1',
+        'encounter-1',
+        actor,
+      );
+    });
   });
 
   describe('complete', () => {

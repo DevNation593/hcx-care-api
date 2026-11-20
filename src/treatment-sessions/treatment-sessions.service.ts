@@ -237,6 +237,18 @@ const invalidTransition = (status: TreatmentSessionStatus, message: string, extr
     ...extra,
   });
 
+/** A no-show of the encounter ends the sessions in these statuses: nothing was done with the patient. */
+const NO_SHOW_ELIGIBLE_STATUSES: readonly TreatmentSessionStatus[] = [
+  'INTAKE_IN_PROGRESS',
+  'READY_FOR_CONSENT',
+  'CONSENTED',
+];
+/** Sessions that already ended without the patient being attended; they stay as they are. */
+const NO_SHOW_IGNORED_STATUSES: readonly TreatmentSessionStatus[] = ['CANCELLED', 'NO_SHOW'];
+
+const activityConflict = (code: string, message: string) =>
+  new ConflictException({ statusCode: 409, code, message });
+
 const STARTED_STATUSES: readonly TreatmentSessionStatus[] = ['IN_PROGRESS', 'CLINICAL_COMPLETE'];
 
 /** Appointments a no-show of the session still applies to. */
@@ -787,36 +799,125 @@ export class TreatmentSessionsService {
   }
 
   /**
-   * Records that the patient did not come: the session ends as NO_SHOW, its appointment (if
-   * still unattended or in progress) too, and its encounter closes.
+   * Records that the patient did not come to the session: the no-show is of its whole
+   * encounter (see noShowEncounter), and this returns the session as it ended.
    */
   async noShow(tenantId: string, sessionId: string, actor: ClinicalActor): Promise<SessionDetail> {
-    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
-      const { session, version, policy } = await this.loadForCommand(
-        tx,
-        tenantId,
-        sessionId,
-        actor,
+    const found = await this.transaction(async (tx) => {
+      const { session, version } = await this.findSession(tx, tenantId, sessionId);
+      if (session.professionalId !== actor.userId) {
+        throw clinicalRecordForbidden('Solo el profesional de la atención puede registrar en ella');
+      }
+      // A session that cannot take a no-show is refused as such, before the encounter is looked at.
+      assertCommandAllowed(
+        session.status,
         'NO_SHOW',
+        parseTreatmentRequirements(version.requirements),
       );
-      const missed = await this.transition(tx, session, {
-        status: 'NO_SHOW',
-        cancelledAt: new Date(),
+      return session;
+    });
+    const missed = await this.noShowEncounter(tenantId, found.patientId, found.encounterId, actor);
+    const own = missed.find((row) => row.id === sessionId);
+    if (!own) throw sessionNotFound();
+    return own;
+  }
+
+  /**
+   * Records that the patient did not come to the encounter: every treatment still waiting ends
+   * as NO_SHOW, its appointment (if still unattended or in progress) too, and the encounter
+   * closes. It does not apply once anything was done with the patient: a treatment started or
+   * finished, a record of its own, a note or an order (409 ENCOUNTER_HAS_ACTIVITY). Sessions
+   * already cancelled or missed do not count as activity.
+   */
+  async noShowEncounter(
+    tenantId: string,
+    patientId: string,
+    encounterId: string,
+    actor: ClinicalActor,
+  ): Promise<SessionDetail[]> {
+    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
+      // Same hold as opening a session in it: a close or a new treatment running now waits.
+      await assertOpenEncounter(tx, tenantId, patientId, encounterId, actor);
+      if (!(await lockOpenEncounter(tx, tenantId, encounterId))) {
+        throw activityConflict('ENCOUNTER_CLOSED', 'La atención ya está cerrada.');
+      }
+      const all = await tx.treatmentSession.findMany({
+        where: { tenantId, encounterId },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, status: true, formRecordId: true },
       });
+      if (all.length === 0) {
+        throw activityConflict(
+          'ENCOUNTER_HAS_NO_TREATMENTS',
+          'Esta atención no tiene tratamientos.',
+        );
+      }
+      const waiting = all.filter((row) => NO_SHOW_ELIGIBLE_STATUSES.includes(row.status));
+      if (
+        all.some((row) => !NO_SHOW_IGNORED_STATUSES.includes(row.status) && !waiting.includes(row))
+      ) {
+        throw activityConflict(
+          'ENCOUNTER_HAS_ACTIVITY',
+          'La atención ya tiene actividad con el paciente: no se puede marcar como no asistió.',
+        );
+      }
+      if (waiting.length === 0) {
+        throw activityConflict(
+          'ENCOUNTER_HAS_NO_TREATMENTS',
+          'Esta atención no tiene tratamientos pendientes.',
+        );
+      }
+      // What the encounter holds besides the medical forms its treatments keep.
+      const formRecordIds = all.flatMap((row) => (row.formRecordId ? [row.formRecordId] : []));
+      const [records, notes, orders] = await Promise.all([
+        tx.specialtyRecord.count({
+          where: { tenantId, encounterId, deletedAt: null, id: { notIn: formRecordIds } },
+        }),
+        tx.clinicalNote.count({ where: { tenantId, encounterId, deletedAt: null } }),
+        tx.clinicalOrder.count({ where: { tenantId, encounterId } }),
+      ]);
+      if (records + notes + orders > 0) {
+        throw activityConflict(
+          'ENCOUNTER_HAS_ACTIVITY',
+          'La atención ya tiene registros, notas u órdenes: no se puede marcar como no asistió.',
+        );
+      }
+
+      const ended: {
+        after: TreatmentSession;
+        version: VersionWithTreatment;
+        policy: TreatmentRequirements;
+      }[] = [];
+      const appointmentIds = new Set<string>();
+      for (const { id } of waiting) {
+        const { session, version, policy } = await this.loadForCommand(
+          tx,
+          tenantId,
+          id,
+          actor,
+          'NO_SHOW',
+        );
+        if (session.appointmentId) appointmentIds.add(session.appointmentId);
+        const after = await this.transition(tx, session, {
+          status: 'NO_SHOW',
+          cancelledAt: new Date(),
+        });
+        await this.auditTransition(tx, actor, session, after);
+        ended.push({ after, version, policy });
+      }
       // Before the encounter closes, which would otherwise complete the appointment.
-      if (session.appointmentId) {
+      for (const id of appointmentIds) {
         await tx.appointment.updateMany({
-          where: {
-            id: session.appointmentId,
-            tenantId,
-            status: { in: [...OPEN_APPOINTMENT_STATUSES] },
-          },
+          where: { id, tenantId, status: { in: [...OPEN_APPOINTMENT_STATUSES] } },
           data: { status: 'NO_SHOW' },
         });
       }
-      await this.encounters.closeEncounter(tx, tenantId, session.encounterId, actor);
-      await this.auditTransition(tx, actor, session, missed);
-      return this.detail(tx, missed, version, policy, actor);
+      await this.encounters.closeEncounter(tx, tenantId, encounterId, actor);
+      const missed: SessionDetail[] = [];
+      for (const { after, version, policy } of ended) {
+        missed.push(await this.detail(tx, after, version, policy, actor));
+      }
+      return missed;
     });
   }
 

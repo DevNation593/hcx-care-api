@@ -239,6 +239,24 @@ export class TreatmentSessionsController {
     return this.sessionsService.noShow(tenantId, id, actor);
   }
 
+  @Post('patients/:patientId/encounters/:encounterId/no-show')
+  @UseGuards(ClinicalProfileGuard)
+  @Roles('MASTER', 'PROFESIONAL')
+  @RequirePermission('clinical_records.update')
+  @ApiOperation({
+    summary: 'Record that the patient did not come to the encounter - Its professional only',
+    description:
+      'Every treatment of the encounter still waiting ends as NO_SHOW, its appointment too, and the encounter closes. Returns the sessions it ended. Sessions already cancelled or missed are left as they are. 409 ENCOUNTER_HAS_ACTIVITY once a treatment started or finished, or the encounter holds a record of its own, a clinical note or an order; 409 ENCOUNTER_HAS_NO_TREATMENTS when it has no treatment waiting; 409 ENCOUNTER_CLOSED; 403 when the encounter is not the caller own; 404 when it is not found.',
+  })
+  noShowEncounter(
+    @Param('tenantId') tenantId: string,
+    @Param('patientId') patientId: string,
+    @Param('encounterId') encounterId: string,
+    @CurrentClinicalActor() actor: ClinicalActor,
+  ) {
+    return this.sessionsService.noShowEncounter(tenantId, patientId, encounterId, actor);
+  }
+
   @Get('treatment-sessions/:id/compliance')
   @Roles('MASTER')
   @RequirePermission('billing.view')
