@@ -103,9 +103,39 @@ describe('orthodontic clinical modules', () => {
     ).toEqual([expect.objectContaining({ field: 'measurements[0].value' })]);
   });
 
+  it('records a routine control and an observation visit', () => {
+    for (const visitType of ['CONTROL', 'OBSERVACION']) {
+      const data = { visitType, procedurePerformed: 'Revisión del avance' };
+      expect(validateModuleData(definitionOf('control'), data)).toEqual(data);
+    }
+  });
+
+  it('records the terminal plane of a primary dentition', () => {
+    const data = {
+      chiefComplaint: 'Control de crecimiento',
+      orthodonticDiagnosis: 'Dentición temporal en observación',
+      dentition: 'TEMPORAL',
+      molarClassRight: 'NO_EVALUABLE',
+      terminalPlaneRight: 'ESCALON_MESIAL',
+      terminalPlaneLeft: 'NO_EVALUABLE',
+    };
+
+    expect(validateModuleData(definitionOf('assessment'), data)).toEqual(data);
+  });
+
+  it('keeps a class II division that could not be assessed', () => {
+    const data = {
+      chiefComplaint: 'Resalte',
+      orthodonticDiagnosis: 'Clase II',
+      classIIDivision: 'NO_EVALUADA',
+    };
+
+    expect(validateModuleData(definitionOf('assessment'), data)).toEqual(data);
+  });
+
   it('does not compare the current aligner with the total', () => {
     const data = {
-      visitType: 'CONTROL_RETENCION',
+      visitType: 'CONTROL',
       procedurePerformed: 'Entrega de alineadores',
       currentAligner: 30,
       totalAligners: 20,

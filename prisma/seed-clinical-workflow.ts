@@ -1695,7 +1695,6 @@ export async function seedClinicalWorkflow(ctx: SeedContext): Promise<SeedTenant
       visitType: 'AJUSTE',
       upperArchwire: 'NiTi .016',
       lowerArchwire: 'NiTi .014',
-      ligatures: 'Elastoméricas',
       hygiene: 'REGULAR',
       cooperation: 'BUENA',
       procedurePerformed: 'Cambio de arcos y ligaduras.',

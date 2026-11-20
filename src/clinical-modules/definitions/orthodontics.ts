@@ -34,6 +34,14 @@ const ANGLE_CLASS = {
   NO_EVALUABLE: 'No evaluable',
 };
 
+/** Molar relation of a primary dentition, where Angle's class does not apply yet. */
+const TERMINAL_PLANE = {
+  RECTO: 'Recto',
+  ESCALON_MESIAL: 'Escalón mesial',
+  ESCALON_DISTAL: 'Escalón distal',
+  NO_EVALUABLE: 'No evaluable',
+};
+
 const MIDLINE = {
   CENTRADA: 'Centrada',
   DERECHA: 'Desviada a la derecha',
@@ -126,7 +134,18 @@ export const ORTHODONTICS_MODULES: ClinicalModuleDefinition[] = [
             DIVISION_1: 'División 1',
             DIVISION_2: 'División 2',
             NO_APLICA: 'No aplica',
+            NO_EVALUADA: 'No evaluada',
           }),
+          select(
+            'terminalPlaneRight',
+            'Plano terminal derecho (dentición temporal)',
+            TERMINAL_PLANE,
+          ),
+          select(
+            'terminalPlaneLeft',
+            'Plano terminal izquierdo (dentición temporal)',
+            TERMINAL_PLANE,
+          ),
           mm('overjetMm', 'Overjet (resalte)', -10, 20),
           mm('overbiteMm', 'Overbite (sobremordida)', -10, 15),
           select('crossbite', 'Mordida cruzada', {
@@ -314,6 +333,8 @@ export const ORTHODONTICS_MODULES: ClinicalModuleDefinition[] = [
             {
               INSTALACION: 'Instalación',
               AJUSTE: 'Ajuste',
+              CONTROL: 'Control de rutina o entrega de alineadores',
+              OBSERVACION: 'Observación o control de crecimiento',
               RECEMENTADO: 'Recementado',
               EMERGENCIA: 'Emergencia',
               RETIRO: 'Retiro de aparatología',

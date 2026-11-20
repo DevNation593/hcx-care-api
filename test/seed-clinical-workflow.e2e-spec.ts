@@ -356,6 +356,8 @@ describe('Demo seed of the clinical workflow, used through the API (E2E)', () =>
       appliance: 'AUTOLIGADO',
     });
     expect(byModule('dentistry.ortho-control').data).toMatchObject({ visitType: 'AJUSTE' });
+    // Self-ligating brackets hold the archwire themselves: the control records no ligatures.
+    expect(byModule('dentistry.ortho-control').data).not.toHaveProperty('ligatures');
 
     const data = {
       visitType: 'EMERGENCIA',
