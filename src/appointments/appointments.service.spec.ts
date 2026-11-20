@@ -344,7 +344,7 @@ describe('AppointmentsService canonical appointments', () => {
     expect(team.ensureActive).not.toHaveBeenCalled();
   });
 
-  it('reports a non-working day with a stable code and the configured days', async () => {
+  it('reports a non-working day with a stable code and the configured days in the message', async () => {
     db.tenantSettings.findUnique.mockResolvedValue({
       workingDays: ['MONDAY', 'WEDNESDAY'],
       workingHoursStart: '00:00',
@@ -355,13 +355,13 @@ describe('AppointmentsService canonical appointments', () => {
       status: 400,
       response: {
         code: 'NON_WORKING_DAY',
-        details: { dayOfWeek: 'TUESDAY', workingDays: ['MONDAY', 'WEDNESDAY'] },
+        message: 'No se pueden programar citas el día Martes. Días laborales: Lunes, Miércoles',
       },
     });
     expect(db.appointment.create).not.toHaveBeenCalled();
   });
 
-  it('reports a time outside working hours with a stable code and the configured hours', async () => {
+  it('reports a time outside working hours with a stable code and the configured hours in the message', async () => {
     db.tenantSettings.findUnique.mockResolvedValue({
       workingDays: ['TUESDAY'],
       workingHoursStart: '14:00',
@@ -372,7 +372,7 @@ describe('AppointmentsService canonical appointments', () => {
       status: 400,
       response: {
         code: 'OUTSIDE_WORKING_HOURS',
-        details: { workingHoursStart: '14:00', workingHoursEnd: '18:00' },
+        message: 'Las citas deben estar dentro del horario laboral: 14:00 - 18:00',
       },
     });
     expect(db.appointment.create).not.toHaveBeenCalled();

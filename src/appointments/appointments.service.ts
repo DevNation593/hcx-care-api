@@ -529,7 +529,6 @@ export class AppointmentsService {
         code: 'NON_WORKING_DAY',
         error: 'NON_WORKING_DAY',
         message: `No se pueden programar citas el día ${dayLabels[dayOfWeek] || dayOfWeek}. Días laborales: ${days}`,
-        details: { dayOfWeek, workingDays: settings.workingDays },
       });
     }
     const [startHour, startMinute] = settings.workingHoursStart.split(':').map(Number);
@@ -540,10 +539,6 @@ export class AppointmentsService {
         code: 'OUTSIDE_WORKING_HOURS',
         error: 'OUTSIDE_WORKING_HOURS',
         message: `Las citas deben estar dentro del horario laboral: ${settings.workingHoursStart} - ${settings.workingHoursEnd}`,
-        details: {
-          workingHoursStart: settings.workingHoursStart,
-          workingHoursEnd: settings.workingHoursEnd,
-        },
       });
     }
   }
