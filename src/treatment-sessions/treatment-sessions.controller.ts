@@ -61,9 +61,9 @@ export class TreatmentSessionsController {
   @Roles('MASTER', 'PROFESIONAL')
   @RequirePermission('clinical_records.create')
   @ApiOperation({
-    summary: 'Open a treatment session',
+    summary: 'Open one or several treatment sessions',
     description:
-      'Pins the current version of the treatment and opens a PROCEDURE encounter. 403 TREATMENT_SPECIALTY_MISMATCH, 404 TREATMENT_NOT_FOUND, 409 TREATMENT_INACTIVE or ENCOUNTER_ALREADY_OPEN.',
+      'Pins the current version of each treatment. Send exactly one of treatmentId (answers one session) and treatmentIds (answers a list in the same order). The sessions go in a new encounter (PROCEDURE by default, with the optional encounterType and reason) or, with encounterId, in an open encounter of the caller, whose appointment and branch they use. All or none are created. 400 for an invalid combination or a different appointment or branch, 403 TREATMENT_SPECIALTY_MISMATCH, 404 TREATMENT_NOT_FOUND, 409 TREATMENT_INACTIVE, ENCOUNTER_ALREADY_OPEN or ENCOUNTER_CLOSED.',
   })
   create(
     @Param('tenantId') tenantId: string,

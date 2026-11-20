@@ -331,6 +331,200 @@ describe('TreatmentSessionsService', () => {
       expect(db.encounter.create).not.toHaveBeenCalled();
       expect(db.treatmentSession.create).not.toHaveBeenCalled();
     });
+
+    describe('several treatments', () => {
+      const ids = ['treatment-a', 'treatment-b'];
+      const names: Record<string, string> = { 'treatment-a': 'Toxina', 'treatment-b': 'Relleno' };
+      const specialties: Record<string, string | null> = {};
+      let open: jest.SpyInstance;
+      let sessionCount: number;
+
+      const createMany = (extra = {}, actor = professional) =>
+        service.create('tenant-1', 'patient-1', actor, { treatmentIds: ids, ...extra });
+      const openEncounterRow = (overrides = {}) => ({
+        id: 'encounter-9',
+        professionalId: 'pro',
+        status: 'OPEN',
+        appointmentId: 'appointment-9',
+        branchId: 'branch-9',
+        ...overrides,
+      });
+
+      beforeEach(() => {
+        for (const id of ids) delete specialties[id];
+        sessionCount = 0;
+        db.treatment.findFirst.mockImplementation(({ where }) =>
+          Promise.resolve(
+            treatment({
+              id: where.id,
+              name: names[where.id],
+              specialtyId: specialties[where.id] ?? null,
+            }),
+          ),
+        );
+        db.treatmentVersion.findFirst.mockImplementation(({ where }) =>
+          Promise.resolve(
+            version(reusablePolicy, { id: `version-${where.treatmentId}`, ...where }),
+          ),
+        );
+        db.treatmentSession.create.mockImplementation(({ data }) => {
+          sessionCount += 1;
+          return Promise.resolve(session({ ...data, id: `session-${sessionCount}` }));
+        });
+        db.treatmentSession.update.mockImplementation(({ where, data }) =>
+          Promise.resolve(session({ ...data, id: where.id })),
+        );
+        open = jest.spyOn(EncountersService.prototype, 'openEncounter');
+      });
+      afterEach(() => open.mockRestore());
+
+      it('creates one session per treatment on a new encounter', async () => {
+        const created = await createMany();
+
+        expect(open).toHaveBeenCalledTimes(1);
+        expect(open.mock.calls[0][4]).toMatchObject({
+          encounterType: 'PROCEDURE',
+          reason: 'Toxina, Relleno',
+        });
+        expect(db.treatmentSession.create).toHaveBeenCalledTimes(2);
+        const encounterIds = db.treatmentSession.create.mock.calls.map(
+          ([args]) => args.data.encounterId,
+        );
+        expect(encounterIds).toEqual(['encounter-1', 'encounter-1']);
+        expect(Array.isArray(created)).toBe(true);
+        expect(created).toHaveLength(2);
+        expect((created as unknown as { id: string }[]).map((c) => c.id)).toEqual([
+          'session-1',
+          'session-2',
+        ]);
+      });
+
+      it('uses the given type and reason for the new encounter', async () => {
+        await createMany({ encounterType: 'FIRST_VISIT', reason: 'Valoración' });
+
+        expect(open.mock.calls[0][4]).toMatchObject({
+          encounterType: 'FIRST_VISIT',
+          reason: 'Valoración',
+        });
+      });
+
+      it('adds sessions to an open encounter of the caller', async () => {
+        db.encounter.findFirst.mockResolvedValue(openEncounterRow());
+
+        const created = await createMany({ encounterId: 'encounter-9' });
+
+        expect(open).not.toHaveBeenCalled();
+        expect(db.encounter.findFirst.mock.calls[0][0].where).toMatchObject({
+          id: 'encounter-9',
+          tenantId: 'tenant-1',
+        });
+        expect(db.treatmentSession.create.mock.calls.map(([args]) => args.data)).toEqual([
+          expect.objectContaining({
+            encounterId: 'encounter-9',
+            appointmentId: 'appointment-9',
+            branchId: 'branch-9',
+          }),
+          expect.objectContaining({
+            encounterId: 'encounter-9',
+            appointmentId: 'appointment-9',
+            branchId: 'branch-9',
+          }),
+        ]);
+        expect(created).toHaveLength(2);
+      });
+
+      it('rejects adding to a closed encounter', async () => {
+        db.encounter.findFirst.mockResolvedValue(openEncounterRow({ status: 'CLOSED' }));
+
+        await expect(createMany({ encounterId: 'encounter-9' })).rejects.toMatchObject({
+          status: 409,
+          response: { code: 'ENCOUNTER_CLOSED' },
+        });
+        expect(db.treatmentSession.create).not.toHaveBeenCalled();
+      });
+
+      it('rejects an encounter that a concurrent close shut after the check', async () => {
+        db.encounter.findFirst.mockResolvedValue(openEncounterRow());
+        db.$queryRaw.mockResolvedValue([]);
+
+        await expect(createMany({ encounterId: 'encounter-9' })).rejects.toMatchObject({
+          status: 409,
+          response: { code: 'ENCOUNTER_CLOSED' },
+        });
+        expect(db.treatmentSession.create).not.toHaveBeenCalled();
+      });
+
+      it("rejects an appointment or branch that differs from the encounter's", async () => {
+        db.encounter.findFirst.mockResolvedValue(openEncounterRow());
+
+        await expect(
+          createMany({ encounterId: 'encounter-9', appointmentId: 'appointment-other' }),
+        ).rejects.toMatchObject({ status: 400 });
+        await expect(
+          createMany({ encounterId: 'encounter-9', branchId: 'branch-other' }),
+        ).rejects.toMatchObject({ status: 400 });
+        expect(db.treatmentSession.create).not.toHaveBeenCalled();
+      });
+
+      it('rejects a type or reason together with an encounter', async () => {
+        db.encounter.findFirst.mockResolvedValue(openEncounterRow());
+
+        await expect(
+          createMany({ encounterId: 'encounter-9', encounterType: 'FOLLOW_UP' }),
+        ).rejects.toMatchObject({ status: 400 });
+        await expect(
+          createMany({ encounterId: 'encounter-9', reason: 'Otro' }),
+        ).rejects.toMatchObject({ status: 400 });
+        expect(db.treatmentSession.create).not.toHaveBeenCalled();
+      });
+
+      it('creates nothing when one treatment belongs to another specialty', async () => {
+        specialties['treatment-b'] = 'dermatology';
+
+        await expect(createMany()).rejects.toMatchObject({
+          status: 403,
+          response: { code: 'TREATMENT_SPECIALTY_MISMATCH' },
+        });
+        expect(open).not.toHaveBeenCalled();
+        expect(db.encounter.create).not.toHaveBeenCalled();
+        expect(db.treatmentSession.create).not.toHaveBeenCalled();
+      });
+
+      it('requires exactly one of treatmentId and treatmentIds', async () => {
+        await expect(
+          service.create('tenant-1', 'patient-1', professional, {}),
+        ).rejects.toMatchObject({ status: 400 });
+        await expect(
+          service.create('tenant-1', 'patient-1', professional, {
+            treatmentId: 'treatment-a',
+            treatmentIds: ids,
+          }),
+        ).rejects.toMatchObject({ status: 400 });
+        expect(db.treatmentSession.create).not.toHaveBeenCalled();
+      });
+
+      it('keeps the single-session response for treatmentId', async () => {
+        const created = await service.create('tenant-1', 'patient-1', professional, {
+          treatmentId: 'treatment-a',
+        });
+
+        expect(Array.isArray(created)).toBe(false);
+        expect(created).toMatchObject({ id: 'session-1' });
+      });
+
+      it('truncates a default reason to 2000 characters', async () => {
+        names['treatment-a'] = 'A'.repeat(1500);
+        names['treatment-b'] = 'B'.repeat(1500);
+        try {
+          await createMany();
+        } finally {
+          names['treatment-a'] = 'Toxina';
+          names['treatment-b'] = 'Relleno';
+        }
+
+        expect(open.mock.calls[0][4].reason).toHaveLength(2000);
+      });
+    });
   });
 
   describe('saveForm', () => {

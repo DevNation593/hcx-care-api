@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -7,6 +8,7 @@ import {
 import {
   ConsentDocument,
   ConsentSignerRole,
+  Encounter,
   PatientFile,
   Prisma,
   Treatment,
@@ -17,9 +19,16 @@ import {
 import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
-import { clinicalRecordForbidden } from '../clinical-access/clinical-errors';
+import {
+  clinicalRecordForbidden,
+  clinicalRecordNotFound,
+} from '../clinical-access/clinical-errors';
 import { DEFAULT_CLINIC_TIMEZONE } from '../common/utils/timezone';
-import { EncountersService } from '../encounters/encounters.service';
+import {
+  assertOpenEncounter,
+  EncountersService,
+  lockOpenEncounter,
+} from '../encounters/encounters.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { runSerializableTransaction } from '../prisma/serializable-transaction';
 import { SpecialtyRecordsService } from '../specialty-records/specialty-records.service';
@@ -49,6 +58,9 @@ import {
 /** Stored encrypted; everything outside this service works with the decrypted session. */
 const ENCRYPTED_SESSION_FIELDS = ['procedureNotes', 'cancellationReason'] as const;
 const ENCRYPTED_FILE_FIELDS = ['fileName', 'description'] as const;
+
+/** Same limit as the encounter reason. */
+const MAX_REASON_LENGTH = 2000;
 
 type VersionWithTreatment = TreatmentVersion & { treatment: Treatment };
 
@@ -277,85 +289,166 @@ export class TreatmentSessionsService {
   }
 
   /**
-   * Opens a session of the treatment's current version on a new PROCEDURE encounter. It starts
-   * waiting for the form, or ready for the consent, or already consented when an earlier
-   * consent of the same treatment still applies.
+   * Opens one session per treatment (the current version of each) in one encounter: a new
+   * PROCEDURE encounter, or an open encounter of the caller when `encounterId` comes. Everything
+   * is validated before anything is written, and all of it commits or none. Each session starts
+   * waiting for the form, or ready for the consent, or already consented when an earlier consent
+   * of the same treatment still applies. Answers one session for `treatmentId` and a list, in
+   * the order of `treatmentIds`, for `treatmentIds`.
    */
   async create(
     tenantId: string,
     patientId: string,
     actor: ClinicalActor,
     dto: CreateTreatmentSessionDto,
-  ): Promise<SessionDetail> {
-    return runSerializableTransaction(this.prisma, tenantId, actor.userId, async (tx) => {
-      const version = await this.treatments.currentVersionFor(tx, tenantId, dto.treatmentId);
-      const { treatment } = version;
-      if (treatment.specialtyId && treatment.specialtyId !== actor.specialtyId) {
-        throw new ForbiddenException({
-          statusCode: 403,
-          code: 'TREATMENT_SPECIALTY_MISMATCH',
-          message: 'El tratamiento pertenece a otra especialidad.',
-        });
-      }
-      const policy = parseTreatmentRequirements(version.requirements);
-
-      const encounter = await this.encounters.openEncounter(tx, tenantId, patientId, actor, {
-        encounterType: 'PROCEDURE',
-        reason: treatment.name,
-        appointmentId: dto.appointmentId,
-        branchId: dto.branchId,
-      });
-
-      const created = await tx.treatmentSession.create({
-        data: {
-          tenantId,
-          patientId,
-          professionalId: actor.userId,
-          branchId: encounter.branchId,
-          appointmentId: encounter.appointmentId,
-          treatmentVersionId: version.id,
-          encounterId: encounter.id,
-        },
-      });
-
-      const facts = await loadSessionFacts(
-        tx,
-        created,
-        policy,
-        version.consentTemplateVersionId,
-        new Date(),
+  ): Promise<SessionDetail | SessionDetail[]> {
+    const single = dto.treatmentId !== undefined;
+    if (single === (dto.treatmentIds !== undefined)) {
+      throw new BadRequestException('Indica treatmentId o treatmentIds, pero no ambos.');
+    }
+    if (dto.encounterId && (dto.encounterType !== undefined || dto.reason !== undefined)) {
+      throw new BadRequestException(
+        'El tipo y el motivo solo se indican al abrir una atención nueva.',
       );
-      const status = statusAfterIntake(policy, facts);
-      const session =
-        status !== created.status || facts.applicableConsentId
-          ? await tx.treatmentSession.update({
-              where: { id: created.id },
-              data: {
-                status,
-                ...(facts.applicableConsentId
-                  ? { consentDocumentId: facts.applicableConsentId }
-                  : {}),
-              },
-            })
-          : created;
+    }
+    const treatmentIds = single ? [dto.treatmentId as string] : (dto.treatmentIds as string[]);
 
-      await this.audit.record(
-        tenantId,
-        actor,
-        [
-          {
-            action: 'CREATE',
-            entity: 'TREATMENT_SESSION',
-            entityId: session.id,
-            patientId,
-            after: snapshotTreatmentSession(session),
-          },
-        ],
-        tx,
-      );
+    const details = await runSerializableTransaction(
+      this.prisma,
+      tenantId,
+      actor.userId,
+      async (tx) => {
+        const versions: VersionWithTreatment[] = [];
+        for (const treatmentId of treatmentIds) {
+          const version = await this.treatments.currentVersionFor(tx, tenantId, treatmentId);
+          const { treatment } = version;
+          if (treatment.specialtyId && treatment.specialtyId !== actor.specialtyId) {
+            throw new ForbiddenException({
+              statusCode: 403,
+              code: 'TREATMENT_SPECIALTY_MISMATCH',
+              message: 'El tratamiento pertenece a otra especialidad.',
+            });
+          }
+          versions.push(version);
+        }
 
-      return this.detail(tx, session, version, policy, actor);
+        const encounter = dto.encounterId
+          ? await this.openEncounterOf(tx, tenantId, patientId, actor, dto)
+          : await this.encounters.openEncounter(tx, tenantId, patientId, actor, {
+              encounterType: dto.encounterType ?? 'PROCEDURE',
+              reason:
+                dto.reason ??
+                versions
+                  .map(({ treatment }) => treatment.name)
+                  .join(', ')
+                  .slice(0, MAX_REASON_LENGTH),
+              appointmentId: dto.appointmentId,
+              branchId: dto.branchId,
+            });
+
+        const opened: SessionDetail[] = [];
+        for (const version of versions) {
+          opened.push(await this.openSessionIn(tx, tenantId, patientId, encounter, version, actor));
+        }
+        return opened;
+      },
+    );
+    return single ? details[0] : details;
+  }
+
+  /**
+   * An open encounter of the caller, held open until the transaction ends so a close running
+   * now waits for it. A given appointment or branch must be the encounter's own.
+   */
+  private async openEncounterOf(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    patientId: string,
+    actor: ClinicalActor,
+    dto: CreateTreatmentSessionDto,
+  ): Promise<Pick<Encounter, 'id' | 'appointmentId' | 'branchId'>> {
+    const encounterId = dto.encounterId as string;
+    await assertOpenEncounter(tx, tenantId, patientId, encounterId, actor);
+    if (!(await lockOpenEncounter(tx, tenantId, encounterId))) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'ENCOUNTER_CLOSED',
+        message: 'La atención ya está cerrada.',
+      });
+    }
+    const encounter = await tx.encounter.findFirst({
+      where: { id: encounterId, tenantId, patientId, deletedAt: null },
+      select: { id: true, appointmentId: true, branchId: true },
     });
+    if (!encounter) throw clinicalRecordNotFound('Atención no encontrada');
+    if (dto.appointmentId !== undefined && dto.appointmentId !== encounter.appointmentId) {
+      throw new BadRequestException('La cita no corresponde a la atención indicada.');
+    }
+    if (dto.branchId !== undefined && dto.branchId !== encounter.branchId) {
+      throw new BadRequestException('La sede no corresponde a la atención indicada.');
+    }
+    return encounter;
+  }
+
+  /** One session of the version inside the encounter, audited, with its intake status. */
+  private async openSessionIn(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    patientId: string,
+    encounter: Pick<Encounter, 'id' | 'appointmentId' | 'branchId'>,
+    version: VersionWithTreatment,
+    actor: ClinicalActor,
+  ): Promise<SessionDetail> {
+    const policy = parseTreatmentRequirements(version.requirements);
+    const created = await tx.treatmentSession.create({
+      data: {
+        tenantId,
+        patientId,
+        professionalId: actor.userId,
+        branchId: encounter.branchId,
+        appointmentId: encounter.appointmentId,
+        treatmentVersionId: version.id,
+        encounterId: encounter.id,
+      },
+    });
+
+    const facts = await loadSessionFacts(
+      tx,
+      created,
+      policy,
+      version.consentTemplateVersionId,
+      new Date(),
+    );
+    const status = statusAfterIntake(policy, facts);
+    const session =
+      status !== created.status || facts.applicableConsentId
+        ? await tx.treatmentSession.update({
+            where: { id: created.id },
+            data: {
+              status,
+              ...(facts.applicableConsentId
+                ? { consentDocumentId: facts.applicableConsentId }
+                : {}),
+            },
+          })
+        : created;
+
+    await this.audit.record(
+      tenantId,
+      actor,
+      [
+        {
+          action: 'CREATE',
+          entity: 'TREATMENT_SESSION',
+          entityId: session.id,
+          patientId,
+          after: snapshotTreatmentSession(session),
+        },
+      ],
+      tx,
+    );
+
+    return this.detail(tx, session, version, policy, actor);
   }
 
   /** The session with its policy, form, consents, photos and what is missing. Audited. */
