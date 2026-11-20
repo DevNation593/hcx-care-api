@@ -367,7 +367,7 @@ export class AppointmentsService {
       throw new ForbiddenException({
         statusCode: 403,
         code: 'TENANT_SCOPE_VIOLATION',
-        message: 'No tienes acceso a la información de este consultorio.',
+        message: 'No tienes acceso a la información de esta cuenta master.',
       });
     }
     if (!['MASTER', 'ASISTENTE', 'PROFESIONAL'].includes(toCanonicalRole(actor.role) ?? '')) {
