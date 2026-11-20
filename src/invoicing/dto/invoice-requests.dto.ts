@@ -2,11 +2,7 @@ import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 export class ListInvoiceRequestsQuery {
   @IsOptional() @IsIn(['REQUESTED', 'PROCESSING', 'AUTHORIZED', 'REJECTED', 'FAILED']) status?:
-    | 'REQUESTED'
-    | 'PROCESSING'
-    | 'AUTHORIZED'
-    | 'REJECTED'
-    | 'FAILED';
+    'REQUESTED' | 'PROCESSING' | 'AUTHORIZED' | 'REJECTED' | 'FAILED';
   @IsOptional() @IsString() branchId?: string;
   @IsOptional() @IsString() orderId?: string;
   @IsOptional() @IsString() patientId?: string;

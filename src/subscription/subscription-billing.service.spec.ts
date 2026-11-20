@@ -51,7 +51,10 @@ describe('SubscriptionBillingService', () => {
       })),
       findFirst: jest.fn(async ({ where }) => payments.find((row) => matches(row, where)) ?? null),
       update: jest.fn(async ({ where, data }) =>
-        Object.assign(payments.find((row) => row.id === where.id)!, data),
+        Object.assign(
+          payments.find((row) => row.id === where.id)!,
+          data,
+        ),
       ),
     },
   };

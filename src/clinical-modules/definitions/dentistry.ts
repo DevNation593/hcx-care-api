@@ -29,7 +29,7 @@ export const FDI_TEETH = [
   ...[5, 6, 7, 8].flatMap((prefix) => quadrant(prefix, 5)),
 ];
 
-const TOOTH_OPTIONS = Object.fromEntries(FDI_TEETH.map((tooth) => [tooth, tooth]));
+export const TOOTH_OPTIONS = Object.fromEntries(FDI_TEETH.map((tooth) => [tooth, tooth]));
 
 export const TOOTH_SURFACES = {
   O: 'Oclusal / incisal',

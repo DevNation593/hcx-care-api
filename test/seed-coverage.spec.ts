@@ -757,8 +757,8 @@ describe('demo seed', () => {
       const minors = patients.filter(
         (patient) => patient.dateOfBirth && ageInYears(patient.dateOfBirth, NOW) < 18,
       );
-      expect(minors).toHaveLength(1);
-      expect(minors[0].guardianName).toBeTruthy();
+      expect(minors.map((patient) => patient.firstName).sort()).toEqual(['Mateo', 'Sofía']);
+      for (const minor of minors) expect(minor.guardianName).toBeTruthy();
     });
   });
 

@@ -16,7 +16,10 @@ function fakeTable(rows: Row[]) {
     },
     async update({ where, data }: { where: { id: string }; data: Record<string, unknown> }) {
       this.updates += 1;
-      Object.assign(rows.find((row) => row.id === where.id)!, data);
+      Object.assign(
+        rows.find((row) => row.id === where.id)!,
+        data,
+      );
     },
   };
 }
