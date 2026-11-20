@@ -28,6 +28,14 @@ export const TERMINAL_SESSION_STATUSES: readonly TreatmentSessionStatus[] = [
   'BILLING_FAILED',
 ];
 
+/** Statuses in which a session still has clinical work to do; its encounter cannot close yet. */
+export const UNFINISHED_SESSION_STATUSES: readonly TreatmentSessionStatus[] = [
+  'INTAKE_IN_PROGRESS',
+  'READY_FOR_CONSENT',
+  'CONSENTED',
+  'IN_PROGRESS',
+];
+
 /** Statuses a session reaches once its order enters billing. */
 export const BILLING_SESSION_STATUSES: readonly TreatmentSessionStatus[] = [
   'BILLING_PENDING',

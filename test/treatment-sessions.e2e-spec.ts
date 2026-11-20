@@ -707,7 +707,7 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     expect((await detail(session.id)).status).toBe('CONSENTED');
   });
 
-  it('leaves the encounter of a session to the session', async () => {
+  it('refuses to close the encounter while its session is unfinished', async () => {
     const { session, patientId } = await presentedSession();
 
     const response = await request(server())
@@ -715,8 +715,8 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
       .set(as('pro'))
       .send({ password: TEST_PASSWORD })
       .expect(409);
-    expect(response.body.code).toBe('ENCOUNTER_MANAGED_BY_SESSION');
-    expect(response.body.treatmentSessionId).toBe(session.id);
+    expect(response.body.code).toBe('ENCOUNTER_HAS_UNFINISHED_TREATMENTS');
+    expect(response.body.treatmentSessionIds).toEqual([session.id]);
   });
 
   it('keeps the notes typed before completing, lists them for the history and completes with them', async () => {

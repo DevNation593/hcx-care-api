@@ -829,7 +829,11 @@ describe('ConsentDocumentsService', () => {
 
       await service.revoke('tenant-1', 'doc-1', professional, { reason: 'Cambió de opinión' });
 
-      expect(db.treatmentSession.findMany.mock.calls[0][0].where).toEqual({
+      // The close of the revoked session's own encounter also looks for unfinished sessions.
+      const reusing = db.treatmentSession.findMany.mock.calls.find(
+        ([args]) => args.where.consentDocumentId,
+      );
+      expect(reusing[0].where).toEqual({
         tenantId: 'tenant-1',
         consentDocumentId: 'doc-1',
         status: 'CONSENTED',

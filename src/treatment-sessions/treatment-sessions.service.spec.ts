@@ -211,6 +211,8 @@ describe('TreatmentSessionsService', () => {
       formDefinition: { name: 'Ficha estética' },
     });
     db.consentDocument.findMany.mockResolvedValue([]);
+    // Closing the encounter checks that no treatment of it is left unfinished.
+    db.treatmentSession.findMany.mockResolvedValue([]);
     db.tenant.findUnique.mockResolvedValue({ settings: { timezone: 'America/Guayaquil' } });
     db.patientFile.findMany.mockResolvedValue([]);
     db.clinicalOrder.findMany.mockResolvedValue([]);

@@ -52,6 +52,7 @@ describe('EncountersService', () => {
     patientFile: { findMany: jest.fn(), update: jest.fn(), count: jest.fn() },
     clinicalOrder: { findMany: jest.fn(), count: jest.fn(), update: jest.fn() },
     consentDocument: { count: jest.fn() },
+    treatmentSession: { findMany: jest.fn(), count: jest.fn() },
     auditLog: { createMany: jest.fn() },
     $queryRaw: jest.fn(),
   };
@@ -85,12 +86,50 @@ describe('EncountersService', () => {
     db.patientFile.findMany.mockResolvedValue([]);
     db.clinicalOrder.findMany.mockResolvedValue([]);
     db.clinicalOrder.count.mockResolvedValue(0);
+    db.treatmentSession.findMany.mockResolvedValue([]);
+    db.treatmentSession.count.mockResolvedValue(0);
     db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
   });
 
   describe('list', () => {
+    it('lists the treatment sessions of each encounter', async () => {
+      const sessions = [
+        {
+          id: 'session-1',
+          status: 'CLINICAL_COMPLETE',
+          treatmentVersion: { treatment: { id: 't-1', name: 'Botox' } },
+        },
+        {
+          id: 'session-2',
+          status: 'IN_PROGRESS',
+          treatmentVersion: { treatment: { id: 't-2', name: 'Peeling' } },
+        },
+      ];
+      db.encounter.findMany.mockResolvedValue([
+        { ...encounter(), _count: { records: 0 }, treatmentSessions: sessions },
+      ]);
+
+      const [listed] = await service.list('tenant-1', 'patient-1', physio);
+
+      const include = db.encounter.findMany.mock.calls[0][0].include;
+      expect(include.treatmentSessions).toEqual({
+        select: {
+          id: true,
+          status: true,
+          treatmentVersion: { select: { treatment: { select: { id: true, name: true } } } },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(listed.treatmentSessions).toEqual([
+        { id: 'session-1', status: 'CLINICAL_COMPLETE', treatment: { id: 't-1', name: 'Botox' } },
+        { id: 'session-2', status: 'IN_PROGRESS', treatment: { id: 't-2', name: 'Peeling' } },
+      ]);
+    });
+
     it('returns the live encounters with their record count and audits each read', async () => {
-      db.encounter.findMany.mockResolvedValue([{ ...encounter(), _count: { records: 3 } }]);
+      db.encounter.findMany.mockResolvedValue([
+        { ...encounter(), _count: { records: 3 }, treatmentSessions: [] },
+      ]);
 
       const [listed] = await service.list('tenant-1', 'patient-1', other);
 
@@ -599,29 +638,61 @@ describe('EncountersService', () => {
   });
 
   describe('an encounter that belongs to a treatment session', () => {
-    const managed = () => encounter({ treatmentSessions: [{ id: 'session-1' }] });
-    const refusal = { status: 409, response: { code: 'ENCOUNTER_MANAGED_BY_SESSION' } };
+    beforeEach(() => db.encounter.findFirst.mockResolvedValue(encounter()));
 
-    beforeEach(() => db.encounter.findFirst.mockResolvedValue(managed()));
+    it('closes an encounter whose sessions are all finished', async () => {
+      db.encounter.findFirst.mockResolvedValue(encounter({ appointmentId: 'appointment-1' }));
+      db.treatmentSession.findMany.mockResolvedValue([]);
 
-    it('cannot be closed from the encounters routes', async () => {
+      const closed = await service.close('tenant-1', 'patient-1', 'encounter-1', physio, {});
+
+      expect(db.treatmentSession.findMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: 'tenant-1',
+          encounterId: 'encounter-1',
+          status: { in: ['INTAKE_IN_PROGRESS', 'READY_FOR_CONSENT', 'CONSENTED', 'IN_PROGRESS'] },
+        },
+        select: { id: true },
+      });
+      expect(closed.status).toBe('CLOSED');
+      expect(db.appointment.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: 'COMPLETED' } }),
+      );
+    });
+
+    it('refuses to close while a session is unfinished', async () => {
+      db.treatmentSession.findMany.mockResolvedValue([{ id: 'session-1' }]);
+
       await expect(
         service.close('tenant-1', 'patient-1', 'encounter-1', physio, {}),
-      ).rejects.toMatchObject(refusal);
+      ).rejects.toMatchObject({
+        status: 409,
+        response: {
+          code: 'ENCOUNTER_HAS_UNFINISHED_TREATMENTS',
+          treatmentSessionIds: ['session-1'],
+        },
+      });
       expect(db.encounter.update).not.toHaveBeenCalled();
+      expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        db.treatmentSession.findMany.mock.invocationCallOrder[0],
+      );
     });
 
-    it('cannot be edited from the encounters routes', async () => {
-      await expect(
-        service.update('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' }),
-      ).rejects.toMatchObject(refusal);
-      expect(db.encounter.update).not.toHaveBeenCalled();
+    it('updates the reason of an encounter with sessions', async () => {
+      await service.update('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'Nuevo' });
+
+      expect(db.encounter.update).toHaveBeenCalledTimes(1);
     });
 
-    it('cannot be deleted from the encounters routes', async () => {
+    it('refuses to remove an encounter with sessions', async () => {
+      db.treatmentSession.count.mockResolvedValue(1);
+
       await expect(
         service.delete('tenant-1', 'patient-1', 'encounter-1', physio, { reason: 'x' }),
-      ).rejects.toMatchObject(refusal);
+      ).rejects.toMatchObject({ status: 409, response: { code: 'ENCOUNTER_HAS_RECORDS' } });
+      expect(db.treatmentSession.count).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1', encounterId: 'encounter-1' },
+      });
       expect(db.encounter.update).not.toHaveBeenCalled();
     });
 

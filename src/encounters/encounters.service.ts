@@ -25,6 +25,7 @@ import {
 import { ENCRYPTED_NOTE_FIELDS } from '../clinical-notes/encrypted-note-fields';
 import { FILE_STORAGE, FileStorage } from '../patient-files/file-storage';
 import { PrismaService } from '../prisma/prisma.service';
+import { UNFINISHED_SESSION_STATUSES } from '../treatment-sessions/session-state';
 import {
   CloseEncounterDto,
   DeleteEncounterDto,
@@ -69,18 +70,6 @@ export function snapshotEncounter(encounter: Encounter) {
 
 const conflict = (code: string, message: string, extra: Record<string, unknown> = {}) =>
   new ConflictException({ statusCode: 409, code, message, ...extra });
-
-/** The encounter of a treatment session follows the session; the encounters routes leave it alone. */
-function assertNotManagedBySession(encounter: { treatmentSessions?: { id: string }[] }) {
-  const [session] = encounter.treatmentSessions ?? [];
-  if (session) {
-    throw conflict(
-      'ENCOUNTER_MANAGED_BY_SESSION',
-      'Esta atención pertenece a una sesión de tratamiento y se gestiona desde ella.',
-      { treatmentSessionId: session.id },
-    );
-  }
-}
 
 /**
  * A record can be written into an encounter only while it is open and by the professional
@@ -155,6 +144,14 @@ export class EncountersService {
       include: {
         ...encounterInclude,
         _count: { select: { records: { where: { deletedAt: null } } } },
+        treatmentSessions: {
+          select: {
+            id: true,
+            status: true,
+            treatmentVersion: { select: { treatment: { select: { id: true, name: true } } } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
       },
       orderBy: { startedAt: 'desc' },
     });
@@ -170,9 +167,14 @@ export class EncountersService {
       })),
     );
 
-    return stored.map(({ _count, ...encounter }) => ({
+    return stored.map(({ _count, treatmentSessions, ...encounter }) => ({
       ...this.decrypt(encounter),
       recordCount: _count.records,
+      treatmentSessions: treatmentSessions.map((session) => ({
+        id: session.id,
+        status: session.status,
+        treatment: session.treatmentVersion.treatment,
+      })),
     }));
   }
 
@@ -287,7 +289,6 @@ export class EncountersService {
     return this.transaction(async (tx) => {
       await lockEncounterRow(tx, tenantId, encounterId);
       const current = await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'editar');
-      assertNotManagedBySession(current);
 
       const stored = await tx.encounter.update({
         where: { id: encounterId },
@@ -331,8 +332,7 @@ export class EncountersService {
     dto: CloseEncounterDto,
   ) {
     return this.transaction(async (tx) => {
-      const current = await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'cerrar');
-      assertNotManagedBySession(current);
+      await this.findOwnOpen(tx, tenantId, patientId, encounterId, actor, 'cerrar');
       return this.closeEncounter(tx, tenantId, encounterId, actor, dto.summary);
     });
   }
@@ -362,6 +362,18 @@ export class EncountersService {
       options.anyAuthor ? null : actor,
       'cerrar',
     );
+    // The encounter closes once every treatment in it has ended (completed, cancelled or missed).
+    const unfinished = await tx.treatmentSession.findMany({
+      where: { tenantId, encounterId, status: { in: [...UNFINISHED_SESSION_STATUSES] } },
+      select: { id: true },
+    });
+    if (unfinished.length > 0) {
+      throw conflict(
+        'ENCOUNTER_HAS_UNFINISHED_TREATMENTS',
+        'La atención tiene tratamientos sin terminar. Complétalos o cancélalos antes de cerrarla.',
+        { treatmentSessionIds: unfinished.map((session) => session.id) },
+      );
+    }
     const trimmed = summary?.trim();
     const closedAt = new Date();
     const contentHash = await this.signContents(tx, tenantId, encounterId, closedAt, {
@@ -509,7 +521,6 @@ export class EncountersService {
     return this.transaction(async (tx) => {
       await lockEncounterRow(tx, tenantId, encounterId);
       const current = await this.findOwn(tx, tenantId, patientId, encounterId, actor, 'eliminar');
-      assertNotManagedBySession(current);
       if (current.status === 'CLOSED') {
         throw conflict(
           'ENCOUNTER_SIGNED',
@@ -523,6 +534,13 @@ export class EncountersService {
         throw conflict(
           'ENCOUNTER_HAS_RECORDS',
           'La atención tiene registros u órdenes. Elimina sus registros; si tiene órdenes, ciérrala en lugar de eliminarla.',
+        );
+      }
+      const treatments = await tx.treatmentSession.count({ where: { tenantId, encounterId } });
+      if (treatments > 0) {
+        throw conflict(
+          'ENCOUNTER_HAS_RECORDS',
+          'La atención tiene tratamientos. Cancela sus tratamientos y ciérrala en lugar de eliminarla.',
         );
       }
       // Notes and files of a removed encounter could not be changed nor removed any more (they
@@ -630,7 +648,6 @@ export class EncountersService {
   ) {
     const stored = await tx.encounter.findFirst({
       where: { id: encounterId, tenantId, ...(patientId ? { patientId } : {}), deletedAt: null },
-      include: { treatmentSessions: { select: { id: true }, take: 1 } },
     });
     if (!stored) throw clinicalRecordNotFound('Atención no encontrada');
     // A null actor means the caller already decided who may act on this encounter.
