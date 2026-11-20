@@ -11,6 +11,18 @@ import {
   OrthodonticModulesAudit,
 } from './audit-orthodontic-modules';
 
+/**
+ * Every module dentistry owns as of the catalog migration: the general dentistry modules and the
+ * orthodontic ones. A dentistry that migration creates must own all of them, or a clinic that
+ * selects it could not record odontograms, treatments or evolutions.
+ */
+export const DENTISTRY_MODULE_KEYS_AT_CATALOG = [
+  'dentistry.evolution',
+  'dentistry.odontogram',
+  'dentistry.treatments',
+  ...ORTHODONTIC_MODULE_KEYS,
+].sort();
+
 const modulesMigration = '20261119000000_orthodontics_modules';
 const catalogMigration = '20261120000000_orthodontics_dentistry_catalog';
 const schemaPattern = /^orthodontic_modules_[a-f0-9]{16}$/;
@@ -246,6 +258,16 @@ export async function verifyOrthodonticModulesMigration(
         SELECT "name", "isActive" FROM "Specialty" WHERE "code" = 'DENTISTRY'
       `,
       [{ name: 'Odontología', isActive: true }],
+    );
+    expectEqual(
+      'Modules of the dentistry the migration created',
+      await client.$queryRaw<{ moduleKey: string }[]>`
+        SELECT sm."moduleKey" FROM "SpecialtyModule" sm
+        JOIN "Specialty" s ON s."id" = sm."specialtyId"
+        WHERE s."code" = 'DENTISTRY'
+        ORDER BY sm."moduleKey"
+      `,
+      DENTISTRY_MODULE_KEYS_AT_CATALOG.map((moduleKey) => ({ moduleKey })),
     );
     expectEqual('Audit after adding dentistry', await auditOrthodonticModules(client), NO_GAPS);
     expectEqual('Clinic modules without clinics', await orthodonticTenantModules(client), []);

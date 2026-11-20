@@ -1,6 +1,12 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ORTHODONTIC_MODULE_KEYS } from '../prisma/audit-orthodontic-modules';
-import { verifyOrthodonticModulesMigration } from '../prisma/verify-orthodontic-modules-migration';
+import {
+  DENTISTRY_MODULE_KEYS_AT_CATALOG,
+  verifyOrthodonticModulesMigration,
+} from '../prisma/verify-orthodontic-modules-migration';
+import { specialtyModuleKeys } from '../src/clinical-modules/clinical-module-registry';
 import { ORTHODONTICS_MODULES } from '../src/clinical-modules/definitions/orthodontics';
 
 describe('orthodontic modules migration verifier', () => {
@@ -8,6 +14,31 @@ describe('orthodontic modules migration verifier', () => {
     expect([...ORTHODONTIC_MODULE_KEYS].sort()).toEqual(
       ORTHODONTICS_MODULES.map(({ moduleKey }) => moduleKey).sort(),
     );
+  });
+
+  it('expects a dentistry created by the catalog migration to own every dentistry module', () => {
+    const registry = specialtyModuleKeys('DENTISTRY');
+    for (const moduleKey of DENTISTRY_MODULE_KEYS_AT_CATALOG) expect(registry).toContain(moduleKey);
+    expect(DENTISTRY_MODULE_KEYS_AT_CATALOG).toEqual(
+      expect.arrayContaining([
+        'dentistry.odontogram',
+        'dentistry.treatments',
+        'dentistry.evolution',
+      ]),
+    );
+  });
+
+  it('links every dentistry module in the catalog migration', () => {
+    const sql = readFileSync(
+      join(
+        __dirname,
+        '../prisma/migrations/20261120000000_orthodontics_dentistry_catalog/migration.sql',
+      ),
+      'utf8',
+    );
+    for (const moduleKey of DENTISTRY_MODULE_KEYS_AT_CATALOG) {
+      expect(sql).toContain(`('DENTISTRY', '${moduleKey}')`);
+    }
   });
 
   it.each([
