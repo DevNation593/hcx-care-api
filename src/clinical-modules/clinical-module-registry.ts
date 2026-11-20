@@ -3,6 +3,7 @@ import { DENTISTRY_MODULES } from './definitions/dentistry';
 import { GENERAL_MODULES } from './definitions/general';
 import { GYNECOLOGY_MODULES } from './definitions/gynecology';
 import { NUTRITION_MODULES } from './definitions/nutrition';
+import { ORTHODONTICS_MODULES } from './definitions/orthodontics';
 import { PHYSIOTHERAPY_MODULES } from './definitions/physiotherapy';
 import { PSYCHOLOGY_MODULES } from './definitions/psychology';
 import { ClinicalModuleDefinition } from './module-builders';
@@ -14,6 +15,7 @@ export const CLINICAL_MODULES: readonly ClinicalModuleDefinition[] = [
   ...NUTRITION_MODULES,
   ...PHYSIOTHERAPY_MODULES,
   ...DENTISTRY_MODULES,
+  ...ORTHODONTICS_MODULES,
   ...GYNECOLOGY_MODULES,
 ];
 
