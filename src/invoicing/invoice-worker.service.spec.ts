@@ -1,4 +1,8 @@
+import { reportError } from '../common/monitoring/error-reporter';
 import { InvoiceWorkerService } from './invoice-worker.service';
+import { SriError } from './sri/sri-types';
+
+jest.mock('../common/monitoring/error-reporter');
 
 describe('InvoiceWorkerService dispatch entry points', () => {
   const env = { ...process.env };
@@ -99,6 +103,33 @@ describe('InvoiceWorkerService dispatch entry points', () => {
       process.env.INVOICING_INTERNAL_SCHEDULER = 'true';
       await worker.scheduledDispatch();
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('process error reporting', () => {
+    let failed: jest.SpyInstance;
+    beforeEach(() => {
+      jest.mocked(reportError).mockClear();
+      failed = jest.spyOn(worker as any, 'failed').mockResolvedValue(undefined);
+    });
+
+    it('reports an unexpected error with source and tenantId', async () => {
+      const error = new Error('boom');
+      emitter.advance.mockRejectedValue(error);
+      await worker.process(row('r1') as any);
+      expect(reportError).toHaveBeenCalledWith(error, {
+        source: 'invoicing-worker',
+        tenantId: 't',
+      });
+      expect(failed).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1' }), error);
+    });
+
+    it('does not report an SriError', async () => {
+      const error = new SriError('transient', 'SRI_DOWN');
+      emitter.advance.mockRejectedValue(error);
+      await worker.process(row('r1') as any);
+      expect(reportError).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1' }), error);
     });
   });
 });
