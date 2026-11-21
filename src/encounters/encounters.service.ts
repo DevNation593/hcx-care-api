@@ -109,9 +109,20 @@ async function lockEncounterRow(
 }
 
 /**
- * Holds the encounter open until the caller's transaction ends: it takes a shared lock on the
- * row, so closing (which signs what the encounter holds) waits for writes already under way, and
- * a write that starts after the close sees it closed. Returns false when it is not open.
+ * Holds the encounter open until the caller's transaction ends, for a write into it (a record,
+ * a note, a file, an order, a consent, a treatment). Returns false when it is not open.
+ *
+ * It updates the row (its `updatedAt`) instead of only share-locking it, for two reasons:
+ * - Closing (which signs what the encounter holds) waits for the writes already under way, and
+ *   a write that starts after the close finds the encounter closed (the `status` condition is
+ *   re-checked once the lock is granted).
+ * - A closer in a Serializable transaction (complete-and-close, the encounter no-show) has its
+ *   snapshot fixed before it waits for the row, so it cannot see what a write committed while it
+ *   waited. A row lock alone does not tell it: it would sign without that write and close the
+ *   encounter anyway. Updating the row does: the closer's own lock on a row changed after its
+ *   snapshot fails with 40001, and runSerializableTransaction retries it with a fresh one.
+ *
+ * `version` is left alone: it counts changes to the encounter itself, which a write into it is not.
  */
 export async function lockOpenEncounter(
   tx: Prisma.TransactionClient,
@@ -119,10 +130,10 @@ export async function lockOpenEncounter(
   encounterId: string,
 ): Promise<boolean> {
   const rows = await tx.$queryRaw<{ id: string }[]>`
-    SELECT "id" FROM "Encounter"
+    UPDATE "Encounter" SET "updatedAt" = now()
     WHERE "id" = ${encounterId} AND "tenantId" = ${tenantId}
       AND "status" = 'OPEN' AND "deletedAt" IS NULL
-    FOR SHARE`;
+    RETURNING "id"`;
   return rows.length > 0;
 }
 
@@ -368,8 +379,10 @@ export class EncountersService {
     actor: ClinicalActor,
     summary?: string,
   ): Promise<Encounter> {
-    // Writes into the encounter hold a shared lock on it: closing waits for them to finish, and
-    // the ones that come after find it closed. What is signed below is therefore final.
+    // Writes into the encounter update its row (lockOpenEncounter): closing waits for them to
+    // finish, and the ones that come after find it closed. A Serializable closer, whose snapshot
+    // predates that wait, fails with 40001 on the row a write changed and is retried, so what is
+    // signed below is final for either kind of closer.
     await lockEncounterRow(tx, tenantId, encounterId);
     const current = await this.findOwnOpen(tx, tenantId, null, encounterId, actor, 'cerrar');
     // The encounter closes once every treatment in it has ended (completed, cancelled or missed).
