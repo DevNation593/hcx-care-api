@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import { Prisma } from '@prisma/client';
+import { flushReports, isReportingEnabled, reportError } from '../monitoring/error-reporter';
 import { fieldLabel } from './field-labels';
 
 const INVALID_JSON_MESSAGE = 'El cuerpo de la solicitud no es un JSON válido.';
@@ -90,18 +91,40 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   constructor(private readonly adapterHost: HttpAdapterHost) {}
 
-  catch(exception: unknown, host: ArgumentsHost): void {
+  catch(exception: unknown, host: ArgumentsHost): void | Promise<void> {
     if (host.getType() !== 'http') throw exception;
     const ctx = host.switchToHttp();
-    const request = ctx.getRequest<{ method?: string }>();
+    const request = ctx.getRequest<{
+      method?: string;
+      route?: { path?: string };
+      user?: { userId?: string; tenantId?: string };
+    }>();
     const body = this.toBody(exception, request?.method);
-    if (body.statusCode >= 500) {
-      this.logger.error(
-        exception instanceof Error ? exception.message : String(exception),
-        exception instanceof Error ? exception.stack : undefined,
-      );
-    }
-    this.adapterHost.httpAdapter.reply(ctx.getResponse(), body, body.statusCode);
+    const response = ctx.getResponse();
+    const reply = (): void => {
+      this.adapterHost.httpAdapter.reply(response, body, body.statusCode);
+    };
+    if (body.statusCode < 500) return reply();
+
+    this.logger.error(
+      exception instanceof Error ? exception.message : String(exception),
+      exception instanceof Error ? exception.stack : undefined,
+    );
+    // Only ids and the route pattern: never the email, the body, the headers or the query string.
+    reportError(exception, {
+      source: 'http',
+      method: request?.method,
+      route: request?.route?.path,
+      userId: request?.user?.userId,
+      tenantId: request?.user?.tenantId,
+    });
+    // A serverless function may freeze once it replies: send the event first (5xx only).
+    // A failing reply must not become an unhandled rejection.
+    if (isReportingEnabled())
+      return flushReports()
+        .then(reply)
+        .catch(() => undefined);
+    return reply();
   }
 
   toBody(exception: unknown, method?: string): ErrorBody {

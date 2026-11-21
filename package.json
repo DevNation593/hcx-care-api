@@ -52,6 +52,7 @@
     "@nestjs/swagger": "^11.2.6",
     "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^6.3.0",
+    "@sentry/nestjs": "^10.78.0",
     "@xmldom/xmldom": "^0.9.12",
     "bcrypt": "^5.1.1",
     "bull": "^4.16.3",

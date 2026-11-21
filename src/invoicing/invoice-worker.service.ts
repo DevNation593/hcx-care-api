@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { InvoiceRequest, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { flushReports, isReportingEnabled, reportError } from '../common/monitoring/error-reporter';
 import { ClinicalCryptoService } from '../clinical-access/clinical-crypto.service';
 import { InvoiceEmitter } from './invoice-emitter';
 import { releaseOrder, retryDelay } from './invoice-state';
@@ -84,6 +85,12 @@ export class InvoiceWorkerService {
       // The default deadline leaves 20 s of the 120 s lease to persist the last step.
       await this.emitter.advance(row, deadline);
     } catch (error) {
+      // An SriError is an expected, retried outcome; anything else is a bug worth knowing about.
+      if (!(error instanceof SriError)) {
+        reportError(error, { source: 'invoicing-worker', tenantId: row.tenantId });
+        // A serverless function may freeze once the tick replies: wait for the event to be sent.
+        if (isReportingEnabled()) await flushReports();
+      }
       await this.failed(row, error);
     }
   }
