@@ -2,7 +2,7 @@ import { ClinicalActor } from '../clinical-access/clinical-actor';
 import { ClinicalAuditService } from '../clinical-access/clinical-audit.service';
 import { ClinicalCipher } from '../clinical-access/clinical-cipher';
 import { PrismaService } from '../prisma/prisma.service';
-import { assertOpenEncounter, EncountersService } from './encounters.service';
+import { assertOpenEncounter, EncountersService, lockOpenEncounter } from './encounters.service';
 
 // Signing reads the bytes of files that have no hash yet.
 const fileBytes = { get: jest.fn() };
@@ -764,6 +764,33 @@ describe('EncountersService', () => {
         status: 409,
         response: { code: 'ENCOUNTER_CLOSED' },
       });
+    });
+  });
+
+  describe('lockOpenEncounter', () => {
+    const lock = () => lockOpenEncounter(db as never, 'tenant-1', 'encounter-1');
+
+    it('updates the open encounter of the tenant, so that a Serializable closer fails on it', async () => {
+      db.$queryRaw.mockResolvedValue([{ id: 'encounter-1' }]);
+
+      await expect(lock()).resolves.toBe(true);
+
+      const [strings, ...values] = db.$queryRaw.mock.calls[0];
+      const sql = strings.join('?');
+      // A shared lock would let a Serializable closer sign without what a write committed.
+      expect(sql).toContain('UPDATE "Encounter" SET "updatedAt"');
+      expect(sql).not.toContain('FOR SHARE');
+      expect(sql).not.toContain('"version"');
+      expect(sql).toContain(`"status" = 'OPEN'`);
+      expect(sql).toContain('"deletedAt" IS NULL');
+      expect(sql).toContain('"tenantId" = ?');
+      expect(values).toEqual(['encounter-1', 'tenant-1']);
+    });
+
+    it('answers false when the encounter is not open', async () => {
+      db.$queryRaw.mockResolvedValue([]);
+
+      await expect(lock()).resolves.toBe(false);
     });
   });
 });
