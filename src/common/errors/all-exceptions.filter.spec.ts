@@ -9,7 +9,18 @@ import {
 } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import { Prisma } from '@prisma/client';
+import { flushReports, isReportingEnabled, reportError } from '../monitoring/error-reporter';
 import { AllExceptionsFilter } from './all-exceptions.filter';
+
+jest.mock('../monitoring/error-reporter');
+
+const reportErrorMock = jest.mocked(reportError);
+const isReportingEnabledMock = jest.mocked(isReportingEnabled);
+const flushReportsMock = jest.mocked(flushReports);
+
+beforeEach(() => {
+  jest.resetAllMocks();
+});
 
 const prismaError = (code: string, meta?: Record<string, unknown>) =>
   new Prisma.PrismaClientKnownRequestError('prisma failure with private details', {
@@ -27,10 +38,13 @@ function setup() {
   jest
     .spyOn((filter as unknown as { logger: { warn: () => void } }).logger, 'warn')
     .mockImplementation();
-  const host = (method = 'POST') =>
+  const host = (method = 'POST', request: Record<string, unknown> = {}) =>
     ({
       getType: () => 'http',
-      switchToHttp: () => ({ getRequest: () => ({ method }), getResponse: () => 'response' }),
+      switchToHttp: () => ({
+        getRequest: () => ({ method, ...request }),
+        getResponse: () => 'response',
+      }),
     }) as unknown as ArgumentsHost;
   return { filter, reply, host };
 }
@@ -144,6 +158,105 @@ describe('AllExceptionsFilter', () => {
     const body = filter.toBody(prismaError('P2010'));
     expect(body).toMatchObject({ statusCode: 500, code: 'INTERNAL_ERROR' });
     expect(JSON.stringify(body)).not.toContain('private');
+  });
+
+  describe('error reporting', () => {
+    it('reports a 500 with method, route pattern, userId and tenantId', () => {
+      const { filter, host } = setup();
+      const error = new Error('secret stack detail');
+      filter.catch(
+        error,
+        host('GET', {
+          route: { path: '/api/v1/patients/:id' },
+          user: { userId: 'u1', tenantId: 't1', email: 'a@b.c' },
+        }),
+      );
+      expect(reportErrorMock).toHaveBeenCalledTimes(1);
+      expect(reportErrorMock).toHaveBeenCalledWith(error, {
+        source: 'http',
+        method: 'GET',
+        route: '/api/v1/patients/:id',
+        userId: 'u1',
+        tenantId: 't1',
+      });
+      const context = reportErrorMock.mock.calls[0][1] as Record<string, unknown>;
+      expect(context).not.toHaveProperty('email');
+      expect(JSON.stringify(context)).not.toContain('a@b.c');
+    });
+
+    it('reports a 503 DATABASE_UNAVAILABLE', () => {
+      const { filter, reply, host } = setup();
+      const error = prismaError('P1001');
+      filter.catch(error, host('GET'));
+      expect(reply.mock.calls[0][2]).toBe(503);
+      expect(reportErrorMock).toHaveBeenCalledWith(
+        error,
+        expect.objectContaining({ source: 'http', method: 'GET' }),
+      );
+    });
+
+    it.each([
+      ['400', new BadRequestException('x')],
+      ['401', new UnauthorizedException()],
+      ['403', new ForbiddenException()],
+      ['404', new NotFoundException()],
+      ['409', new ConflictException()],
+    ])('does not report %s', (_status, error) => {
+      const { filter, host } = setup();
+      filter.catch(error, host('GET'));
+      expect(reportErrorMock).not.toHaveBeenCalled();
+      expect(flushReportsMock).not.toHaveBeenCalled();
+    });
+
+    it('reports a 500 without user or route', () => {
+      const { filter, reply, host } = setup();
+      const error = new Error('boom');
+      expect(() => filter.catch(error, host('GET', {}))).not.toThrow();
+      expect(reply.mock.calls[0][2]).toBe(500);
+      const context = reportErrorMock.mock.calls[0][1];
+      expect(context).toEqual({
+        source: 'http',
+        method: 'GET',
+        route: undefined,
+        userId: undefined,
+        tenantId: undefined,
+      });
+    });
+
+    it('waits for flushReports before replying when reporting is enabled', async () => {
+      const { filter, reply, host } = setup();
+      isReportingEnabledMock.mockReturnValue(true);
+      let release!: () => void;
+      flushReportsMock.mockReturnValue(new Promise<void>((resolve) => (release = resolve)));
+
+      const result = filter.catch(new Error('boom'), host('GET'));
+
+      expect(reportErrorMock).toHaveBeenCalledTimes(1);
+      expect(flushReportsMock).toHaveBeenCalledTimes(1);
+      expect(reply).not.toHaveBeenCalled();
+      release();
+      await result;
+      expect(reply).toHaveBeenCalledTimes(1);
+      expect(reply.mock.calls[0][2]).toBe(500);
+    });
+
+    it('replies synchronously when reporting is disabled', () => {
+      const { filter, reply, host } = setup();
+      isReportingEnabledMock.mockReturnValue(false);
+      const result = filter.catch(new Error('boom'), host('GET'));
+      expect(result).toBeUndefined();
+      expect(reply).toHaveBeenCalledTimes(1);
+      expect(flushReportsMock).not.toHaveBeenCalled();
+    });
+
+    it('does not flush when reporting is enabled but the error is a 4xx', () => {
+      const { filter, reply, host } = setup();
+      isReportingEnabledMock.mockReturnValue(true);
+      const result = filter.catch(new NotFoundException(), host('GET'));
+      expect(result).toBeUndefined();
+      expect(reply).toHaveBeenCalledTimes(1);
+      expect(flushReportsMock).not.toHaveBeenCalled();
+    });
   });
 
   it('leaves non-HTTP contexts to Nest', () => {
