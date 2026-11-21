@@ -750,7 +750,8 @@ La API ya integra Sentry (`@sentry/nestjs`, fijado en `^10.78.0` a propósito: l
 - Los errores de Prisma se reducen a clase + código + nombres de campo (por ejemplo
   `PrismaClientKnownRequestError P2002 (email)`), nunca los valores.
 - Antes de responder, la API espera hasta 2 s a que el evento se envíe (en serverless la función puede
-  congelarse al responder).
+  congelarse al responder). Lo mismo hace el worker de facturación tras un fallo inesperado, antes de
+  continuar con su gestión del error.
 
 **Qué NO se envía**
 
