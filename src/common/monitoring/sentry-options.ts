@@ -16,6 +16,8 @@ export function buildSentryOptions(env: NodeJS.ProcessEnv): NodeOptions | null {
     release: env.VERCEL_GIT_COMMIT_SHA || undefined,
     tracesSampleRate: 0,
     sendDefaultPii: false,
+    // Local variables of a stack frame would carry whatever the code was handling.
+    includeLocalVariables: false,
     beforeBreadcrumb: dropBreadcrumb,
     beforeSend: scrubEvent,
   };
@@ -35,30 +37,33 @@ export function scrubEvent(event: ErrorEvent, hint?: EventHint): ErrorEvent {
   try {
     scrubRequest(event);
     scrubUser(event);
-    scrubPrismaMessage(event, hint);
+    scrubExtraAndTransaction(event);
+    scrubFrameVariables(event);
+    scrubPrismaMessages(event, hint);
   } catch {
     delete event.request;
     delete event.user;
+    delete event.extra;
+    delete event.transaction;
     for (const exception of event.exception?.values ?? []) {
       exception.value = exception.type;
+      for (const frame of exception.stacktrace?.frames ?? []) delete frame.vars;
     }
   }
   return event;
 }
 
+/**
+ * Only the method survives: the route pattern already travels as the `route` tag, while a
+ * path can carry ids or the verification code of a public document.
+ */
 function scrubRequest(event: ErrorEvent): void {
   const request = event.request;
   if (!request) return;
 
   const scrubbed: NonNullable<ErrorEvent['request']> = {};
   if (request.method) scrubbed.method = request.method;
-  if (request.url) scrubbed.url = stripQueryAndFragment(request.url);
   event.request = scrubbed;
-}
-
-function stripQueryAndFragment(url: string): string {
-  const end = url.search(/[?#]/);
-  return end === -1 ? url : url.slice(0, end);
 }
 
 function scrubUser(event: ErrorEvent): void {
@@ -72,23 +77,43 @@ function scrubUser(event: ErrorEvent): void {
 }
 
 /**
+ * `extra` holds the whole object when something that is not an Error is thrown
+ * (`__serialized__`), and the transaction name is the raw route of the request.
+ */
+function scrubExtraAndTransaction(event: ErrorEvent): void {
+  delete event.extra;
+  delete event.transaction;
+}
+
+function scrubFrameVariables(event: ErrorEvent): void {
+  for (const exception of event.exception?.values ?? []) {
+    for (const frame of exception.stacktrace?.frames ?? []) delete frame.vars;
+  }
+}
+
+const PRISMA_ERROR_PREFIX = 'PrismaClient';
+
+/**
  * Prisma messages can embed the offending values (emails, names, clinical
  * fields). Replace them with the error class, the code and the field names.
+ * Every exception of the chain is checked: a Prisma error can be the `cause` of another one.
  */
-function scrubPrismaMessage(event: ErrorEvent, hint?: EventHint): void {
-  const original: unknown = hint?.originalException;
-  if (!isPrismaError(original)) return;
-
+function scrubPrismaMessages(event: ErrorEvent, hint?: EventHint): void {
   const values = event.exception?.values;
   if (!values?.length) return;
 
-  const replacement = describePrismaError(original);
-  const matching = values.filter((exception) => exception.type === original.name);
-  // Sentry orders chained exceptions oldest first: the thrown one is last.
-  const targets = matching.length ? matching : [values[values.length - 1]];
-  for (const exception of targets) {
-    exception.value = replacement;
+  const original: unknown = hint?.originalException;
+  const thrown = isPrismaError(original) ? original : undefined;
+  let rewritten = false;
+  for (const exception of values) {
+    if (!exception.type?.startsWith(PRISMA_ERROR_PREFIX)) continue;
+    // Code and field names are known only for the error that was thrown itself.
+    exception.value =
+      thrown && thrown.name === exception.type ? describePrismaError(thrown) : exception.type;
+    rewritten = true;
   }
+  // A Prisma error whose type was not captured as its class name: the thrown one is last.
+  if (!rewritten && thrown) values[values.length - 1].value = describePrismaError(thrown);
 }
 
 interface PrismaErrorLike {
@@ -102,7 +127,7 @@ function isPrismaError(error: unknown): error is PrismaErrorLike {
     typeof error === 'object' &&
     error !== null &&
     typeof (error as { name?: unknown }).name === 'string' &&
-    (error as { name: string }).name.startsWith('PrismaClient')
+    (error as { name: string }).name.startsWith(PRISMA_ERROR_PREFIX)
   );
 }
 

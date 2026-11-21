@@ -119,7 +119,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       tenantId: request?.user?.tenantId,
     });
     // A serverless function may freeze once it replies: send the event first (5xx only).
-    if (isReportingEnabled()) return flushReports().then(reply);
+    // A failing reply must not become an unhandled rejection.
+    if (isReportingEnabled())
+      return flushReports()
+        .then(reply)
+        .catch(() => undefined);
     return reply();
   }
 

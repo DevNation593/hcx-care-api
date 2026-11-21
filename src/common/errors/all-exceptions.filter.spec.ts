@@ -240,6 +240,18 @@ describe('AllExceptionsFilter', () => {
       expect(reply.mock.calls[0][2]).toBe(500);
     });
 
+    it('resolves without rejecting when the reply throws after the flush', async () => {
+      const { filter, reply, host } = setup();
+      isReportingEnabledMock.mockReturnValue(true);
+      flushReportsMock.mockResolvedValue(undefined);
+      reply.mockImplementation(() => {
+        throw new Error('socket closed');
+      });
+
+      await expect(filter.catch(new Error('boom'), host('GET'))).resolves.toBeUndefined();
+      expect(reply).toHaveBeenCalledTimes(1);
+    });
+
     it('replies synchronously when reporting is disabled', () => {
       const { filter, reply, host } = setup();
       isReportingEnabledMock.mockReturnValue(false);
