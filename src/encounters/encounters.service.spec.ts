@@ -188,7 +188,11 @@ describe('EncountersService', () => {
 
       await expect(start()).rejects.toMatchObject({
         status: 409,
-        response: { code: 'ENCOUNTER_ALREADY_OPEN', encounterId: 'encounter-0' },
+        response: {
+          code: 'ENCOUNTER_ALREADY_OPEN',
+          encounterId: 'encounter-0',
+          message: expect.stringContaining('agrégalo a esa atención'),
+        },
       });
       expect(db.encounter.findFirst.mock.calls[0][0].where).toEqual({
         tenantId: 'tenant-1',

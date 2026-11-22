@@ -176,7 +176,7 @@ El régimen RIMPE `NEGOCIO_POPULAR` se rechaza con `RIMPE_REGIME_UNSUPPORTED` ha
 ### Monitoring
 - [ ] Set up logging aggregation
 - [ ] Configure APM (Application Performance Monitoring)
-- [ ] Set up error tracking (Sentry, etc.)
+- [x] Set up error tracking (Sentry, etc.) — ver «Error Tracking with Sentry»
 - [ ] Configure health check endpoints
 
 ## Environment Variables (Production)
@@ -252,6 +252,10 @@ MFA_ISSUER=HCX Care
 
 # CORS
 CORS_ORIGINS=https://app.yourdomain.com,https://www.yourdomain.com
+
+# Error monitoring (Sentry). Optional: without a DSN Sentry is not initialized.
+# Define it ONLY in the Production environment of Vercel (see "Error Tracking with Sentry").
+SENTRY_DSN=<sentry-project-dsn>
 ```
 
 Generate strong secrets:
@@ -728,21 +732,66 @@ app.useLogger(logger);
 
 ### Error Tracking with Sentry
 
-Install:
-```bash
-npm install @sentry/node
-```
+La API ya integra Sentry (`@sentry/nestjs`, fijado en `^10.78.0` a propósito: la v11 eliminó
+`sendDefaultPii`; no actualizar sin revisar la configuración de privacidad). Se inicializa en
+`src/instrument.ts`, que es el primer import de `src/main.ts`. Solo hay que configurar la variable.
 
-Configure in `main.ts`:
-```typescript
-import * as Sentry from '@sentry/node';
+**Configuración**
 
-Sentry.init({
-  dsn: process.env.SENTRY_DSN,
-  environment: process.env.NODE_ENV,
-  tracesSampleRate: 0.1,
-});
-```
+- `SENTRY_DSN` se define **únicamente en el entorno Production de Vercel**. No definirla en Preview,
+  Development, CI ni en local: sin DSN Sentry no se inicializa y la API se comporta exactamente igual
+  que antes (`reportError` no hace nada).
+- No commitear nunca un DSN real (en `.env.example` está comentada y vacía).
+- `SENTRY_DSN` se lee del entorno del proceso en `src/instrument.ts`, antes de que `ConfigModule` cargue el
+  archivo `.env`. Por eso ponerla en un `.env` local **no hace nada**: tiene que ser una variable de entorno
+  real (la de Production en Vercel).
+- El entorno (`VERCEL_ENV`) y la versión (`VERCEL_GIT_COMMIT_SHA`) se toman de Vercel de forma automática.
+
+**Qué se envía**
+
+- Solo errores 5xx (el filtro global de excepciones) y los fallos inesperados del worker de
+  facturación (los `SriError` son resultados esperados y reintentables, no se reportan).
+- El stack trace y el método HTTP. La URL de la petición **no** se envía: el patrón de ruta viaja solo en
+  la etiqueta `route` (por ejemplo `/api/v1/patients/:id`), nunca la ruta con sus valores.
+- Con un DSN, las integraciones por defecto del SDK también capturan las excepciones no capturadas
+  (`uncaughtException`) y las promesas rechazadas sin manejar (`unhandledRejection`), además de los 5xx
+  anteriores. Todos los eventos, sin excepción, pasan por `beforeSend`, que aplica la limpieza descrita aquí.
+- Contexto del servidor: `server_name` (el hostname) y los contextos de runtime y sistema operativo.
+- Usuario: únicamente su `id`. El `tenantId` viaja como etiqueta (`tag`), igual que `source`,
+  `method` y `route`.
+- Los errores de Prisma se reducen a clase + código + nombres de campo (por ejemplo
+  `PrismaClientKnownRequestError P2002 (email)`), nunca los valores.
+- Antes de responder, la API espera hasta 2 s a que el evento se envíe (en serverless la función puede
+  congelarse al responder). Lo mismo hace el worker de facturación tras un fallo inesperado, antes de
+  continuar con su gestión del error.
+
+**Qué NO se envía**
+
+- Cuerpos de petición, cabeceras, cookies, query strings ni la URL de la petición.
+- Variables locales de los frames del stack (`includeLocalVariables: false`) ni el campo `extra` (donde el SDK
+  adjunta el objeto completo cuando se lanza algo que no es un `Error`).
+- Email, nombre ni ningún otro dato personal del usuario.
+- Breadcrumbs (se descartan todos: los logs de consola y las URLs podrían llevar datos de pacientes).
+- Trazas de rendimiento (`tracesSampleRate: 0`) ni errores 4xx.
+
+**Importante:** el mensaje de un `Error` arbitrario SÍ se envía tal cual. Por eso los mensajes de error
+nunca deben interpolar datos de pacientes (nombres, cédulas, correos, contenido clínico), ni se debe lanzar
+(`throw`) un objeto que los contenga: el campo `extra` se descarta, pero los mensajes no se pueden limpiar.
+Usar códigos o identificadores en su lugar.
+
+**Cómo comprobar que llega un evento**
+
+1. Crear un proyecto de prueba en Sentry (distinto del de producción) y copiar su DSN.
+2. Desde `api/`, sin guardar el DSN en ningún archivo, definirlo como variable de entorno del proceso
+   (en PowerShell `$env:SENTRY_DSN='<dsn de prueba>'`; en bash `export SENTRY_DSN='<dsn de prueba>'`) y ejecutar
+   con `npx ts-node` un script de una línea que haga `require('./src/instrument')`, llame a
+   `reportError(new Error('sentry-api-smoke'), { source: 'smoke', tenantId: 't-smoke' })` (de
+   `./src/common/monitoring/error-reporter`) y espere `flushReports()` antes de salir. Borrar la variable
+   al terminar.
+3. En Sentry debe aparecer el evento `sentry-api-smoke` con stack trace, la etiqueta `tenantId=t-smoke` y
+   sin datos personales.
+4. En producción, tras desplegar con `SENTRY_DSN` definido, confirmar el primer 5xx real en
+   *Issues* del proyecto y revisar que no contenga cuerpos, cabeceras, query strings ni la URL de la petición.
 
 ### APM with DataDog (Optional)
 

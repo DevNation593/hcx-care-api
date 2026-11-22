@@ -209,6 +209,31 @@ export class InvoiceRequestsService {
       throw e;
     }
   }
+  /**
+   * Whole number or any part of it ("001-001", "000000123"), or the sequence alone without leading
+   * zeros ("123"), which is stored zero-padded to nine digits. Only digits and hyphens reach here.
+   */
+  private numberSearch(term: string): Prisma.InvoiceRequestWhereInput {
+    const partial = { number: { contains: term } };
+    if (!/^\d{1,9}$/.test(term)) return partial;
+    return { OR: [{ sequential: term.padStart(9, '0') }, partial] };
+  }
+
+  /** What the invoice shows to the customer, from the frozen snapshot; never breaks the list. */
+  private issuedFacts(row: { tenantId: string; snapshotEncrypted: string }) {
+    try {
+      const snapshot = JSON.parse(
+        this.crypto.decrypt(row.tenantId, row.snapshotEncrypted),
+      ) as FiscalSnapshot;
+      return {
+        issueDate: snapshot.issueDate ?? null,
+        customerName: snapshot.customer?.name ?? null,
+      };
+    } catch {
+      return { issueDate: null, customerName: null };
+    }
+  }
+
   async list(tenantId: string, q: ListInvoiceRequestsQuery) {
     const where: Prisma.InvoiceRequestWhereInput = {
       tenantId,
@@ -218,6 +243,7 @@ export class InvoiceRequestsService {
         branchId: q.branchId,
         ...(q.patientId ? { items: { some: { patientId: q.patientId } } } : {}),
       },
+      ...(q.q ? this.numberSearch(q.q) : {}),
     };
     const [rows, total] = await Promise.all([
       this.prisma.invoiceRequest.findMany({
@@ -230,7 +256,7 @@ export class InvoiceRequestsService {
       this.prisma.invoiceRequest.count({ where }),
     ]);
     return {
-      items: rows.map((r) => invoiceView(r, this.crypto)),
+      items: rows.map((r) => ({ ...invoiceView(r, this.crypto), ...this.issuedFacts(r) })),
       total,
       page: q.page,
       pageSize: q.pageSize,

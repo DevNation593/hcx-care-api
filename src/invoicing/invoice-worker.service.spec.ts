@@ -1,4 +1,8 @@
+import { flushReports, isReportingEnabled, reportError } from '../common/monitoring/error-reporter';
 import { InvoiceWorkerService } from './invoice-worker.service';
+import { SriError } from './sri/sri-types';
+
+jest.mock('../common/monitoring/error-reporter');
 
 describe('InvoiceWorkerService dispatch entry points', () => {
   const env = { ...process.env };
@@ -99,6 +103,62 @@ describe('InvoiceWorkerService dispatch entry points', () => {
       process.env.INVOICING_INTERNAL_SCHEDULER = 'true';
       await worker.scheduledDispatch();
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('process error reporting', () => {
+    let failed: jest.SpyInstance;
+    beforeEach(() => {
+      jest.mocked(reportError).mockClear();
+      jest.mocked(isReportingEnabled).mockReset();
+      jest.mocked(flushReports).mockReset();
+      failed = jest.spyOn(worker as any, 'failed').mockResolvedValue(undefined);
+    });
+
+    it('reports an unexpected error with source and tenantId', async () => {
+      const error = new Error('boom');
+      emitter.advance.mockRejectedValue(error);
+      await worker.process(row('r1') as any);
+      expect(reportError).toHaveBeenCalledWith(error, {
+        source: 'invoicing-worker',
+        tenantId: 't',
+      });
+      expect(failed).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1' }), error);
+    });
+
+    it('does not report an SriError', async () => {
+      const error = new SriError('transient', 'SRI_DOWN');
+      emitter.advance.mockRejectedValue(error);
+      await worker.process(row('r1') as any);
+      expect(reportError).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1' }), error);
+    });
+
+    it('flushes pending reports after an unexpected error when reporting is enabled', async () => {
+      jest.mocked(isReportingEnabled).mockReturnValue(true);
+      emitter.advance.mockRejectedValue(new Error('boom'));
+      await worker.process(row('r1') as any);
+      expect(flushReports).toHaveBeenCalledTimes(1);
+      const reportOrder = jest.mocked(reportError).mock.invocationCallOrder[0];
+      const flushOrder = jest.mocked(flushReports).mock.invocationCallOrder[0];
+      const failedOrder = failed.mock.invocationCallOrder[0];
+      expect(reportOrder).toBeLessThan(flushOrder);
+      expect(flushOrder).toBeLessThan(failedOrder);
+    });
+
+    it('does not flush when reporting is disabled', async () => {
+      jest.mocked(isReportingEnabled).mockReturnValue(false);
+      emitter.advance.mockRejectedValue(new Error('boom'));
+      await worker.process(row('r1') as any);
+      expect(flushReports).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalled();
+    });
+
+    it('does not flush for an SriError', async () => {
+      jest.mocked(isReportingEnabled).mockReturnValue(true);
+      emitter.advance.mockRejectedValue(new SriError('transient', 'SRI_DOWN'));
+      await worker.process(row('r1') as any);
+      expect(flushReports).not.toHaveBeenCalled();
     });
   });
 });
