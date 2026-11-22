@@ -194,6 +194,26 @@ export class AllExceptionsFilter implements ExceptionFilter {
     switch (error.code) {
       case 'P2002': {
         const fields = uniqueFields(error.meta);
+        // No table of the schema is unique by encounter alone since migration
+        // 20261121000000_encounter_many_treatment_sessions dropped the index of
+        // TreatmentSession: this error means the database was not migrated, not that the
+        // user repeated something. It is the server's fault, so it answers 503: a 4xx would
+        // not reach the error reporter and nobody would learn the migration is missing.
+        if (
+          error.meta?.modelName === 'TreatmentSession' &&
+          fields.length === 1 &&
+          fields[0] === 'encounterId'
+        ) {
+          this.logger.error(
+            'Unique constraint on encounterId: apply migration 20261121000000_encounter_many_treatment_sessions',
+          );
+          return {
+            statusCode: 503,
+            code: 'DATABASE_MIGRATION_PENDING',
+            message:
+              'No se puede agregar otro tratamiento a esta atención: al servidor le falta una actualización de la base de datos. Avisa al administrador del sistema.',
+          };
+        }
         this.logger.warn(
           `Unique constraint failed (${error.code}) on ${fields.join(', ') || 'unknown fields'}`,
         );
