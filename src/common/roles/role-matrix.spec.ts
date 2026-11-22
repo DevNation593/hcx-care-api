@@ -128,8 +128,9 @@ describe('role matrix', () => {
     [NextSessionPlansController, 'findAll', CLINICAL],
     [NextSessionPlansController, 'findByPatient', CLINICAL],
     [NextSessionPlansController, 'remove', CLINICAL],
-    [ClinicalNotesController, 'create', ['PROFESIONAL']],
-    [ClinicalNotesController, 'update', ['PROFESIONAL']],
+    // Notes are written by any account with an active professional profile, the owner included.
+    [ClinicalNotesController, 'create', CLINICAL],
+    [ClinicalNotesController, 'update', CLINICAL],
     [NextSessionPlansController, 'create', ['PROFESIONAL']],
     [NextSessionPlansController, 'update', ['PROFESIONAL']],
     [PatientsController, 'findAll', TEAM],
