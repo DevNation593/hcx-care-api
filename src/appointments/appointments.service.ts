@@ -10,6 +10,8 @@ import { AppointmentStatus, Prisma } from '@prisma/client';
 import { assertBranchAvailable, assertProfessionalInBranch } from '../branches/branches.service';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
 import { PUBLIC_USER_SELECT } from '../common/utils/public-user-select';
+import { isPaginated, pageMeta, pageWindow } from '../common/pagination/pagination';
+import { readInTransaction } from '../common/pagination/read-in-transaction';
 import { DATE_ONLY_PATTERN, getZonedDateParts, zonedDayRange } from '../common/utils/timezone';
 import { PatientTeamService } from '../patient-team/patient-team.service';
 import { TeamActor, TeamDb } from '../patient-team/patient-team.types';
@@ -153,12 +155,34 @@ export class AppointmentsService {
     if (filters.from || filters.to) {
       where.startTime = await this.startTimeRange(tenantId, filters.from, filters.to);
     }
-    const appointments = await this.prisma.appointment.findMany({
-      where,
-      include: appointmentInclude,
-      orderBy: { startTime: 'asc' },
-    });
-    return appointments.map((item) => this.normalizeAppointment(item));
+    // Without `page`/`limit` the list is returned whole, as an array (calendar, mobile).
+    if (!isPaginated(filters)) {
+      const appointments = await this.prisma.appointment.findMany({
+        where,
+        include: appointmentInclude,
+        orderBy: { startTime: 'asc' },
+      });
+      return appointments.map((item) => this.normalizeAppointment(item));
+    }
+
+    const { page, limit, skip, take } = pageWindow(filters);
+    // One transaction, queries in sequence on `tx` (see readInTransaction). `where` carries every
+    // role filter.
+    const { total, appointments } = await readInTransaction(this.prisma, async (tx) => ({
+      total: await tx.appointment.count({ where }),
+      appointments: await tx.appointment.findMany({
+        where,
+        include: appointmentInclude,
+        // `id` breaks ties between appointments that start at the same time.
+        orderBy: [{ startTime: 'asc' }, { id: 'asc' }],
+        skip,
+        take,
+      }),
+    }));
+    return {
+      data: appointments.map((item) => this.normalizeAppointment(item)),
+      meta: pageMeta(total, page, limit),
+    };
   }
 
   async findOne(tenantId: string, appointmentId: string, actor: TeamActor) {

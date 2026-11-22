@@ -1,0 +1,11 @@
+-- Index for the paged task list.
+--
+-- TasksService.findAll, when paged, sorts by "status", "dueDate" ASC, "priority" DESC, "id" ASC
+-- inside one tenant (open tasks first: TaskStatus is declared PENDING, IN_PROGRESS, COMPLETED,
+-- CANCELLED, and PostgreSQL sorts an enum in that order). With only the single-column
+-- "Task_dueDate_idx" the planner walks that index across ALL tenants and discards the rows of the
+-- others, and a status filter cannot narrow it. This index keeps the walk inside the tenant (and
+-- inside one status when the list is filtered by it) and gives the page its order without a sort.
+--
+-- Additive only. CREATE INDEX holds a SHARE lock on "Task" while it builds (writes wait).
+CREATE INDEX "Task_tenantId_status_dueDate_priority_id_idx" ON "Task"("tenantId", "status", "dueDate", "priority" DESC, "id");

@@ -62,6 +62,10 @@ Toda revisión de código, humana o automática, verifica estas reglas. Un cambi
 - **SEC-API-21 (P0).** Una migración no borra columnas, tablas ni valores con datos en producción sin un paso previo de respaldo o migración de datos explicado en el PR.
 - **SEC-API-22 (P1).** Las políticas RLS y los índices únicos parciales de seguridad (`User_tenantId_master_key`, `Tenant_isPlatform_key`) no se eliminan ni se relajan.
 
+### Visibilidad de pacientes archivados (decisión del responsable del proyecto)
+
+`GET /tenants/{tenantId}/patients?status=inactive|all` lista a los pacientes con `isActive=false` (no eliminados) para **todos** los roles que listan pacientes: `MASTER`, `ASISTENTE` y `PROFESIONAL`. Es una decisión explícita del responsable del proyecto, no una omisión: el listado por defecto sigue mostrando solo activos, `deletedAt` nunca se lista, el filtro de `tenantId` no cambia y `GET patients/{id}` ya no filtraba por `isActive`. Una revisión no la reporta como fuga entre roles salvo que cambie ese alcance.
+
 ## Lista rápida por tipo de cambio
 
 - **Endpoint nuevo:** SEC-API-01, 02, 05, 06, 07, 15, 16.

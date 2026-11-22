@@ -617,6 +617,43 @@ Content-Type: application/json
 
 ## Filtering & Querying
 
+### Paginación en el servidor (pacientes, actividades y citas)
+
+`GET /tenants/{tenantId}/patients`, `GET /tenants/{tenantId}/tasks` y `GET /tenants/{tenantId}/appointments` paginan **solo si se pide**:
+
+| Parámetro | Valores | Efecto |
+| --- | --- | --- |
+| `page` | entero `1`–`1000000` (por defecto `1` al paginar) | Página que se devuelve |
+| `limit` | entero `1`–`100` (por defecto `20` al paginar) | Filas por página |
+
+- **Sin `page` ni `limit`** la respuesta es la de siempre: un arreglo con todas las filas, en el mismo orden y con los mismos campos (la app móvil y los selectores lo leen así).
+- **Con `page` y/o `limit`** la respuesta es `{ "data": [...], "meta": { "page", "limit", "total", "totalPages" } }`. `total` cuenta con los mismos filtros que la página (tenant, rol, estado y búsqueda), y `totalPages = ceil(total / limit)` (`0` si no hay filas). Una página mayor que la última devuelve `data: []`.
+- Un `page` o `limit` **con valor** inválido (`page=0`, `limit=1000`, `limit=abc`, `limit=1.5`) responde `400`. Los listados de pacientes y actividades leen su query de forma tolerante, como siempre: un parámetro desconocido (`?_=1700000000`) se ignora, y un `?page=` o `?limit=` vacío equivale a no enviarlo (respuesta en arreglo). Citas conserva su validación estricta (un parámetro desconocido sigue dando `400`), pero un `page`/`limit` vacío tampoco activa la paginación.
+- El orden es determinista y desempata por `id`, de modo que ninguna fila se repite ni se pierde entre páginas: pacientes por `lastName`; citas por `startTime`; actividades **agrupadas por estado** (`PENDING`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, en ese orden), y dentro de cada grupo por `dueDate` (las que no tienen fecha, al final) y `priority` descendente. Así la página 1 trae primero las actividades abiertas aunque haya cientos de completadas antiguas. El listado de actividades **sin paginar** conserva su orden de siempre (`dueDate`, `priority` descendente), sin agrupar por estado.
+- `count` y página se leen en una misma transacción (aislamiento `RepeatableRead`), de modo que `total` describe las filas devueltas.
+- Los filtros de visibilidad no cambian al paginar: un `PROFESIONAL` sigue viendo solo sus actividades y su calendario, y el `ASISTENTE` sigue necesitando `professionalId` para ver un calendario.
+
+```bash
+GET /tenants/{tenantId}/patients?search=maria&status=active&page=2&limit=20
+```
+
+```json
+{
+  "data": [{ "id": "...", "firstName": "María", "lastName": "Paz" }],
+  "meta": { "page": 2, "limit": 20, "total": 45, "totalPages": 3 }
+}
+```
+
+Pacientes admite además `search` (nombre, apellido, correo, teléfono o identificación; los `%`, `_` y `\` se buscan literalmente; un texto de más de 100 caracteres se recorta a 100, no da `400`) y `status` (`active` por defecto, `inactive` o `all`). Los pacientes eliminados (`deletedAt`) no se listan nunca. Cualquier otro parámetro (como el `isActive` que envía la web) se ignora: usa `status`.
+
+**Pacientes archivados.** `status=inactive` y `status=all` listan también a los pacientes con `isActive=false` y sin `deletedAt`. Pueden hacerlo **todos los roles que ya listan pacientes** (`MASTER`, `ASISTENTE` y `PROFESIONAL`): es una decisión del responsable del proyecto, no una omisión; por defecto el listado sigue mostrando solo activos y la web arranca en «Activos». `GET patients/{id}` nunca filtró por `isActive`, así que esto no abre datos que ya no fueran alcanzables.
+
+Actividades admite `patientId`, `assignedToId`, `status` (`PENDING`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`), `priority` (`LOW`, `MEDIUM`, `HIGH`, `URGENT`) y `search` (título, descripción o nombre del paciente; los `%`, `_` y `\` se buscan literalmente; se recorta a 100 caracteres). Un `status` o `priority` con valor fuera de esos conjuntos responde `400` (antes fallaba en base de datos con `500`); vacío se ignora.
+
+`GET /tenants/{tenantId}/tasks/summary?priority=&search=&patientId=&assignedToId=` devuelve `{ "pending", "overdue", "completed", "cancelled" }`: los totales por estado que la pantalla de actividades no puede sumar desde una sola página (`pending` = `PENDING` + `IN_PROGRESS`; `overdue` = las abiertas con fecha límite pasada). Aplica la misma visibilidad que la lista (un `PROFESIONAL` solo cuenta las suyas; `MASTER` y `ASISTENTE`, las del consultorio) y lee sus parámetros con la misma tolerancia; ignora `page`, `limit` y `status`.
+
+La búsqueda de pacientes usa índices GIN `pg_trgm` (migración `20261122000000_patient_search_trgm_indexes`).
+
 ### List Appointments with Filters
 
 ```bash
