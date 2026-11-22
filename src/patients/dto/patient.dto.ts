@@ -5,8 +5,10 @@ import {
   IsOptional,
   IsEmail,
   IsDateString,
+  IsIn,
   MaxLength,
 } from 'class-validator';
+import { MAX_SEARCH_LENGTH, PaginationQueryDto } from '../../common/pagination/pagination';
 
 export class CreatePatientDto {
   @ApiProperty({ example: 'Juan' })
@@ -180,3 +182,31 @@ export class CreatePatientDto {
 }
 
 export class UpdatePatientDto extends PartialType(CreatePatientDto) {}
+
+export const PATIENT_LIST_STATUSES = ['active', 'inactive', 'all'] as const;
+export type PatientListStatus = (typeof PATIENT_LIST_STATUSES)[number];
+
+/**
+ * Query of GET patients. Read by parseListQuery (not by the global ValidationPipe), so an unknown
+ * parameter such as the `isActive` the web has always sent is ignored, and an empty one is "not sent".
+ */
+export class ListPatientsQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({
+    maxLength: MAX_SEARCH_LENGTH,
+    description:
+      'Matches first name, last name, e-mail, phone or identification number (case-insensitive, partial). Cut to 100 characters.',
+  })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({
+    enum: PATIENT_LIST_STATUSES,
+    default: 'active',
+    description:
+      'Filters by `isActive`. Without it only active patients are listed, as before. Deleted patients are never listed.',
+  })
+  @IsOptional()
+  @IsIn(PATIENT_LIST_STATUSES)
+  status?: PatientListStatus;
+}

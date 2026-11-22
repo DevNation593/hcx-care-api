@@ -1,11 +1,19 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { PatientsService } from './patients.service';
-import { CreatePatientDto, UpdatePatientDto } from './dto/patient.dto';
+import {
+  CreatePatientDto,
+  ListPatientsQueryDto,
+  PATIENT_LIST_STATUSES,
+  UpdatePatientDto,
+} from './dto/patient.dto';
+import { parseListQuery } from '../common/pagination/pagination';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequireSection } from '../common/decorators/require-section.decorator';
 import { RequirePermission } from '../common/permissions/permission-catalog';
+
+const LIST_PATIENTS_KEYS = ['search', 'status', 'page', 'limit'] as const;
 
 @ApiTags('patients')
 @ApiBearerAuth('access-token')
@@ -29,11 +37,48 @@ export class PatientsController {
 
   @Get()
   @Roles('MASTER', 'ASISTENTE', 'PROFESIONAL')
-  @ApiOperation({ summary: 'List all patients' })
-  @ApiQuery({ name: 'search', required: false, description: 'Search by name or email' })
-  @ApiResponse({ status: 200, description: 'Patients list' })
-  async findAll(@Param('tenantId') tenantId: string, @Query('search') search?: string) {
-    return this.patientsService.findAll(tenantId, search);
+  @ApiOperation({
+    summary: 'List patients',
+    description:
+      'Without `page` and `limit` the response is the whole list as an array. With either one it is `{ data, meta }`.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Patients list (array), or `{ data, meta: { page, limit, total, totalPages } }` when paged',
+  })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description: 'Name, e-mail, phone or identification; cut to 100 characters',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: PATIENT_LIST_STATUSES,
+    description: 'Default: active',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    description: '1-based; switches the response to { data, meta }',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: '1-100 (default 20 when paging)',
+  })
+  @ApiResponse({ status: 400, description: 'Invalid page, limit or status' })
+  async findAll(@Param('tenantId') tenantId: string, @Query() rawQuery: Record<string, unknown>) {
+    // Read loosely, as this endpoint always did: unknown or empty parameters are ignored.
+    const query = parseListQuery(ListPatientsQueryDto, rawQuery, LIST_PATIENTS_KEYS);
+    return this.patientsService.findAll(tenantId, query.search, {
+      status: query.status,
+      page: query.page,
+      limit: query.limit,
+    });
   }
 
   @Get(':patientId')
