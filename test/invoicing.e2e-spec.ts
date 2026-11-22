@@ -373,6 +373,57 @@ describe('invoicing against a simulated SRI', () => {
     ).toBe(ISSUER.legalName);
   });
 
+  it('lists issued invoices with date and customer, searchable by number, inside the tenant', async () => {
+    const row = await prisma.invoiceRequest.findFirstOrThrow({
+      where: { tenantId, number: '001-002-000000500' },
+    });
+    const list = (q: string, tenant = base(), t = token) =>
+      request(server()).get(`${tenant}/invoice-requests`).query({ q }).set(auth(t));
+    const ids = (res: { body: { items: { id: string }[] } }) => res.body.items.map((i) => i.id);
+
+    const whole = await list('001-002-000000500').expect(200);
+    expect(ids(whole)).toEqual([row.id]);
+    expect(whole.body.items[0]).toMatchObject({
+      number: '001-002-000000500',
+      customerName: 'Cliente Con Correo',
+      issueDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    });
+    expect(whole.body.items[0]).not.toHaveProperty('snapshotEncrypted');
+    for (const q of ['500', '0000005', '001-002', '002-000000500'])
+      expect(ids(await list(q).expect(200))).toContain(row.id);
+    const none = await list('987').expect(200);
+    expect(none.body).toMatchObject({ items: [], total: 0 });
+
+    // Only digits and hyphens are searched: anything else is refused before reaching the query.
+    for (const q of ["1' OR '1'='1", '50%', 'abc', '1'.repeat(18)]) await list(q).expect(400);
+
+    // The other clinic finds nothing of this one by its number, through either tenant path.
+    const foreign = `/api/v1/tenants/${foreignTenantId}`;
+    const other = await list('500', foreign, foreignToken).expect(200);
+    expect(other.body).toMatchObject({ items: [], total: 0 });
+    await list('500', base(), foreignToken).expect(403);
+  });
+
+  it('downloads the XML and the RIDE with a safe, meaningful file name', async () => {
+    const row = await prisma.invoiceRequest.findFirstOrThrow({
+      where: { tenantId, number: '001-002-000000500' },
+    });
+    const xml = await download(row.id, 'xml');
+    expect(xml.headers['content-disposition']).toBe(
+      'attachment; filename="factura-001-002-000000500.xml"',
+    );
+    const ride = await download(row.id, 'ride');
+    expect(ride.headers['content-disposition']).toBe(
+      'attachment; filename="factura-001-002-000000500.pdf"',
+    );
+    const foreign = `/api/v1/tenants/${foreignTenantId}`;
+    for (const kind of ['xml', 'ride'])
+      await request(server())
+        .get(`${foreign}/invoice-requests/${row.id}/${kind}`)
+        .set(auth(foreignToken))
+        .expect(404);
+  });
+
   it('guards the scheduler tick with its secret', async () => {
     const tickRoute = '/api/v1/internal/invoicing/tick';
     delete process.env.INVOICING_TICK_SECRET;
@@ -515,6 +566,19 @@ describe('invoicing against a simulated SRI', () => {
     sri.mode('authorize');
     await tick(pending.id);
     expect((await detail(pending.id)).status).toBe('AUTHORIZED');
+  });
+
+  it('answers 404 to a download while the invoice has no authorized files', async () => {
+    const row = await prisma.invoiceRequest.findFirstOrThrow({
+      where: { tenantId, status: { not: 'AUTHORIZED' } },
+    });
+    for (const kind of ['xml', 'ride']) {
+      const res = await request(server())
+        .get(`${base()}/invoice-requests/${row.id}/${kind}`)
+        .set(auth())
+        .expect(404);
+      expect(res.body.code).toBe('INVOICE_ARTIFACT_NOT_READY');
+    }
   });
 
   it('enforces the monthly limit', async () => {

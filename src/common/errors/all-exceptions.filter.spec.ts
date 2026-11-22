@@ -102,6 +102,67 @@ describe('AllExceptionsFilter', () => {
     });
   });
 
+  describe('a database that still keeps one session per encounter', () => {
+    const pending = () =>
+      prismaError('P2002', { modelName: 'TreatmentSession', target: ['encounterId'] });
+    const loggerOf = (filter: AllExceptionsFilter) =>
+      (filter as unknown as { logger: { error: jest.Mock } }).logger;
+
+    it('answers 503 so that it is reported, with a message that tells what to do', () => {
+      const { filter } = setup();
+      const body = filter.toBody(pending());
+      expect(body).toMatchObject({ statusCode: 503, code: 'DATABASE_MIGRATION_PENDING' });
+      expect(body.message).toMatch(/actualización de la base de datos/);
+      expect(body.message).not.toMatch(/mismo valor/);
+      expect(body).not.toHaveProperty('fields');
+    });
+
+    it('logs the migration to apply, but never sends its name to the client', () => {
+      const { filter } = setup();
+      const body = filter.toBody(pending());
+      expect(loggerOf(filter).error).toHaveBeenCalledWith(
+        expect.stringContaining('20261121000000_encounter_many_treatment_sessions'),
+      );
+      expect(JSON.stringify(body)).not.toContain('20261121');
+    });
+
+    it('reaches the error reporter, which a 4xx would not', () => {
+      const { filter, reply, host } = setup();
+      const error = pending();
+      filter.catch(
+        error,
+        host('POST', {
+          route: { path: '/api/v1/tenants/:tenantId/patients/:patientId/treatment-sessions' },
+        }),
+      );
+      expect(reply.mock.calls[0][2]).toBe(503);
+      expect(reply.mock.calls[0][1]).toMatchObject({ code: 'DATABASE_MIGRATION_PENDING' });
+      expect(reportErrorMock).toHaveBeenCalledWith(
+        error,
+        expect.objectContaining({ source: 'http', method: 'POST' }),
+      );
+    });
+
+    it('does not claim a pending migration for another table unique by encounter', () => {
+      const { filter } = setup();
+      const body = filter.toBody(
+        prismaError('P2002', { modelName: 'SomeOtherModel', target: ['encounterId'] }),
+      );
+      expect(body).toMatchObject({ statusCode: 409, code: 'DUPLICATE_RECORD' });
+    });
+
+    it('does not claim it for a composite key of the same table', () => {
+      const { filter } = setup();
+      const body = filter.toBody(
+        prismaError('P2002', {
+          modelName: 'TreatmentSession',
+          target: ['encounterId', 'treatmentId'],
+        }),
+      );
+      expect(body).toMatchObject({ statusCode: 409, code: 'DUPLICATE_RECORD' });
+    });
+  });
+
   it('turns a missing record into a 404', () => {
     const { filter } = setup();
     expect(filter.toBody(prismaError('P2025'))).toMatchObject({

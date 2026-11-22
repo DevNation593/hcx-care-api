@@ -158,8 +158,6 @@ describe('RolesGuard against the real route metadata', () => {
 
   it('refuses MASTER and ASISTENTE on the professional-only clinical writes', () => {
     for (const [c, h] of [
-      [ClinicalNotesController, 'create'],
-      [ClinicalNotesController, 'update'],
       [NextSessionPlansController, 'create'],
       [NextSessionPlansController, 'update'],
     ] as const) {
@@ -169,6 +167,19 @@ describe('RolesGuard against the real route metadata', () => {
       expect(roles).not.toContain('MASTER');
       expect(() => guard.canActivate(contextFor(c, h, 'MASTER'))).toThrow(ForbiddenException);
       expect(() => guard.canActivate(contextFor(c, h, 'ASISTENTE'))).toThrow(ForbiddenException);
+    }
+  });
+
+  it('lets the owner write clinical notes (the profile guard asks for an active professional profile)', () => {
+    for (const handler of ['create', 'update'] as const) {
+      for (const role of ['MASTER', 'PROFESIONAL']) {
+        expect(guard.canActivate(contextFor(ClinicalNotesController, handler, role))).toBe(true);
+      }
+      for (const role of ['ASISTENTE', 'CAJERO']) {
+        expect(() => guard.canActivate(contextFor(ClinicalNotesController, handler, role))).toThrow(
+          ForbiddenException,
+        );
+      }
     }
   });
 
