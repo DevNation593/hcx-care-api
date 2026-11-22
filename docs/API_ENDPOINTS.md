@@ -89,6 +89,20 @@ Response:
 }
 ```
 
+#### Refresh token: cookie (web) or body (mobile)
+
+Every route that opens a session (`POST /auth/login`, `POST /auth/mfa/verify`, `POST /auth/mfa/enable`, `POST /auth/refresh`) sets the cookie `refresh_token` **only when the request carries `X-Client: web`** (a non-simple header that a cross-site form cannot send, which prevents login CSRF and cookie swapping); without it no cookie is set and the token stays in the body. The cookie is: `HttpOnly`, `Secure` (except with `NODE_ENV` `development`/`test`, which run over http), `SameSite=Lax`, `Path=/<API_PREFIX>/auth` (`/api/v1/auth` by default) and `Max-Age` equal to the expiry of the token (`JWT_REFRESH_EXPIRATION`, 7 days by default). Web and API must share the same site (root domain).
+
+| Client | How to identify | Refresh token in the response body | Sends the token to `/auth/refresh` and `/auth/logout` |
+| --- | --- | --- | --- |
+| Web | Header `X-Client: web` on every request, `withCredentials` | **Absent** (only the cookie) | Automatically, as the cookie |
+| Mobile, Postman | No header (no cookie is set) | Present, as in the example above | In the body: `{ "refreshToken": "..." }` |
+
+- `POST /auth/refresh` reads the token from the body or, if there is none, from the cookie. A token read from the cookie requires `X-Client: web`; without it the answer is `403 CLIENT_HEADER_REQUIRED` (a non-simple header cannot be added by a cross-site form and forces a CORS preflight, so the cookie alone cannot be used to forge the call). With neither, `401`; with several `refresh_token` cookies, `401` too (none is trusted) and no `Set-Cookie` (a deletion cannot remove the planted cookie). Only a genuine `401` clears the cookie: a failure of the database answers `5xx` and keeps it. The token is rotated (the old one is revoked and the cookie is replaced); presenting a revoked token revokes its whole family, and a rejected cookie is cleared.
+- `POST /auth/logout` revokes the token of the body or of the cookie (every `refresh_token` value when there are several, always bound to the caller) and clears the cookie (`Max-Age=0`, same attributes). `POST /auth/logout-all` and `POST /auth/reset-password`, which end every session, clear it too.
+- At rest, only `sha256(token)` in hexadecimal is stored in `RefreshToken.token`. The migration `20261122000000_hash_refresh_tokens` rewrites the rows that still hold a JWT, so open sessions keep working.
+- CORS: the origin of the web must be in `CORS_ORIGINS` (`credentials: true` is already set). `allowedHeaders` is not restricted, so the preflight of `X-Client` is answered by echoing the requested headers.
+
 ### 3. Invite Psychologist
 
 ```bash

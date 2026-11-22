@@ -1,4 +1,4 @@
-import { AuthResponseDto } from '../src/auth/dto/auth.dto';
+import { IssuedSession } from '../src/auth/auth.service';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -138,7 +138,7 @@ describe('Professional profile transition (E2E)', () => {
     const login = (await auth.login({
       email: result.email,
       password: TEST_PASSWORD,
-    })) as AuthResponseDto;
+    })) as IssuedSession;
     expect(login.user).toMatchObject({
       id: result.id,
       role: 'PROFESIONAL',

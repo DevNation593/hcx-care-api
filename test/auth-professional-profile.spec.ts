@@ -1,4 +1,5 @@
 import { AuthResponseDto } from '../src/auth/dto/auth.dto';
+import { hashRefreshToken } from '../src/auth/refresh-token';
 import { MfaService } from '../src/auth/mfa.service';
 import { MailService } from '../src/mail/mail.service';
 import { AuthService } from '../src/auth/auth.service';
@@ -49,6 +50,7 @@ describe('Auth professional profile payload', () => {
     jwt = {
       sign: jest.fn((payload) => JSON.stringify(payload)),
       verify: jest.fn((token) => JSON.parse(token)),
+      decode: jest.fn(() => ({ exp: Math.floor(Date.now() / 1000) + 7 * 24 * 3600 })),
     };
     service = new AuthService(
       db as PrismaService,
@@ -99,6 +101,7 @@ describe('Auth professional profile payload', () => {
     expect(result.refreshToken).not.toBe(previousToken);
     expect(db.refreshToken.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: { token: hashRefreshToken(previousToken) },
         include: {
           user: {
             include: {

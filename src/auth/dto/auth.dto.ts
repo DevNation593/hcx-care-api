@@ -71,11 +71,18 @@ export class DisableMfaDto extends MfaCodeDto {
   password: string;
 }
 
+/**
+ * The body of POST /auth/refresh and POST /auth/logout. The web client sends none: its refresh
+ * token travels in the `refresh_token` cookie. Other clients (mobile) send it here.
+ */
 export class RefreshTokenDto {
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description: 'Refresh token. Omit it from the web client, which uses the cookie instead.',
+  })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  refreshToken: string;
+  refreshToken?: string;
 }
 
 export class ForgotPasswordDto {
@@ -114,8 +121,11 @@ export class AuthResponseDto {
   @ApiProperty()
   accessToken: string;
 
-  @ApiProperty()
-  refreshToken: string;
+  @ApiPropertyOptional({
+    description:
+      'Absent when the request carries `X-Client: web`: the web client receives it only in the HttpOnly `refresh_token` cookie.',
+  })
+  refreshToken?: string;
 
   @ApiProperty()
   user: {

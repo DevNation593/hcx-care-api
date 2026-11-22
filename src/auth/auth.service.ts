@@ -8,9 +8,26 @@ import { LoginDto, AuthResponseDto, MfaChallengeDto, VerifyMfaLoginDto } from '.
 import { MfaService } from './mfa.service';
 import { getInactivityTimeoutMs } from './session-inactivity';
 import { sessionEnded } from './session-version';
+import { hashRefreshToken } from './refresh-token';
 import { MailService } from '../mail/mail.service';
 
 type JwtExpiresIn = NonNullable<JwtSignOptions['expiresIn']>;
+
+/** The errors `jsonwebtoken` throws for a token that is malformed, forged, expired or not yet valid. */
+function isJwtError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === 'JsonWebTokenError' || name === 'TokenExpiredError' || name === 'NotBeforeError';
+}
+
+/**
+ * A session as the service issues it: the body of the response plus when its refresh token
+ * expires, which the controller turns into the `Max-Age` of the cookie and never sends to the
+ * client.
+ */
+export type IssuedSession = Omit<AuthResponseDto, 'refreshToken'> & {
+  refreshToken: string;
+  refreshTokenExpiresAt: Date;
+};
 
 @Injectable()
 export class AuthService {
@@ -26,7 +43,7 @@ export class AuthService {
    * The first step of a sign-in. An account with two-factor sign-in gets a short-lived challenge
    * instead of tokens, and completes it with `verifyMfaLogin`.
    */
-  async login(loginDto: LoginDto): Promise<AuthResponseDto | MfaChallengeDto> {
+  async login(loginDto: LoginDto): Promise<IssuedSession | MfaChallengeDto> {
     const { email, password } = loginDto;
 
     const users = await this.prisma.user.findMany({
@@ -71,7 +88,7 @@ export class AuthService {
   }
 
   /** The second step: a code of the authenticator app, or one of the recovery codes. */
-  async verifyMfaLogin(dto: VerifyMfaLoginDto): Promise<AuthResponseDto> {
+  async verifyMfaLogin(dto: VerifyMfaLoginDto): Promise<IssuedSession> {
     const userId = this.mfa.userIdOfChallenge(dto.mfaToken);
     const user = await this.prisma.user.findFirst({
       where: { id: userId, isActive: true, tenant: { isActive: true } },
@@ -95,7 +112,7 @@ export class AuthService {
    * A new session for the account that just confirmed its second factor. Enabling it ends every
    * other session (they never passed it), so the one that confirmed the code continues with this.
    */
-  async sessionAfterMfaEnrolment(userId: string): Promise<AuthResponseDto> {
+  async sessionAfterMfaEnrolment(userId: string): Promise<IssuedSession> {
     const user = await this.prisma.user.findFirst({
       where: { id: userId, isActive: true, tenant: { isActive: true } },
       include: {
@@ -107,7 +124,7 @@ export class AuthService {
     return this.openSession(user);
   }
 
-  private async openSession(user: any): Promise<AuthResponseDto> {
+  private async openSession(user: any): Promise<IssuedSession> {
     await this.prisma.user.update({
       where: { id: user.id },
       data: { lastActivityAt: new Date() },
@@ -132,13 +149,13 @@ export class AuthService {
     };
   }
 
-  async refreshTokens(refreshToken: string): Promise<AuthResponseDto> {
+  async refreshTokens(refreshToken: string): Promise<IssuedSession> {
     try {
       // Verify refresh token
       const payload = this.jwtService.verify(refreshToken, {
         secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       });
-      return this.prisma.withRlsContext(
+      return await this.prisma.withRlsContext(
         {
           tenantId: payload.tenantId,
           userId: payload.sub,
@@ -147,7 +164,7 @@ export class AuthService {
         async () => {
           // Find refresh token in database
           const storedToken = await this.prisma.refreshToken.findUnique({
-            where: { token: refreshToken },
+            where: { token: hashRefreshToken(refreshToken) },
             include: {
               user: {
                 include: {
@@ -213,14 +230,28 @@ export class AuthService {
         },
       );
     } catch (error) {
-      throw new UnauthorizedException('Token de actualización inválido');
+      // Only a token that is wrong answers 401 (and makes the web client drop its cookie and
+      // sign out). A failure of the database or of anything else says nothing about the token:
+      // it surfaces as a 5xx so the client keeps the session and tries again.
+      if (error instanceof UnauthorizedException) throw error;
+      if (isJwtError(error)) throw new UnauthorizedException('Token de actualización inválido');
+      throw error;
     }
   }
 
-  async logout(userId: string, refreshToken: string): Promise<void> {
-    // Revoke the specific refresh token
+  /**
+   * Revokes the given refresh token(s) of the user: several when the request carried more than
+   * one `refresh_token` cookie. Always bound to `userId`, so a token of another account is never
+   * touched.
+   */
+  async logout(userId: string, refreshTokens: string | string[] | undefined): Promise<void> {
+    const tokens = (Array.isArray(refreshTokens) ? refreshTokens : [refreshTokens]).filter(
+      (token): token is string => !!token,
+    );
+    // Without a token there is nothing to revoke: `token: undefined` would match every session.
+    if (tokens.length === 0) return;
     await this.prisma.refreshToken.updateMany({
-      where: { userId, token: refreshToken },
+      where: { userId, token: { in: tokens.map(hashRefreshToken) } },
       data: { isRevoked: true },
     });
   }
@@ -390,21 +421,22 @@ export class AuthService {
       },
     );
 
-    // Store refresh token with family tracking
+    // Store refresh token with family tracking. The row expires when the JWT does (its `exp`),
+    // and only the hash of the token is stored.
     const tokenFamilyId = familyId || randomUUID();
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days
+    const { exp } = this.jwtService.decode(refreshToken) as { exp: number };
+    const expiresAt = new Date(exp * 1000);
 
     await this.prisma.refreshToken.create({
       data: {
         userId: user.id,
-        token: refreshToken,
+        token: hashRefreshToken(refreshToken),
         familyId: tokenFamilyId,
         expiresAt,
       },
     });
 
-    return { accessToken, refreshToken };
+    return { accessToken, refreshToken, refreshTokenExpiresAt: expiresAt };
   }
 
   private async revokeTokenFamily(familyId: string): Promise<void> {
