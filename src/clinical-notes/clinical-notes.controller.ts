@@ -31,11 +31,14 @@ import { RequirePermission } from '../common/permissions/permission-catalog';
 export class ClinicalNotesController {
   constructor(private readonly clinicalNotesService: ClinicalNotesService) {}
 
-  @Roles('PROFESIONAL')
+  // Any account with an active professional profile writes notes, whatever its role (the owner
+  // too): ClinicalProfileGuard refuses the rest, so the role only keeps out the other staff.
+  @Roles('MASTER', 'PROFESIONAL')
   @Post()
   @ApiOperation({
-    summary: 'Create clinical note - Professional only',
-    description: 'Creates audit log entry automatically',
+    summary: 'Create clinical note - Active professional profile required',
+    description:
+      'Any account with an active professional profile (a MASTER too). Creates audit log entry automatically',
   })
   @ApiResponse({ status: 201, description: 'Clinical note created' })
   @RequirePermission('clinical_records.create')
@@ -84,7 +87,7 @@ export class ClinicalNotesController {
     return this.clinicalNotesService.findOne(tenantId, noteId, actor);
   }
 
-  @Roles('PROFESIONAL')
+  @Roles('MASTER', 'PROFESIONAL')
   @Patch(':noteId')
   @ApiOperation({
     summary: 'Correct clinical note',

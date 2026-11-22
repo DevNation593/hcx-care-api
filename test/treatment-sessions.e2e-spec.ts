@@ -950,6 +950,71 @@ describe('Treatment sessions: template to completed procedure (E2E)', () => {
     const closeUrl = (patientId: string, encounterId: string) =>
       `${base()}/patients/${patientId}/encounters/${encounterId}/close`;
 
+    /**
+     * Needs migration 20261121000000_encounter_many_treatment_sessions: before it the table
+     * keeps a unique index on encounterId and the second treatment answers 409 DUPLICATE_RECORD
+     * «Atención» (checked by running this test on a database migrated up to 20261120000000).
+     */
+    it('adds a second treatment to the open encounter by encounterId', async () => {
+      const patientId = await newPatient();
+      const firstTreatmentId = await simpleTreatment();
+      const first = await openSession(patientId, firstTreatmentId);
+
+      const second = await request(server())
+        .post(`${base()}/patients/${patientId}/treatment-sessions`)
+        .set(as('pro'))
+        .send({ treatmentId: await simpleTreatment(), encounterId: first.encounterId });
+      // Asserting the body first makes a 409 show its code and message in the failure.
+      expect(second.body).toEqual(expect.objectContaining({ encounterId: first.encounterId }));
+      expect(second.status).toBe(201);
+      expect(
+        await prisma.treatmentSession.count({ where: { encounterId: first.encounterId } }),
+      ).toBe(2);
+
+      // The same treatment cannot be added twice while its session is alive.
+      const repeated = await request(server())
+        .post(`${base()}/patients/${patientId}/treatment-sessions`)
+        .set(as('pro'))
+        .send({ treatmentId: firstTreatmentId, encounterId: first.encounterId })
+        .expect(409);
+      expect(repeated.body.code).toBe('TREATMENT_ALREADY_IN_ENCOUNTER');
+    });
+
+    it('tells how to add a treatment when a new attention is asked for while one is open', async () => {
+      const patientId = await newPatient();
+      const first = await openSession(patientId, await simpleTreatment());
+
+      const response = await request(server())
+        .post(`${base()}/patients/${patientId}/treatment-sessions`)
+        .set(as('pro'))
+        .send({ treatmentId: await simpleTreatment() })
+        .expect(409);
+      expect(response.body).toMatchObject({
+        code: 'ENCOUNTER_ALREADY_OPEN',
+        encounterId: first.encounterId,
+      });
+      expect(response.body.message).toMatch(/agrégalo a esa atención/);
+      expect(response.body.message).not.toMatch(/mismo valor/);
+    });
+
+    it('opens one encounter when the form is submitted four times at once', async () => {
+      const patientId = await newPatient();
+      const treatmentId = await simpleTreatment();
+      const submit = () =>
+        request(server())
+          .post(`${base()}/patients/${patientId}/treatment-sessions`)
+          .set(as('pro'))
+          .send({ treatmentId });
+
+      const responses = await Promise.all([submit(), submit(), submit(), submit()]);
+      expect(responses.map((r) => r.status).sort()).toEqual([201, 409, 409, 409]);
+      // A loser either sees the open encounter or loses the serializable race (P2034).
+      for (const refused of responses.filter((r) => r.status === 409)) {
+        expect(['ENCOUNTER_ALREADY_OPEN', 'CONCURRENT_UPDATE']).toContain(refused.body.code);
+      }
+      expect(await prisma.treatmentSession.count({ where: { tenantId, patientId } })).toBe(1);
+    });
+
     it('completes one, cancels the other and closes the encounter once none is unfinished', async () => {
       const { patientId, appointmentId, a, b, encounterId } = await openPair(16);
 

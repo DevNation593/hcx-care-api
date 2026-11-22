@@ -258,7 +258,7 @@ export class EncountersService {
     if (open) {
       throw conflict(
         'ENCOUNTER_ALREADY_OPEN',
-        'Ya tienes una atención abierta con este paciente. Ciérrala antes de iniciar otra.',
+        'Ya tienes una atención abierta con este paciente. Si es otro tratamiento, agrégalo a esa atención; si no, ciérrala antes de iniciar otra.',
         { encounterId: open.id },
       );
     }
