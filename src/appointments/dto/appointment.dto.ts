@@ -11,6 +11,7 @@ import {
   IsEnum,
   IsBoolean,
 } from 'class-validator';
+import { PaginationQueryDto } from '../../common/pagination/pagination';
 
 export class CreateAppointmentDto {
   @ApiProperty({ example: 'patient-id' })
@@ -86,7 +87,7 @@ export class UpdateAppointmentDto extends PartialType(CreateAppointmentDto) {
   status?: AppointmentStatus;
 }
 
-export class ListAppointmentsQueryDto {
+export class ListAppointmentsQueryDto extends PaginationQueryDto {
   @IsString() @IsOptional() professionalId?: string;
   @IsString() @IsOptional() psychologistId?: string;
   @IsString() @IsOptional() specialtyId?: string;

@@ -63,8 +63,17 @@ export class AppointmentsController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List appointments with filters' })
-  @ApiResponse({ status: 200, description: 'Appointments list' })
+  @ApiOperation({
+    summary: 'List appointments with filters',
+    description:
+      'Without `page` and `limit` the response is the whole list as an array. With either one it is `{ data, meta }`.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Appointments list (array), or `{ data, meta: { page, limit, total, totalPages } }` when paged',
+  })
+  @ApiResponse({ status: 400, description: 'Invalid page, limit or filter' })
   async findAll(
     @Param('tenantId') tenantId: string,
     @Query() filters: ListAppointmentsQueryDto,

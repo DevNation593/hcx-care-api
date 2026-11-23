@@ -37,6 +37,13 @@ The clinical web change also requires deploying the web. No new schema migration
 needed for this connection fix. See the
 [Supabase Prisma troubleshooting guide](https://supabase.com/docs/guides/database/prisma/prisma-troubleshooting#max-client-connections-reached).
 
+## Listas paginadas y búsqueda de pacientes (migraciones `20261122000000` y `20261122010000`)
+
+- **Orden de despliegue: la API antes que la web.** La web nueva pide `page`/`limit`. Si llega a una API antigua, que ignora esos parámetros y responde el arreglo completo, la web lo recorta en el cliente y emite un `console.warn` una sola vez por sesión: sigue funcionando, pero descarga todo. La API nueva sigue contestando el arreglo de siempre a quien no envía `page` ni `limit` (app móvil, selectores, dashboard), así que no rompe a la web antigua.
+- **`20261122000000_patient_search_trgm_indexes`.** Crea la extensión `pg_trgm` (en el esquema `extensions`, o donde ya esté instalada) y 5 índices GIN sobre `"Patient"` (`firstName`, `lastName`, `email`, `phone`, `identificationNumber`). Todo se hace dentro de un bloque `DO` y solo si falta, de modo que un rol sin `CREATE` sobre la base no falla cuando la extensión ya existe; si hace falta crearla y el rol no puede, el error indica cómo habilitarla (Supabase: *Database > Extensions*, o `CREATE EXTENSION pg_trgm WITH SCHEMA extensions;` con un rol privilegiado). Es idempotente.
+- **Bloqueo de escrituras.** `CREATE INDEX` sin `CONCURRENTLY` toma un lock `SHARE` sobre `"Patient"` (y la migración de actividades sobre `"Task"`): las lecturas siguen, las escrituras esperan unos segundos mientras se construye el índice. Ejecuta `npx prisma migrate deploy` en una hora de poco uso. (`CONCURRENTLY` no se puede usar: Prisma envía el script de la migración como un único lote multi-sentencia, que PostgreSQL ejecuta como una transacción implícita, y `CREATE INDEX CONCURRENTLY` no puede ejecutarse dentro de una transacción; además, en la migración de pacientes los `CREATE INDEX` están dentro de un bloque `DO`, que es una sola sentencia y tampoco lo admite.)
+- **`prisma generate` en el build.** `schema.prisma` cambió: ahora usa `previewFeatures = ["postgresqlExtensions"]` y `extensions = [pg_trgm]`, y declara los índices. El build debe ejecutar `prisma generate` (el script `npm run build` ya lo hace). Se comprobó en una base desechable con otras extensiones instaladas (`pgcrypto`, `uuid-ossp`, `pg_stat_statements`, `citext`, `hstore`, `unaccent`, `tablefunc`) que `prisma migrate diff` y `prisma db push` no proponen `DROP EXTENSION` de las que no declara el esquema. **No se ha podido comprobar contra un Supabase real**: tras el primer despliegue, ejecuta `npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script` contra la base (solo lectura) y confirma que sale vacío.
+
 ## Facturación electrónica propia con el SRI
 
 La API firma y envía las facturas (código `01`, XSD `1.1.0`) directamente a los servicios web del SRI. Ya no hay proveedor externo ni webhook. Los únicos hosts permitidos son `celcer.sri.gob.ec` (ambiente `1`, pruebas) y `cel.sri.gob.ec` (ambiente `2`, producción); no se siguen redirecciones. Historial: el proveedor anterior (Emite Fácil) se retiró con la migración `20261102000100_drop_emite_facil`.
@@ -150,6 +157,16 @@ El régimen RIMPE `NEGOCIO_POPULAR` se rechaza con `RIMPE_REGIME_UNSUPPORTED` ha
 - **Reanudar una fila detenida:** primero investigue por qué cambió el archivo (restaure el respaldo del almacenamiento o localice la alteración) y confirme con el SRI el estado de la clave de acceso. Solo cuando los bytes guardados vuelvan a coincidir con `signedXmlSha256`, ponga `nextAttemptAt` en la fecha actual (`update "InvoiceRequest" set "nextAttemptAt" = now() at time zone 'utc' where "id" = '<id>' and "tenantId" = '<tenantId>' and "status" = 'PROCESSING' and "nextAttemptAt" >= '9999-01-01';`); confirme que se actualizó exactamente 1 fila (`UPDATE 1`), si no, revise el id antes de repetir y el siguiente tick la retoma. Nunca refirme ni edite el XML firmado ni su hash.
 - Los mensajes del SRI se guardan cifrados y solo los ve quien tiene `billing.view`; no aparecen en logs ni en auditoría.
 
+## Refresh token en cookie y en hash (sesión web)
+
+La web guarda el refresh token en la cookie `HttpOnly` `refresh_token` y la tabla `RefreshToken` guarda solo `sha256(token)`. Antes de desplegar:
+
+1. **Mismo sitio registrable.** La web y la API DEBEN servirse bajo el mismo sitio registrable, por ejemplo `app.<dominio>` y `api.<dominio>`. La cookie es `SameSite=Lax`, que solo viaja en peticiones del mismo sitio. `*.vercel.app` está en la Public Suffix List: dos subdominios de `vercel.app` (por ejemplo `mi-web.vercel.app` y `mi-api.vercel.app`) NO son el mismo sitio y la cookie no viajaría. Con dominios propios, `CORS_ORIGINS` debe listar el origen exacto de la web (ver SEC-API-23: no usar comodines en producción).
+2. **Orden y migración.** Desplegar la API antes que la web. Aplicar `prisma migrate deploy` (migración `20261122000000_hash_refresh_tokens`) justo al promover la nueva API y volver a ejecutarlo después de que la API vieja deje de servir: una instancia vieja puede seguir escribiendo tokens en claro tras la migración, y esos tokens no serían válidos con el código nuevo. La migración es idempotente (no toca filas que ya son un hash de 64 hex), así que repetirla es seguro. Entre aplicar la migración y que la nueva API empiece a servir, la API vieja sigue buscando el token en claro: los tokens que existían antes de la migración ya están hasheados y la API vieja no los encuentra, así que responde 401 a los refresh con ellos (cierra la sesión de quien renueve en ese lapso); en cambio, los tokens que la propia API vieja emite después de la migración se guardan en claro y con ella sí funcionan, y con la API nueva solo valen si se reejecuta la migración después de que la API vieja deje de servir, que los reescribe como hash. Un `logout` atendido por la API vieja en esa ventana hace el `updateMany` por el token en claro, no encuentra la fila hasheada y no revoca nada: ese token sigue siendo válido con la API nueva hasta que expire. Por eso conviene el despliegue atómico (migración y nueva API juntas) o, si no, una ventana lo más corta posible. El rewrite también puede lanzarse a mano: `UPDATE "RefreshToken" SET "token" = encode(sha256(convert_to("token",'UTF8')),'hex') WHERE "token" !~ '^[0-9a-f]{64}$';`
+3. **Bloqueo de filas.** El `UPDATE` bloquea las filas de `RefreshToken` mientras dura. Ejecutarlo en una hora de poco uso.
+4. **`JWT_REFRESH_EXPIRATION`.** Confirmar el valor de producción: ahora la caducidad guardada en la base y el `Max-Age` de la cookie salen del `exp` del JWT y ya no están topados a 7 días.
+5. **Sesiones web abiertas.** Al desplegar la web, la clave `refresh_token` heredada de `localStorage` se borra sin migrarse: cada usuario con sesión abierta tendrá que iniciar sesión una vez más (en cuanto caduque su access token). La app móvil no se ve afectada: sigue enviando y recibiendo el refresh token en el cuerpo.
+
 ## Pre-Deployment Checklist
 
 ### Security
@@ -256,6 +273,8 @@ CORS_ORIGINS=https://app.yourdomain.com,https://www.yourdomain.com
 # Error monitoring (Sentry). Optional: without a DSN Sentry is not initialized.
 # Define it ONLY in the Production environment of Vercel (see "Error Tracking with Sentry").
 SENTRY_DSN=<sentry-project-dsn>
+# Slow-request traces (see "Trazas de peticiones lentas"). 0 or unset = off (default); start with 0.05-0.1.
+# SENTRY_TRACES_SAMPLE_RATE=0.05
 ```
 
 Generate strong secrets:
@@ -738,9 +757,11 @@ La API ya integra Sentry (`@sentry/nestjs`, fijado en `^10.78.0` a propósito: l
 
 **Configuración**
 
-- `SENTRY_DSN` se define **únicamente en el entorno Production de Vercel**. No definirla en Preview,
-  Development, CI ni en local: sin DSN Sentry no se inicializa y la API se comporta exactamente igual
-  que antes (`reportError` no hace nada).
+- `SENTRY_DSN` se define **únicamente en el entorno Production de Vercel**. No definirla de forma permanente en
+  Preview, Development, CI ni en local: sin DSN Sentry no se inicializa y la API se comporta exactamente igual
+  que antes (`reportError` no hace nada). La única excepción es la verificación previa a activar las trazas (ver
+  «Cómo comprobarlo con un DSN de prueba»): un DSN de **prueba**, temporal y solo en una rama Preview, que se
+  borra al terminar.
 - No commitear nunca un DSN real (en `.env.example` está comentada y vacía).
 - `SENTRY_DSN` se lee del entorno del proceso en `src/instrument.ts`, antes de que `ConfigModule` cargue el
   archivo `.env`. Por eso ponerla en un `.env` local **no hace nada**: tiene que ser una variable de entorno
@@ -772,7 +793,7 @@ La API ya integra Sentry (`@sentry/nestjs`, fijado en `^10.78.0` a propósito: l
   adjunta el objeto completo cuando se lanza algo que no es un `Error`).
 - Email, nombre ni ningún otro dato personal del usuario.
 - Breadcrumbs (se descartan todos: los logs de consola y las URLs podrían llevar datos de pacientes).
-- Trazas de rendimiento (`tracesSampleRate: 0`) ni errores 4xx.
+- Errores 4xx. Las trazas de rendimiento están apagadas por defecto: ver «Trazas de peticiones lentas».
 
 **Importante:** el mensaje de un `Error` arbitrario SÍ se envía tal cual. Por eso los mensajes de error
 nunca deben interpolar datos de pacientes (nombres, cédulas, correos, contenido clínico), ni se debe lanzar
@@ -792,6 +813,121 @@ Usar códigos o identificadores en su lugar.
    sin datos personales.
 4. En producción, tras desplegar con `SENTRY_DSN` definido, confirmar el primer 5xx real en
    *Issues* del proyecto y revisar que no contenga cuerpos, cabeceras, query strings ni la URL de la petición.
+
+#### Trazas de peticiones lentas (Sentry Performance)
+
+Sentry Performance mide cuánto tarda cada petición HTTP y cuánto de ese tiempo se va en la base de datos,
+para encontrar las lentas por ruta. Usa el mismo SDK y el mismo DSN; no hay proveedor ni dependencia nuevos.
+
+**Configuración**
+
+- `SENTRY_TRACES_SAMPLE_RATE`: número entre 0 y 1 con la fracción de peticiones que se miden. **Por defecto 0
+  (apagado)**: sin la variable, vacía o con un valor inválido (texto, negativo, mayor que 1, `10%`) no se mide
+  nada y desplegar no cambia el comportamiento ni genera coste. Recomendación inicial: `0.05` a `0.1`;
+  subirla solo si hace falta más detalle, porque cada transacción lleva decenas de spans y consume cuota.
+- Como `SENTRY_DSN`, se lee en `src/instrument.ts` antes de `ConfigModule`: tiene que ser una variable de
+  entorno real de Vercel (Production), no una línea del `.env`. Requiere `SENTRY_DSN`: sin DSN no hay nada.
+- **Apagarlo:** borrar la variable (o ponerla a `0`) y volver a desplegar. Vercel solo lee las variables al
+  crear el despliegue.
+- Prisma 6 emite sus spans sin `previewFeatures` (el tracing es estable desde Prisma 6), así que no hace falta
+  tocar `schema.prisma` ni generar migraciones.
+
+**Qué se mide**
+
+- Una transacción por petición HTTP muestreada, nombrada con el **patrón de ruta**, por ejemplo
+  `GET /api/v1/patients/:patientId`, nunca con la URL real. Una petición que no llegó a ninguna ruta
+  (400 antes del enrutado, 413…) se llama `<MÉTODO> <unmatched route>`; los 401, 404 y 3xx no se miden.
+  Un último filtro sustituye UUID, correos y números de 4 o más cifras que se hubieran colado en un nombre.
+- Duración total, `op`, estado y código HTTP. Una petición lenta se identifica en Sentry por la duración de la
+  transacción agrupada por ese nombre de ruta (*Performance > Backend*, o *Discover* filtrando por `transaction`).
+- Spans hijos con su duración: handler de Nest, middlewares de Express y la capa de datos. De Prisma:
+  `prisma:client:operation` con el **modelo y la operación** (`Patient`, `findMany`; `queryRaw`),
+  `prisma:engine:connection` (espera de una conexión del pool, típica en arranques en frío) y
+  `prisma:engine:db_query` (tiempo de la consulta SQL). Los spans de serialización se omiten.
+- Llamadas salientes (SRI, almacenamiento, correo) como `GET <host>`.
+
+**Qué NO se envía** (`scrubTransaction` reconstruye cada transacción desde una lista de campos permitidos;
+si el filtrado falla, la transacción se descarta)
+
+- URL, query string, cuerpo, cabeceras (`authorization`, `cookie`, `user-agent`, `x-forwarded-for`…), cookies ni
+  IP del cliente: de `request` solo sobrevive el método.
+- Texto SQL ni sus parámetros (`db.query.text`, `db.statement`, `db.query.params`): el texto que Prisma pone
+  como nombre del span se sustituye por `prisma:engine:db_query`. Tampoco claves de Redis ni la ruta de una URL
+  saliente (solo el host).
+- `user`, `tags`, `extra`, `breadcrumbs`, `modules`, nombre del servidor y los contextos de dispositivo,
+  sistema operativo, aplicación y nube. Se conserva únicamente el contexto `trace`, `runtime` (nombre y
+  versión de Node) y el código de estado.
+- Peticiones a `/health`, `/internal/*` (el tick de facturación) y `/docs*` (Swagger): nunca se muestrean, con
+  cualquier prefijo, sin distinguir mayúsculas y con barras repetidas o finales (`/API/V1/HEALTH`,
+  `/api/v1//health/`). Tampoco se muestrea nada que no sea una petición HTTP entrante (colas, consultas fuera de
+  una petición).
+- El nombre de la ruta no viaja en ninguna cabecera del envelope: el SDK copia el contexto de muestreo dinámico
+  (`trace` en la cabecera del envelope), que para una petición muestreada incluye el nombre del span raíz (la ruta
+  cruda, con el UUID), también en los eventos de ERROR capturados durante esa petición. `scrubEvent` y
+  `scrubTransaction` lo reducen a `trace_id`, `public_key`, `sample_rate`, `sample_rand`, `sampled`, `release`,
+  `environment` y `org_id`, y eliminan el resto de `sdkProcessingMetadata`.
+- La API **no propaga** `sentry-trace` ni `baggage` a las llamadas salientes (`tracePropagationTargets: []`):
+  SRI, el almacenamiento y el correo no reciben el id de traza ni la clave pública del DSN. Aplica con cualquier
+  tasa, también con la tasa en 0: sin esta opción el SDK añade esas cabeceras a toda llamada saliente aunque la
+  traza no esté muestreada.
+- **El muestreo lo decide la API, no la petición.** El muestreador decide con `Math.random() < tasa` y devuelve un
+  booleano: ni la decisión de muestreo de una traza entrante (`sentry-trace: ...-1`) ni su `sample_rand` (la
+  entrada `sentry-sample_rand=0` de `baggage`) pueden subir la fracción muestreada. Con una tasa numérica el SDK
+  compara el `sample_rand` entrante con la tasa, y un cliente que enviara `sentry-sample_rand=0` haría que todas
+  sus peticiones se muestrearan (comprobado con el SDK real: 100 % en lugar de ≈5 % con tasa 0,05). Consecuencias:
+  una traza entrante sigue aportando su `trace_id` (la traza continúa con ese id), pero la API no hereda su
+  decisión; y `sample_rate` aparece como 1 en las trazas muestreadas, no como la tasa configurada. Esto aplica
+  también con la tasa en 0: el muestreador responde siempre 0.
+- **Hallazgo previo, corregido por T4:** en `origin/dev`, con `SENTRY_DSN` definido y sin
+  `SENTRY_TRACES_SAMPLE_RATE` (`tracesSampleRate: 0`), una petición con `sentry-trace: <32hex>-<16hex>-1` ya generaba
+  y enviaba una transacción sin filtrar (con `authorization`, `cookie`, la URL con el UUID y la query, la IP del
+  cliente y el SQL de Prisma). Solo ocurre si el DSN está definido. **Mergear T4, o al menos este muestreador y
+  `scrubTransaction`, antes de definir `SENTRY_DSN` en producción.**
+
+**Serverless (Vercel)**
+
+Una transacción se construye cuando se cierra la respuesta, es decir, *después* de responder, y la función
+podría congelarse antes de enviarla. Para las peticiones muestreadas, la API pide a Vercel (`waitUntil` del
+contexto de la petición) que mantenga viva la función hasta que se envíe, sin retrasar la respuesta. La llamada
+a `waitUntil` se hace durante la petición (el contexto de Vercel se lee de forma síncrona, mientras está activo)
+con una promesa que se resuelve cuando la respuesta se cierra y el envío termina, o a los 10 s si la respuesta
+no llega a cerrarse. Todo lo que puede lanzar (incluido `waitUntil`) está protegido: no hay excepciones no
+capturadas dentro de la petición. Los errores 5xx siguen esperando hasta 2 s antes de responder, como antes. Fuera
+de Vercel no hace falta nada. No se ha podido comprobar en un despliegue real: ver «Cómo comprobar» abajo.
+
+**Cómo ampliar**
+
+- Más detalle de la base de datos: quitar entradas de `IGNORED_PRISMA_SPANS` en
+  `src/common/monitoring/sentry-options.ts`. Las claves de datos que se conservan están en `SPAN_DATA_KEYS`
+  de `src/common/monitoring/sentry-tracing.ts`; cualquier clave nueva debe revisarse por privacidad antes de
+  añadirla.
+- Enlazar con las trazas del frontend: hoy no se hace (ver `web/docs/DOCUMENTATION.md`). Exigiría que la web
+  envíe `sentry-trace` y `baggage` (cabeceras no simples: preflight CORS) y cambiar el muestreo para respetar la
+  decisión entrante de forma controlada.
+
+**Cómo comprobarlo con un DSN de prueba**
+
+1. En un proyecto de prueba de Sentry, definir como variables de entorno del proceso (nunca en un archivo)
+   `SENTRY_DSN=<dsn de prueba>` y `SENTRY_TRACES_SAMPLE_RATE=1`, y arrancar la API contra una base de datos
+   desechable.
+2. Llamar a unas pocas rutas (`GET /api/v1/patients/<id>` con un paciente de prueba).
+3. En *Performance* debe aparecer `GET /api/v1/patients/:patientId` con sus spans de Prisma; abrir una
+   transacción y comprobar que no aparece ningún id, URL, cabecera ni SQL. Hacerlo primero en un despliegue
+   Preview antes de activarlo en Production, con un DSN de prueba temporal definido solo en esa rama.
+4. Provocar también un error 5xx en una petición muestreada y revisar el evento **y las cabeceras del envelope**
+   (en las herramientas de red o con `debug: true` en local): la cabecera `trace` no debe llevar `transaction`.
+
+Los tests con el SDK real y un transporte en memoria (`src/common/monitoring/sentry-sdk.spec.ts`) no sustituyen a
+esta verificación en un Preview con un DSN de prueba, de una transacción **y** de un error, cabeceras del envelope
+incluidas.
+
+**Recomendaciones en Sentry (del lado del proyecto)**
+
+- Activar «Prevent storing of IP addresses» (Project Settings > Security & Privacy): la API ya no envía la IP,
+  pero es la defensa de último recurso.
+- Activar el «Data Scrubbing» del servidor, con «Use Default Scrubbers» y reglas para cédulas, correos y teléfonos.
+- Fijar límites de cuota por proyecto y activar *spike protection*: una tasa de muestreo alta o un pico de
+  tráfico consume cuota rápido (cada transacción lleva decenas de spans).
 
 ### APM with DataDog (Optional)
 

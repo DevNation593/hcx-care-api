@@ -36,6 +36,7 @@ Toda revisión de código, humana o automática, verifica estas reglas. Un cambi
 - **SEC-API-07 (P1).** `ADMIN` solo opera en `/platform/*` y no lee datos internos de un consultorio. `CAJERO` no accede a agenda, pacientes, tareas ni historia clínica. Los roles obsoletos (`CLIENTE`, `PSICOLOGO`, `SOPORTE`) no reciben permisos nuevos. `MASTER` sigue siendo único por tenant, no se desactiva y no cambia de rol.
 - **SEC-API-08 (P1).** Contraseñas con `bcrypt`; nunca se devuelven, registran ni comparan en claro. Las respuestas de usuario usan `public-user-select.ts`. La rotación de refresh tokens con detección de reutilización (familia revocada) se conserva.
 - **SEC-API-09 (P2).** Login, recuperación y activación no revelan si un correo existe y están limitados por `@Throttle`.
+- **SEC-API-23 (P0).** El refresh token se guarda en la tabla `RefreshToken` solo como `sha256` hexadecimal (`hashRefreshToken`, `src/auth/refresh-token.ts`); toda consulta por token (`findUnique`, `updateMany`, `where: { token }`) usa el hash, nunca el JWT. La cookie `refresh_token` (`HttpOnly`, `Secure` fuera de desarrollo/test, `SameSite=Lax`, `Path=/<API_PREFIX>/auth`, `Max-Age` igual a la expiración del token) se fija **solo** cuando la petición lleva `X-Client: web`, y entonces el cuerpo no incluye el refresh token. Sin esa cabecera (móvil, Postman, un formulario de otro sitio) no se fija ninguna cookie y el cuerpo conserva el token. Motivo: `X-Client` es una cabecera no simple, fuerza un preflight CORS y una página de otro sitio no puede enviarla; así no puede iniciar sesión en el navegador de la víctima con credenciales del atacante (login CSRF) ni sobrescribir su cookie con un token del atacante. Un refresh con el token leído de la cookie exige también `X-Client: web` (403 sin ella). Si la petición trae varias cookies `refresh_token` (cookie tossing) no se usa ninguna: 401 sin `Set-Cookie` (un borrado no alcanza la cookie plantada y solo quitaría la real). Un fallo que no sea del token (base de datos, tiempo de espera) responde 5xx y no borra la cookie. Toda ruta que revoca todas las sesiones y responde al navegador limpia la cookie (esto es incondicional). Supuestos de la defensa: no hay subdominios no confiables en el mismo sitio (un subdominio hermano puede plantar cookies del dominio padre) y `CORS_ORIGINS` con `credentials: true` solo lista orígenes confiables: un comodín `*.dominio` equivale a confiar en todos esos orígenes para el refresh por cookie, así que en producción se usan orígenes exactos.
 
 ### Datos clínicos
 
@@ -62,11 +63,15 @@ Toda revisión de código, humana o automática, verifica estas reglas. Un cambi
 - **SEC-API-21 (P0).** Una migración no borra columnas, tablas ni valores con datos en producción sin un paso previo de respaldo o migración de datos explicado en el PR.
 - **SEC-API-22 (P1).** Las políticas RLS y los índices únicos parciales de seguridad (`User_tenantId_master_key`, `Tenant_isPlatform_key`) no se eliminan ni se relajan.
 
+### Visibilidad de pacientes archivados (decisión del responsable del proyecto)
+
+`GET /tenants/{tenantId}/patients?status=inactive|all` lista a los pacientes con `isActive=false` (no eliminados) para **todos** los roles que listan pacientes: `MASTER`, `ASISTENTE` y `PROFESIONAL`. Es una decisión explícita del responsable del proyecto, no una omisión: el listado por defecto sigue mostrando solo activos, `deletedAt` nunca se lista, el filtro de `tenantId` no cambia y `GET patients/{id}` ya no filtraba por `isActive`. Una revisión no la reporta como fuga entre roles salvo que cambie ese alcance.
+
 ## Lista rápida por tipo de cambio
 
 - **Endpoint nuevo:** SEC-API-01, 02, 05, 06, 07, 15, 16.
 - **Notas clínicas, registros de especialidad, archivos o consentimientos:** SEC-API-10, 11, 12, 13.
-- **Auth, sesiones o usuarios:** SEC-API-04, 08, 09.
+- **Auth, sesiones o usuarios:** SEC-API-04, 08, 09, 23.
 - **Prisma (esquema, migraciones, SQL crudo):** SEC-API-14, 21, 22.
 - **Configuración, despliegue o dependencias:** SEC-API-18, 19, 20.
 
