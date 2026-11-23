@@ -35,6 +35,7 @@
     "prisma:audit-orthodontic-modules": "ts-node prisma/audit-orthodontic-modules.ts",
     "platform:create-admin": "ts-node prisma/create-platform-admin.ts",
     "prisma:verify-platform-sections": "ts-node prisma/verify-platform-sections.ts",
+    "prisma:verify-refresh-token-hash": "ts-node prisma/verify-refresh-token-hash-migration.ts",
     "prisma:encrypt-clinical-data": "ts-node prisma/encrypt-clinical-data.ts",
     "prisma:migrate-local-storage": "ts-node prisma/migrate-local-storage-to-supabase.ts",
     "catalog:import-diagnosis-codes": "ts-node prisma/import-diagnosis-codes.ts",
