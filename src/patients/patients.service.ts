@@ -9,7 +9,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PatientTeamService } from '../patient-team/patient-team.service';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
 import { LEGACY_BILLING_OMIT } from './legacy-billing';
-import { CreatePatientDto, UpdatePatientDto } from './dto/patient.dto';
+import { CreatePatientDto, PatientListStatus, UpdatePatientDto } from './dto/patient.dto';
+import { isPaginated, pageMeta, PageRequest, pageWindow } from '../common/pagination/pagination';
+import { escapeLike } from '../common/pagination/escape-like';
+import { readInTransaction } from '../common/pagination/read-in-transaction';
 import {
   assertGuardianForMinor,
   mergePatientIdentification,
@@ -35,6 +38,10 @@ const PROFILE_FIELDS = [
 ] as const;
 
 type MergedFields = (typeof IDENTIFICATION_FIELDS)[number];
+
+export interface PatientListOptions extends PageRequest {
+  status?: PatientListStatus;
+}
 
 /**
  * The DTO without its identification keys; those are written only through
@@ -293,28 +300,41 @@ export class PatientsService {
     }
   }
 
-  async findAll(tenantId: string, search?: string) {
+  /**
+   * Without `page`/`limit` this is the whole list as an array (what the mobile app and the
+   * selectors read). With either one it is a page: `{ data, meta }`. Both use the same `where`.
+   */
+  async findAll(tenantId: string, search?: string, options: PatientListOptions = {}) {
+    const status = options.status ?? 'active';
     const where: any = {
       tenantId,
-      isActive: true,
       deletedAt: null,
     };
+    // Active only unless the caller asks otherwise; deleted patients are never listed.
+    if (status !== 'all') {
+      where.isActive = status === 'active';
+    }
 
     if (search) {
+      // Stored without spaces or hyphens, so the search term is compared the same way. A term
+      // made only of those ("-") has nothing to compare and must not match every identification.
+      const identification = normalizeTaxId(search);
+      // Prisma does not escape the LIKE wildcards of `contains`: "%" or "_" would match everything.
+      const term = escapeLike(search);
       where.OR = [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search } },
-        // Stored without spaces or hyphens, so the search term is compared the same way.
-        { identificationNumber: { contains: normalizeTaxId(search) } },
+        { firstName: { contains: term, mode: 'insensitive' } },
+        { lastName: { contains: term, mode: 'insensitive' } },
+        { email: { contains: term, mode: 'insensitive' } },
+        { phone: { contains: term } },
+        ...(identification
+          ? [{ identificationNumber: { contains: escapeLike(identification) } }]
+          : []),
       ];
     }
 
-    const patients = await this.prisma.patient.findMany({
+    const query = {
       where,
       omit: LEGACY_BILLING_OMIT,
-      orderBy: { lastName: 'asc' },
       include: {
         assignedPsychologist: {
           select: {
@@ -327,9 +347,25 @@ export class PatientsService {
           },
         },
       },
-    });
+    };
 
-    return patients;
+    if (!isPaginated(options)) {
+      return this.prisma.patient.findMany({ ...query, orderBy: { lastName: 'asc' } });
+    }
+
+    const { page, limit, skip, take } = pageWindow(options);
+    // One transaction, queries in sequence on `tx` (see readInTransaction).
+    return readInTransaction(this.prisma, async (tx) => {
+      const total = await tx.patient.count({ where });
+      const data = await tx.patient.findMany({
+        ...query,
+        // `id` breaks ties between equal last names so no row repeats or vanishes between pages.
+        orderBy: [{ lastName: 'asc' }, { id: 'asc' }],
+        skip,
+        take,
+      });
+      return { data, meta: pageMeta(total, page, limit) };
+    });
   }
 
   async findOne(tenantId: string, patientId: string) {

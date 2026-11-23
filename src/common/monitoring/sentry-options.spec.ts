@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
-import type { ErrorEvent, EventHint } from '@sentry/nestjs';
+import type { ErrorEvent, EventHint, NodeOptions } from '@sentry/nestjs';
 import { buildSentryOptions, scrubEvent } from './sentry-options';
+import { scrubTransaction } from './sentry-tracing';
 
 describe('buildSentryOptions', () => {
   it('returns null without SENTRY_DSN', () => {
@@ -41,7 +42,123 @@ describe('buildSentryOptions', () => {
   });
 });
 
+describe('buildSentryOptions tracing', () => {
+  const dsn = 'https://k@o0.ingest.sentry.io/1';
+  const incomingRequest = (path: string) =>
+    ({
+      name: `GET ${path}`,
+      attributes: { 'sentry.op': 'http.server', 'url.path': path },
+      parentSampled: true,
+      inheritOrSampleWith: (fallback: number) => fallback,
+    }) as Parameters<NonNullable<NodeOptions['tracesSampler']>>[0];
+
+  it.each([
+    ['absent', undefined],
+    ['empty', ''],
+    ['zero', '0'],
+    ['not a number', 'abc'],
+    ['negative', '-0.5'],
+    ['above one', '1.5'],
+    ['a percentage', '10%'],
+  ])('does not trace when the rate is %s', (_label, rate) => {
+    const options = buildSentryOptions({ SENTRY_DSN: dsn, SENTRY_TRACES_SAMPLE_RATE: rate });
+
+    expect(options?.tracesSampleRate).toBe(0);
+    // Not even a forced `sentry-trace: ...-1` header makes a request sampled.
+    expect(options?.tracesSampler?.(incomingRequest('/api/v1/patients'))).toBe(0);
+    // Nothing is added to the SDK: no custom integrations. Propagation is off at any rate.
+    expect(options?.integrations).toBeUndefined();
+    expect(options?.tracePropagationTargets).toEqual([]);
+  });
+
+  it('samples incoming requests at the configured rate, never health, tick or docs', () => {
+    const options = buildSentryOptions({ SENTRY_DSN: dsn, SENTRY_TRACES_SAMPLE_RATE: '0.05' });
+    const sampler = options?.tracesSampler;
+
+    const random = jest.spyOn(Math, 'random');
+    try {
+      random.mockReturnValue(0.01);
+      expect(sampler?.(incomingRequest('/api/v1/patients/abc'))).toBe(true);
+      expect(sampler?.(incomingRequest('/health'))).toBe(false);
+      expect(sampler?.(incomingRequest('/api/v1/internal/invoicing/tick'))).toBe(false);
+      expect(sampler?.(incomingRequest('/api/v1/docs'))).toBe(false);
+      random.mockReturnValue(0.9);
+      expect(sampler?.(incomingRequest('/api/v1/patients/abc'))).toBe(false);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('never propagates sentry-trace or baggage to outgoing calls, at any rate', () => {
+    for (const rate of [undefined, '', '0', 'abc', '0.1', '1']) {
+      const options = buildSentryOptions({ SENTRY_DSN: dsn, SENTRY_TRACES_SAMPLE_RATE: rate });
+
+      expect(options?.tracePropagationTargets).toEqual([]);
+    }
+  });
+
+  it('with tracing on: HTTP and Prisma integrations', () => {
+    const options = buildSentryOptions({ SENTRY_DSN: dsn, SENTRY_TRACES_SAMPLE_RATE: '0.1' });
+    const names = (options?.integrations as Array<{ name: string }>).map((i) => i.name);
+
+    expect(options?.tracePropagationTargets).toEqual([]);
+    expect(names).toEqual(['Http', 'Prisma']);
+  });
+
+  it('always scrubs transactions, at any rate', () => {
+    for (const rate of [undefined, '0', '0.1']) {
+      const options = buildSentryOptions({ SENTRY_DSN: dsn, SENTRY_TRACES_SAMPLE_RATE: rate });
+      expect(options?.beforeSendTransaction).toBe(scrubTransaction);
+    }
+  });
+
+  it('keeps privacy settings with tracing on', () => {
+    const options = buildSentryOptions({ SENTRY_DSN: dsn, SENTRY_TRACES_SAMPLE_RATE: '1' });
+
+    expect(options?.sendDefaultPii).toBe(false);
+    expect(options?.includeLocalVariables).toBe(false);
+    expect(options?.beforeBreadcrumb?.({ category: 'http' }, undefined)).toBeNull();
+    expect(options?.beforeSend).toBe(scrubEvent);
+  });
+});
+
 describe('scrubEvent', () => {
+  it('keeps no route, user or request in sdkProcessingMetadata: the SDK copies it to the envelope', () => {
+    const event = {
+      sdkProcessingMetadata: {
+        normalizedRequest: { url: 'https://x/api/v1/patients/3f2b8c1e', headers: { cookie: 'c' } },
+        capturedSpanScope: { _user: { email: 'a@b.c' } },
+        dynamicSamplingContext: {
+          trace_id: 'a'.repeat(32),
+          public_key: 'pk',
+          sampled: 'true',
+          transaction: 'GET /api/v1/patients/3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b',
+          user_segment: 'a@b.c',
+        },
+      },
+    } as unknown as ErrorEvent;
+
+    const result = scrubEvent(event);
+
+    expect(result.sdkProcessingMetadata).toEqual({
+      dynamicSamplingContext: { trace_id: 'a'.repeat(32), public_key: 'pk', sampled: 'true' },
+    });
+  });
+
+  it('removes sdkProcessingMetadata even when scrubbing fails', () => {
+    const event = {
+      sdkProcessingMetadata: { dynamicSamplingContext: { transaction: 'GET /patients/1234' } },
+    } as unknown as ErrorEvent;
+    Object.defineProperty(event, 'request', {
+      get() {
+        throw new Error('boom');
+      },
+      configurable: true,
+    });
+
+    expect(scrubEvent(event).sdkProcessingMetadata).toBeUndefined();
+  });
+
   it('removes request body, cookies, headers, query string and url', () => {
     const event = {
       request: {

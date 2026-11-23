@@ -8,9 +8,21 @@ import { LEGACY_BILLING_OMIT } from '../patients/legacy-billing';
 import { toCanonicalRole } from '../common/roles/role-compatibility';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLIC_USER_SELECT } from '../common/utils/public-user-select';
+import { isPaginated, pageMeta, PageRequest, pageWindow } from '../common/pagination/pagination';
+import { escapeLike } from '../common/pagination/escape-like';
+import { readInTransaction } from '../common/pagination/read-in-transaction';
 import { CreateTaskDto, UpdateTaskDto } from './dto/task.dto';
 
 export type TaskActor = { userId: string; role: string };
+
+export type TaskSummaryFilters = {
+  patientId?: string;
+  assignedToId?: string;
+  priority?: string;
+  search?: string;
+};
+
+export type TaskFilters = TaskSummaryFilters & PageRequest & { status?: string };
 
 const TASK_ASSIGNEE_ROLES: string[] = ['MASTER', 'ASISTENTE', 'PROFESIONAL'];
 
@@ -128,18 +140,8 @@ export class TasksService {
     return task;
   }
 
-  async findAll(
-    tenantId: string,
-    filters:
-      | {
-          patientId?: string;
-          assignedToId?: string;
-          status?: string;
-          priority?: string;
-        }
-      | undefined,
-    actor: TaskActor,
-  ) {
+  /** Tenant, the actor's visibility and the filters of the list; shared by the list, its total and the summary. */
+  private listWhere(tenantId: string, filters: TaskFilters | undefined, actor: TaskActor) {
     const where: any = { tenantId, ...this.visibilityFilter(actor) };
 
     if (filters?.patientId) {
@@ -158,7 +160,29 @@ export class TasksService {
       where.priority = filters.priority;
     }
 
-    const tasks = await this.prisma.task.findMany({
+    if (filters?.search) {
+      // Prisma does not escape the LIKE wildcards of `contains`: "%" or "_" would match every task.
+      const term = escapeLike(filters.search);
+      // Top-level OR: the professional's visibility lives under AND, so the two never mix.
+      where.OR = [
+        { title: { contains: term, mode: 'insensitive' } },
+        { description: { contains: term, mode: 'insensitive' } },
+        { patient: { firstName: { contains: term, mode: 'insensitive' } } },
+        { patient: { lastName: { contains: term, mode: 'insensitive' } } },
+      ];
+    }
+
+    return where;
+  }
+
+  /**
+   * Without `page`/`limit` this is the whole list as an array (mobile, dashboard, selectors).
+   * With either one it is a page: `{ data, meta }`. Both use the same `where`.
+   */
+  async findAll(tenantId: string, filters: TaskFilters | undefined, actor: TaskActor) {
+    const where = this.listWhere(tenantId, filters, actor);
+
+    const query = {
       where,
       include: {
         patient: {
@@ -183,10 +207,66 @@ export class TasksService {
           },
         },
       },
-      orderBy: [{ dueDate: 'asc' }, { priority: 'desc' }],
-    });
+    };
 
-    return tasks;
+    // Without `page`/`limit` the list is returned whole, as an array (mobile and selectors).
+    if (!isPaginated(filters)) {
+      return this.prisma.task.findMany({
+        ...query,
+        orderBy: [{ dueDate: 'asc' }, { priority: 'desc' }],
+      });
+    }
+
+    const { page, limit, skip, take } = pageWindow(filters ?? {});
+    // One transaction, queries in sequence on `tx` (see readInTransaction).
+    return readInTransaction(this.prisma, async (tx) => {
+      const total = await tx.task.count({ where });
+      const data = await tx.task.findMany({
+        ...query,
+        // Pages run through the groups the task screen shows: open tasks first, then completed,
+        // then cancelled. TaskStatus is declared PENDING, IN_PROGRESS, COMPLETED, CANCELLED and
+        // PostgreSQL sorts an enum by its declaration order. Within a group: due date, priority,
+        // and `id` so no task repeats or vanishes between pages. Only the paged list sorts this
+        // way; the unpaged one keeps the order it always had.
+        orderBy: [{ status: 'asc' }, { dueDate: 'asc' }, { priority: 'desc' }, { id: 'asc' }],
+        skip,
+        take,
+      });
+      return { data, meta: pageMeta(total, page, limit) };
+    });
+  }
+
+  /**
+   * Counts per state for the headings of the task page, which cannot be added up from one page.
+   * Same tenant and visibility as the list; `status` is not a filter here, it is what is counted.
+   * `pending` is PENDING plus IN_PROGRESS, `overdue` those of them past their due date.
+   */
+  async summary(tenantId: string, filters: TaskSummaryFilters | undefined, actor: TaskActor) {
+    const where = this.listWhere(tenantId, filters, actor);
+    // One transaction, queries in sequence on `tx` (see readInTransaction).
+    return readInTransaction(this.prisma, async (tx) => {
+      const groups = await tx.task.groupBy({
+        by: ['status'],
+        where,
+        _count: { _all: true },
+      });
+      const overdue = await tx.task.count({
+        where: {
+          ...where,
+          status: { in: ['PENDING', 'IN_PROGRESS'] },
+          dueDate: { lt: new Date() },
+        },
+      });
+      const of = (status: string) =>
+        groups.find((group) => group.status === status)?._count._all ?? 0;
+
+      return {
+        pending: of('PENDING') + of('IN_PROGRESS'),
+        overdue,
+        completed: of('COMPLETED'),
+        cancelled: of('CANCELLED'),
+      };
+    });
   }
 
   async findOne(tenantId: string, taskId: string, actor: TaskActor) {

@@ -1,5 +1,6 @@
 import { createECDH, randomBytes } from 'crypto';
 import type { Appointment, ClinicalNote, Patient, Prisma, User } from '@prisma/client';
+import { hashRefreshToken } from '../src/auth/refresh-token';
 import { snapshotClinicalNote } from '../src/clinical-notes/clinical-notes.service';
 import { snapshotEncounter } from '../src/encounters/encounters.service';
 import { snapshotSpecialtyRecord } from '../src/specialty-records/specialty-records.service';
@@ -1961,27 +1962,27 @@ export async function seedMainClinic(ctx: SeedContext): Promise<SeedTenant> {
     data: [
       {
         userId: admin.id,
-        token: 'seed-refresh-admin-active',
+        token: hashRefreshToken('seed-refresh-admin-active'),
         familyId: 'seed-family-admin',
         expiresAt: clock.days(6),
       },
       {
         userId: ana.id,
-        token: 'seed-refresh-ana-rotated',
+        token: hashRefreshToken('seed-refresh-ana-rotated'),
         familyId: 'seed-family-ana',
         isRevoked: true,
         expiresAt: clock.days(3),
       },
       {
         userId: ana.id,
-        token: 'seed-refresh-ana-reused',
+        token: hashRefreshToken('seed-refresh-ana-reused'),
         familyId: 'seed-family-ana',
         isRevoked: true,
         expiresAt: clock.days(4),
       },
       {
         userId: luis.id,
-        token: 'seed-refresh-luis-expired',
+        token: hashRefreshToken('seed-refresh-luis-expired'),
         familyId: 'seed-family-luis',
         expiresAt: clock.days(-2),
       },
